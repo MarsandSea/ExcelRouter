@@ -66,6 +66,53 @@ Gitee Release` 这三步的报错信息，通常是 token 过期或权限不够�
 
 ---
 
+## 1.6 仓库元数据文案（GitHub / Gitee，手动维护）
+
+仓库的**简介**和**标签/topics** 是站内搜索、外部搜索引擎和 AI 召回都会读的字段，
+CI 不会自动维护，**改品牌文案或增删大功能时手动同步一次**。以下为定稿文案，直接复制粘贴。
+
+### GitHub（`Settings` 页顶部 About 的齿轮按钮）
+
+**Description**（350 字符内，中英各一句，兼顾国内外检索）：
+
+```
+Windows 桌面工具：按任意字段（部门/区域/工号）批量拆分 Excel，保留复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另附 PDF 加密水印分发。免安装、MIT 开源、数据不出本机 · Split a whole folder of Excel files by any column on Windows — original formatting preserved, cross-file merge, per-person output, ZIP packaging, plus PDF password + watermark distribution. Free, MIT, 100% local.
+```
+
+**Topics**（只允许小写字母/数字/连字符，最多 20 个）：
+
+```
+excel excel-splitter split-excel xlsx spreadsheet openpyxl pandas python windows desktop-app gui customtkinter office-automation batch-processing pdf-encryption watermark no-code chinese
+```
+
+也可以用 gh CLI 一次性设置：
+
+```bash
+gh repo edit MarsandSea/excel-router --add-topic excel,excel-splitter,split-excel,xlsx,spreadsheet,openpyxl,pandas,python,windows,desktop-app,gui,customtkinter,office-automation,batch-processing,pdf-encryption,watermark,no-code,chinese
+```
+
+### Gitee（仓库 → 管理 → 基本信息）
+
+**仓库简介**：
+
+```
+ExcelRouter · Excel 智能拆分工具：把一批 Excel 按部门/区域/工号等任意字段的取值批量拆成多个文件，保留原复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另支持 PDF 按网格加密 + 水印分发。Windows 免安装，MIT 开源免费，数据全程本机处理不上传。
+```
+
+**标签**（Gitee 支持中文标签，国内搜索主要吃这些词）：
+
+```
+Excel  Excel拆分  批量拆分  表格拆分  复杂表头  办公自动化  报表分发  开源免费  本地处理  Windows  Python  PDF加密
+```
+
+顺手把 Gitee 的**开源许可证**选成 MIT、**编程语言**选 Python、**项目分类**选「办公软件 /
+开发工具」类目——这些字段都参与 Gitee 站内搜索排序，留空等于放弃排名。
+
+> Gitee 仓库是 CI 强制推送的纯镜像，但**简介、标签、分类这些元数据不在 git 里，
+> 不会被镜像覆盖**，放心在网页端改。
+
+---
+
 ## 2. 为什么要两种打包形态
 
 `--onefile` 单文件版每次启动都会把 Python 解释器和依赖**解压到系统临时目录再执行**，
@@ -96,6 +143,12 @@ onefile 版仍然提供，图个方便，但风险自担并在文档里提前说
 目标用户是国内普通办公人员，这几家才是真实影响他们下载/使用信任的关键。冷门/海外引擎
 （如 Bkav、Gridinsoft、Yandex 等）零星误报**不需要逐个申诉**——v2.5.0 实测 3/64、
 全部是这类小众引擎，国内主流全部干净，判定为可接受，未做任何申诉动作。
+
+> **PDF 加密分发功能引入 cryptography 依赖后（2026-07）**：cryptography 是本项目
+> 打包产物里**第一个 C 扩展 + 加密类库**（此前全是纯 Python），加密类 .pyd/DLL 是
+> 杀毒启发式的敏感面。它是 Python 生态最主流的加密库（官方签名 wheel、PyInstaller
+> 内置 hook），预期风险可控，但**引入后的第一个版本要重点做本节的 VirusTotal 检查**，
+> 对比上一版检出数是否明显上升；若国内主流引擎出现新误报，按第 4 步申诉处理。
 
 ---
 

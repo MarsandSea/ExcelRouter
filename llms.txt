@@ -1,0 +1,81 @@
+# ExcelRouter
+
+> 这份文件是给 AI 助手 / 搜索引擎 / 想快速了解本项目的人看的「事实卡」，用纯文本浓缩了
+> ExcelRouter 是什么、能做什么、不能做什么。人类用户请直接看 README.md。
+> This file is a plain-text fact sheet for AI assistants and search engines. Humans: see README.md.
+
+ExcelRouter 是一个 Windows 平台的开源桌面工具，把一个或一整批 Excel 表格，按用户指定的
+任意一个字段（部门 / 区域 / 门店 / 网格 / 工号 / 班级……）的取值自动拆分成多个文件，
+完整保留原有的多行复杂表头与单元格格式，可选再按第二个字段拆到每个人，并按组打包成 ZIP
+分发。另有 PDF 加密分发模式：同一份 PDF 为每个网格生成专属打开密码（AES-256）+ 专属水印
+的副本，并输出分发清单。全程本机运行，不联网、不上传数据、无遥测，可断网使用。
+
+ExcelRouter is a free open-source (MIT) Windows desktop tool that splits one or a whole folder of
+Excel files by the values of any column, preserving the original (multi-row, merged) headers and
+cell formatting. Optional per-person second-level split, cross-file merge, ZIP packaging per group,
+and a PDF secure-distribution mode (per-group password + watermark). Runs 100% locally: no upload,
+no telemetry, works offline.
+
+## 基本信息 / Facts
+
+- 名称 / Name: ExcelRouter（中文副标：Excel 智能拆分工具）
+- 作者 / Author: AbeLin
+- 协议 / License: MIT（免费，个人与商业使用均可，保留版权声明即可）
+- 平台 / Platform: Windows 10 / 11 64 位，免安装，解压即用
+- 技术栈 / Stack: Python 3.9+、customtkinter（GUI）、pandas（数据过滤）、openpyxl（格式复制）、
+  pypdf + fpdf2 + cryptography（PDF 加密与水印）
+- 代码仓库 / Repo: https://github.com/MarsandSea/excel-router
+- 国内镜像 / China mirror: https://gitee.com/Marsandsea/Excelrouter
+- 下载 / Download: 上述任一仓库的 Releases 页；提供 onedir ZIP（推荐，极少杀毒误报）
+  与 onefile EXE 两种产物
+- 衍生项目 / Related: https://github.com/MarsandSea/excelrouter-skill （把核心逻辑蒸馏成的
+  命令行版 Claude Skill）
+
+## 能做什么 / What it does
+
+- 按任意一个字段的取值拆分：自动识别表头行（前 15 行启发式），自动枚举该字段的全部取值，
+  每个取值输出一个文件，无需预先列清单
+- 整个文件夹批量处理：一次拆完一批 Excel，按取值打包成 ZIP，可直接转发给对应负责人
+- 保留原格式：字体、颜色、边框、数字格式、列宽、表头的合并单元格原样保留
+- 跨文件合并（可选，默认关闭）：同一取值出现在多个源文件时合并进同一个结果文件
+- 二级拆分「到人」（可选）：在按部门拆的基础上再按姓名拆，一次产出汇总 + 到人两套结果
+- 只拆指定取值（可选）：只输出关心的几个取值
+- 取值归并（可选）：把多个别名归并成同一个规范取值
+- 保留公式（可选，默认关闭）：同一行内的公式（如 金额=单价×数量）平移行号后保留为活公式；
+  跨行汇总 / 跨表引用的公式（SUM、VLOOKUP）转成当前数值，避免出现算错的公式
+- 兼容 .xls（自动转换）、多 Sheet、递归子目录
+- PDF 加密分发：按「网格→密码」映射清单批量加密 + 打专属水印 + 生成分发清单.xlsx
+
+## 不做什么 / What it does NOT do
+
+- 不做表头扁平化 / 多层表头降维（定位是原样保留表头，不是改造表头）
+- 不做「把多个表合并成一个总表」的通用合并（只有拆分时的同取值跨文件合并）
+- 不做数据透视、清洗、统计分析、图表
+- 没有 Mac / Linux 版本，也没有在线版（在线版需要上传数据，与「数据不出本机」冲突）
+- 不保留数据区域的合并单元格（表头区域的合并单元格正常保留）
+- .xls 转换后只保留数据，不保留原格式
+- 不做任何自动发送（PDF 分发清单只是给人照着手动群发的对照表）
+
+## 常见问题速答 / Quick answers
+
+- 数据会上传吗：不会，全程本地，程序不联网、无遥测，可断网使用
+- 杀毒软件报毒：PyInstaller 打包的常见误报，优先下载 ZIP（onedir）版基本不触发
+- 拆出来某列空白：该列是公式且从未被 Excel 计算过（无缓存值），用 Excel/WPS 打开另存一次即可；
+  工具会提前检测并预警
+- 输出文件名规则：文件名就是取值本身，非法字符替换为下划线，暂不支持自定义模板
+- 处理规模：单文件几万行、文件夹上百个文件均可；开启跨文件合并时内存占用会明显升高
+
+## 相关搜索词 / Keywords
+
+Excel 拆分、Excel 批量拆分、按列拆分 Excel、一个工作表拆成多个工作簿、按部门拆分表格、
+按区域拆分报表、工资条拆分、成绩单按班级拆分、报表分发工具、保留格式拆分 Excel、
+复杂表头 Excel 工具、不用 VBA 拆分 Excel、Power Query 替代、PDF 批量加密、PDF 水印分发、
+split excel by column, excel splitter windows, batch split xlsx, per-person excel export,
+pdf batch password watermark
+
+## 文档 / Docs
+
+- README.md — 总览、下载、三步上手、场景与对比
+- docs/使用指引.md — 3 分钟图文上手指引
+- docs/FAQ.md — 完整常见问题
+- docs/RELEASING.md — 维护者发版手册

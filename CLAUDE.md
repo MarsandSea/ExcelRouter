@@ -39,6 +39,37 @@
 > 不能传达工具的智能识别能力。统一文案：窗口标题 `ExcelRouter · Excel 智能拆分工具`；
 > README H1、`version.txt` FileDescription 同步。标语/特性行/界面术语不变。
 > **此为最新定稿**，「Excel 批量拆分工具」已废弃，勿再混用。
+>
+> **新增 PDF 加密分发模式（2026-07-12，v2.5.1 后）**：界面顶部加了
+> `CTkSegmentedButton` 模式切换「Excel 拆分 / PDF 加密分发」。新模式把同一批 PDF
+> 按「网格 → 密码」Excel 映射清单，为每个网格生成专属打开密码（AES-256）+ 专属水印
+> （网格名+日期，斜向半透明平铺，泄露可溯源）的副本，并输出含明文密码的「分发清单.xlsx」。
+> 不做自动发送（用户照清单手动微信/邮件群发）。核心在 `core/pdf_dist.py`，
+> 新依赖 pypdf + fpdf2 + cryptography（本项目**首个 C 扩展依赖**是 cryptography，
+> 发版后要盯 VirusTotal 误报面变化）。
+>
+> **默认「不跨文件合并」+ 新增「只拆这些取值」（2026-07-17）**：`merge_across_files` 默认值
+> 从 `true` 改为 **`false`**——默认行为改为「按原表输出，每个源文件各自拆分，只在 ZIP 里
+> 打包在一起」，用户需要跨文件合并汇总表时自己去「高级设置」勾选「跨文件合并汇总」再开。
+> 起因：宽表（几百列）+ 大批量文件时，跨文件合并把所有输出工作簿整批留在内存到最后统一保存，
+> 叠加保留格式模式下的逐格式复制，会把内存/CPU 都推得很高，表现为界面乃至整机卡顿；改成
+> 默认不合并后，风险场景变成用户主动选择，且默认路径更符合「批量给每个人分发各自原表」的
+> 常见诉求。**旧版保存的 `user_config.json` 若已写了 `merge_across_files: true`，会按 FALLBACK
+> 的补键规则保留用户的选择，不会被静默改回 false**——只有全新安装/从未保存过配置时才吃新默认值。
+> 同时给 `selected_values`（只拆哪些主取值）补上了 GUI 入口：高级设置里新增「只拆这些取值
+> （逗号分隔，留空=全部）」文本框（`gui/app.py` 的 `_selvals_var`），此前这个 config 字段
+> 虽然 `core/splitter.py` 早就支持，但界面没有对应控件，只能手改 `user_config.json`。填好后
+> 随「跑完自动存配置」的机制一起持久化，下次打开程序自动带出，不用每次重填。
+>
+> **新增「保留公式」选项（2026-07-21）**：源起用户诉求——结算表拆分给接收人时，希望对方能看到
+> 计算公式（如「金额=单价×数量」）以自行核对，减少结算争议。新增 `keep_formulas` 勾选项，
+> **默认关闭**、主要面向单文件场景（批量也可用但会多占一份源文件内存，日志会提示）。
+> 采用**智能保留**而非无脑保留：拆分会压缩行号（源表第 100 行可能落到输出第 5 行），
+> 只有**同行公式**（如 `=D100*E100`，只引用自己这一行的其它列）能安全平移行号后保留为活公式；
+> **跨行/汇总/跨表公式**（`SUM`、`VLOOKUP`、跨 sheet 引用）无法平移，一律落成当前缓存数值
+> （即现有行为）——绝不把一个会显示错误结果的公式发给接收人，这比看得到公式但算错更麻烦。
+> 核心是 `core/splitter.py` 的 `_is_row_safe_ref` + `_safe_translate`（用 openpyxl 自带的
+> `Tokenizer`/`Translator`，**无新依赖**，纯 Python，不影响 VirusTotal 误报面）。
 
 ---
 
@@ -46,7 +77,7 @@
 
 - **目标平台：Windows**（打包出的 exe 给 Windows 用户）
 - Python 3.9+
-- 依赖见 `requirements.txt`：customtkinter、openpyxl、pandas、xlrd
+- 依赖见 `requirements.txt`：customtkinter、openpyxl、pandas、xlrd、pypdf、fpdf2、cryptography
 
 ---
 
@@ -57,6 +88,7 @@ excel-router/
 ├── main.py                    # 入口，只有几行，调用 gui.app.run()
 ├── CLAUDE.md                  # 本文件
 ├── README.md                  # 中英双语说明（含实拍截图 docs/screenshot_*.jpg）
+├── llms.txt                   # 给 AI 助手/搜索引擎的项目事实卡（能做/不做/关键词，见下「可发现性」）
 ├── LICENSE                    # MIT 许可证
 ├── requirements.txt           # 运行依赖
 ├── requirements-dev.txt       # 开发/测试依赖（pytest、pyinstaller、ruff）
@@ -73,10 +105,11 @@ excel-router/
 ├── core/
 │   ├── __init__.py
 │   ├── splitter.py            # 核心拆分逻辑（最重要的文件）
+│   ├── pdf_dist.py            # PDF 按网格加密分发（密码/水印/分发清单）
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
-│   └── app.py                 # customtkinter 三步卡片式界面（含打包路径适配、队列泵）
+│   └── app.py                 # customtkinter 三步卡片式界面（Excel/PDF 双模式、打包路径适配、队列泵）
 ├── examples/
 │   ├── make_sample.py         # 可复现样本生成器：5 个月份 × 55 名虚拟员工，3 行合并表头
 │   └── {1-5}月A分公司明细.xlsx # 生成的演示样本（跨文件合并 + 到人演示用）
@@ -89,7 +122,8 @@ excel-router/
 │   └── ISSUE_TEMPLATE/        # Bug/Question 结构化表单，config.yml 禁用空白 issue
 └── tests/
     ├── test_utils.py          # utils 单元测试
-    └── test_splitter.py       # splitter 集成测试（单文件/合并、到人双产出、格式保留）
+    ├── test_splitter.py       # splitter 集成测试（单文件/合并、到人双产出、格式保留）
+    └── test_pdf_dist.py       # pdf_dist 集成测试（加密/水印/清单/容错/停止）
 ```
 
 ### 数据模型（config 关键字段）
@@ -107,8 +141,16 @@ excel-router/
 | `make_zip` | 批量时按主取值打包 ZIP | `true` |
 | `value_alias_map` | 取值归并 `{规范值:[别名...]}`（旧 position_map 的通用化身） | `{}` |
 | `skip_values` | 拆分列中要忽略的取值（合计/小计/空等） | `["合计","小计","总计","平均",""]` |
-| `merge_across_files` | 汇总：同取值跨源文件是否合并到一个文件（到人始终按人合并） | `true` |
+| `merge_across_files` | 汇总：同取值跨源文件是否合并到一个文件（到人始终按人合并） | `false`（2026-07-17 起，见下方说明） |
 | `exact_match` `preserve_format` `auto_open_output` | 同义保留 | |
+| `keep_formulas` | 保留公式（仅同行公式安全平移，需先开 `preserve_format`；见下方说明） | `false` |
+| `ui_mode` | 界面模式：`excel`（拆分）/ `pdf`（加密分发） | `excel` |
+| `pdf_input_paths` | 待分发的 PDF 文件列表（可多个） | `[]` |
+| `pdf_mapping_path` | 「网格→密码」映射清单 xlsx 路径 | `""` |
+| `pdf_grid_column` / `pdf_password_column` / `pdf_receiver_column` | 映射清单里的网格/密码/接收人（选填）列名 | `""` |
+| `pdf_watermark` | 是否加网格专属水印 | `true` |
+| `pdf_watermark_text` | 水印模板，支持 `{grid}`（网格名）`{date}`（日期） | `"{grid} {date}"` |
+| `pdf_watermark_opacity` / `pdf_watermark_angle` | 水印透明度 / 旋转角（无 GUI 入口，改配置文件生效） | `0.15` / `45` |
 
 ### core/splitter.py 的关键函数
 
@@ -118,11 +160,17 @@ excel-router/
 - `list_columns(file_path, config)` / `list_values(file_path, config, column)` —— 供 GUI 下拉与多选
 - `detect_uncalculated_formulas(work_path)` —— 检测「有公式但无缓存值」，采样前 200 行预警
 - `_cached_copy(style_obj, cache)` —— 按源样式 id 缓存复制，保留格式提速的关键（**缓存按单个源文件作用域**）
+- `_is_row_safe_ref(ref, origin_row)` / `_safe_translate(formula, origin, dest)` —— `keep_formulas`
+  的安全校验+平移：只有「同表、单格、引用行 == origin_row」的公式才平移保留，否则返回 `None`
+  （调用方落成缓存数值）。任何解析异常都按不安全处理
 - `_OutputBook` —— 一个输出文件的内存工作簿；`get_or_create_sheet` + `_append_rows` 支持**跨源文件追加**
 - `_summary_key_path` / `_person_key_path` —— 计算「汇总 / 到人」两套输出树的 key 与路径
 - `_matches_filter(name, keywords)` —— 文件名是否命中到人范围关键词
 - `normalize_to_xlsx(file_path, log_fn)` —— .xls 转临时 .xlsx
-- `process_file(..., single_file, ...)` —— **始终产出汇总、可选附加到人**，追加进共享 outputs 注册表
+- `process_file(..., single_file, ...)` —— **始终产出汇总、可选附加到人**，追加进共享 outputs 注册表；
+  `keep_formulas` 开启（且 `preserve_format` 有效）时额外打开一份 `data_only=False` 的源工作簿取
+  公式文本，逐格式单元格调用 `_safe_translate`——**同行公式**平移后仍是活公式，其余（汇总/跨行/
+  跨表公式）落成当前缓存数值，绝不把「会算错」的公式发给接收人
 - `run_split(config, ...)` —— 主流程：**输入可为单文件或目录** → 累积 → 统一保存 → 按主取值打 ZIP
 
 **架构要点：pandas 负责过滤数据（向量化 mask），openpyxl 负责复制格式。**
@@ -147,7 +195,35 @@ excel-router/
 **限制（已在 README/界面注明）：** ① `.xls` 转换后无法保留原格式；
 ② 数据区合并单元格暂不保留；③ 跨文件合并按**列位置**追加，最适合「同一套模板的多个表」。
 
+### core/pdf_dist.py 的关键函数（PDF 加密分发）
+
+- `list_mapping_columns(xlsx_path)` —— 读映射清单第 1 行表头，供 GUI 三个列下拉（清单是用户
+  专门维护的小表，表头固定第 1 行，不做启发式识别）
+- `read_mapping(xlsx_path, grid_col, password_col, receiver_col)` —— 返回 `[{"grid","password","receiver"}]`；
+  **密码统一转字符串**（`_cell_str` 处理 openpyxl 把 001234 读成 1234/1234.0 的问题），
+  空网格/空密码行跳过并警告，重复网格后者覆盖并警告
+- `_find_cjk_font()` —— 在 `C:\Windows\Fonts` 探测中文 .ttf（simhei/Deng 等；**跳过 .ttc**，fpdf2 不支持）
+- `_make_watermark_pdf(text, w, h, ...)` —— fpdf2 内存生成平铺斜排水印页，按（尺寸+文字）缓存
+- `_stamp_and_encrypt(reader, out_path, wm_text, password, algorithm)` —— 盖水印+设密码写盘。
+  **writer 每个网格必须重建**：pypdf 的 merge_page 就地改页对象，复用会导致水印跨网格叠加；
+  `writer.append(reader)` 是深拷贝，不会污染共享 reader
+- `write_manifest(entries, out_path)` —— 写「分发清单.xlsx」，密码列强制文本格式（`number_format='@'`）
+- `run_pdf_dist(config, log_fn, progress_fn, stop_flag)` —— **签名与 run_split 完全一致**，
+  GUI 队列泵零改动接入；AES-256 加密，cryptography 缺失时降级 RC4-128 + 警告；
+  单网格失败记日志继续；源 PDF 自带密码的跳过不中断
+
+输出结构：`输出根/{网格}/{原文件名}.pdf` + `分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态）。
+**清单含明文密码**，完成日志里有「勿随文件发出」提醒——不要删这句。
+
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
+
+**双模式（2026-07-12 起）**：`_build_header` 尾部的 `_mode_seg` 切换「Excel 拆分 / PDF 加密分发」，
+`self._mode`（"excel"/"pdf"）随 `ui_mode` 持久化。`_body` 里 `_excel_frame` / `_pdf_frame` 两个
+Frame 同格互斥显示（`_apply_mode` 用 grid/grid_remove 切换，同时改③卡片标题与主按钮文案）。
+PDF 模式步骤卡：`_build_pdf_step_input`（多选 PDF）+ `_build_pdf_step_map`（选映射清单 →
+子线程 `list_mapping_columns` → 泵消息 `("pdf_scan", ...)` → `_on_pdf_scan` 关键词预选三个列下拉；
+水印子卡片）。`_start` 开头按 `self._mode` 分派到 `_start_pdf`（自带校验链），
+两模式共享 `_enter_running`（运行态 UI 准备）、③操作区、进度条、日志、`_on_done`。
 
 **布局**（self 的 grid 行）：row0 品牌区（品牌名+副标同行、标语、特性行，作者信息在页脚）→
 row1 `CTkScrollableFrame` 步骤区（weight=1）：①②卡片 + 「▸ 高级设置」折叠 →
@@ -282,6 +358,49 @@ PyInstaller 致命坑仍然成立、缺一不可：
 ### 3. 代码混淆
 
 项目目标是开源，**不需要**混淆，除非用户明确要求。
+
+---
+
+## 下游消费者：excelrouter-skill（2026-08-05 新增）
+
+存在一个独立仓库 [excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)，
+把本仓 `core/` 蒸馏成一个 Claude Skill（命令行三个脚本 `er_inspect.py` / `er_split.py` /
+`er_pdf_dist.py`，不依赖 GUI）。它通过 `.github/workflows/sync-upstream.yml`
+**每天自动检查本仓最新的 `v*` 发布 tag**，有新版本就拉取 `core/*.py` + `requirements.txt`
+过去、跑测试、测试通过才提交。这意味着：
+
+- **`run_split()` / `run_pdf_dist()` / `list_columns()` / `list_values()` /
+  `list_mapping_columns()` / `read_mapping()` 的函数签名和 config 字段已经是对外契约**——
+  改函数签名、改字段名、改默认值语义，都要想一下下游 skill 会不会跟着崩（下游有自己的
+  `pytest`，签名对不上会在下游 CI 上报错，但语义变了未必报错，人肉过一遍更保险）。
+- **`core/` 不许引入对 `gui/` 的任何依赖**（哪怕只是延迟 import），否则下游 vendor 整个
+  `core/` 目录时会直接带进 customtkinter 依赖，skill 装不起来。这条本来就是现有架构
+  （GUI 对 core 单向依赖），只是现在多了一个不能违反的理由。
+- 下游只跟**发布 tag** 走，不跟 `main` 分支的半成品——本仓改动只要没打 tag，就不会出现在
+  skill 里。正常发版流程（commit → push → `git tag vX.Y.Z` → push tag）不用做任何额外动作，
+  skill 会在下一次定时同步（或维护者手动点一下 Actions 页的 Run workflow）时自动追上。
+
+---
+
+## 可发现性约定（SEO / AI 召回，2026-08-05 新增）
+
+项目零 Star、零下载的瓶颈之一是「搜不到 + AI 答不出」。为此在文档层做了固定结构，**改功能时
+要顺手维护，不要让它们和实际能力脱节**（说错比不说更伤——用户下载后发现不合用就直接流失）：
+
+- **README 首屏三段式**：`📌 一句话介绍`（是什么 + 平台 + 协议 + 数据不出本机）→ **「它不做这些」**
+  （表头扁平化 / 通用多表合并 / 数据分析 / Mac / 在线版，四条否定）→ `🎯 谁会用到它`（真实场景 +
+  用户会搜的原生问句）。**否定清单是刻意的**，它同时服务于「筛掉不合用的人」和「让 AI 回答边界
+  问题时有据可依」，不要为了显得功能多而删掉。
+- **`llms.txt`（根目录）**：给 AI 助手/搜索引擎的纯文本事实卡，也可直接粘去问答平台。**功能有
+  增删时，README 首屏、`llms.txt` 的「能做/不做」两节要一起改**，三处口径必须一致。
+- **`docs/FAQ.md`**：标题写成**用户真实的提问句**（AI 检索按语义召回，问句命中率远高于名词短语），
+  顶部有分组目录。README 与 `docs/使用指引.md` 直接链到 FAQ 的锚点，**改 FAQ 标题必须同步改所有
+  引用锚点**（现有引用：`#杀毒软件误报`、`#处理大文件…`）。注意 GitHub 锚点会吃掉标点：
+  标题里的 ` / ` 会变成两个连字符，写目录链接时优先用「、」避免踩坑。
+- **仓库元数据**（GitHub topics / 简介、Gitee 简介 + 标签）由**维护者手动在网页端维护**，
+  文案见 `docs/RELEASING.md` 的「仓库元数据文案」一节，改品牌文案时同步更新。
+- **不做关键词堆砌**：所有关键词都必须出现在通顺的句子或真实场景里。堆砌既伤人类阅读，
+  现在的搜索与 AI 排序也不吃这套。
 
 ---
 
