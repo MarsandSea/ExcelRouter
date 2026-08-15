@@ -5,8 +5,8 @@
 #
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 5, 1, 0),
-    prodvers=(2, 5, 1, 0),
+    filevers=(2, 6, 0, 0),
+    prodvers=(2, 6, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -22,12 +22,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'AbeLin'),
             StringStruct(u'FileDescription', u'ExcelRouter · Excel 智能拆分工具'),
-            StringStruct(u'FileVersion', u'2.5.1.0'),
+            StringStruct(u'FileVersion', u'2.6.0.0'),
             StringStruct(u'InternalName', u'ExcelRouter'),
             StringStruct(u'LegalCopyright', u'Copyright (c) 2026 AbeLin. MIT License.'),
             StringStruct(u'OriginalFilename', u'ExcelRouter.exe'),
             StringStruct(u'ProductName', u'ExcelRouter'),
-            StringStruct(u'ProductVersion', u'2.5.1.0')
+            StringStruct(u'ProductVersion', u'2.6.0.0')
           ]
         )
       ]
