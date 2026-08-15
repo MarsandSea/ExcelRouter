@@ -47,6 +47,9 @@ import pandas as pd
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
+from openpyxl.utils import get_column_letter
+from openpyxl.formula.tokenizer import Tokenizer
+from openpyxl.formula.translate import Translator
 
 from core.utils import soft_clean, hard_clean, apply_alias, is_skip_value, safe_filename
 
@@ -91,12 +94,17 @@ def detect_header_row_auto(rows, max_scan=15):
         # 文字占比：表头通常是文字标签，少有纯数字
         str_like = sum(1 for c in nonempty if not _looks_numeric(c))
         str_ratio = str_like / n
-        # 数据感：下一行非空单元里数字占比越高，越说明这行是表头
+        # 数据感：下一个非空行里数字占比越高，越说明这行是表头。
+        # 表头正下方偶尔会有一整行空行（分隔用），若只看紧邻的下一行会看到全空、data_hint
+        # 归零，导致真正的表头因为"看起来不像后面跟数据"而在打分上输给深处某行数据行
+        # （尤其像点名表这种大多列是姓名/工号/日期的宽表，数据行本身就有一半以上"看起来不像数字"）。
+        # 跳过空行往下找最近的非空行来判断，最多向下看 3 行。
         data_hint = 0.0
-        if r + 1 < len(rows):
-            nxt = [c for c in rows[r + 1] if soft_clean(c) != ""]
+        for look in range(r + 1, min(r + 4, len(rows))):
+            nxt = [c for c in rows[look] if soft_clean(c) != ""]
             if nxt:
                 data_hint = sum(1 for c in nxt if _looks_numeric(c)) / len(nxt)
+                break
         score = n * (0.5 + 0.5 * str_ratio) + n * 0.3 * data_hint
         if score > best_score:
             best_score, best_idx = score, r
@@ -127,7 +135,14 @@ def resolve_header_row(rows, config):
             return -1
         return hr if hr >= 1 else -1
     if mode == 'keyword':
-        return find_header_row(rows, config.get('grid_keys', []), config.get('id_keys', []))
+        grid_keys, id_keys = config.get('grid_keys', []), config.get('id_keys', [])
+        if not grid_keys and not id_keys:
+            # 两类关键词都没填时，find_header_row 的"任一为空则不启用该条件"会退化成
+            # "永远命中第 1 行"——多 sheet 表格里真实表头不在第 1 行的 sheet 会被强行
+            # 按错误的行去找列，导致拆分字段/到人字段找不到而被静默跳过。关键词法本意是
+            # "专家兜底"，没配关键词就不该比 auto 启发式更武断，退回 auto。
+            return detect_header_row_auto(rows)
+        return find_header_row(rows, grid_keys, id_keys)
     return detect_header_row_auto(rows)
 
 
@@ -218,6 +233,48 @@ def _cached_copy(style_obj, cache):
         cached = copy(style_obj)
         cache[k] = cached
     return cached
+
+
+# =====================================================
+# 公式智能保留（keep_formulas，仅同行公式安全平移）
+# =====================================================
+
+_SAFE_REF_RE = re.compile(r'^(\$?)([A-Z]{1,3})(\$?)(\d+)$')
+
+
+def _is_row_safe_ref(ref, origin_row):
+    """判断单个引用是否「同表、单格、相对/绝对行都指向 origin_row」。
+
+    引用带 '!'（跨表）或 ':'（区域）或格式不是「列字母+行号」（命名区域/整列/整行）都不安全。
+    行号本身若不等于 origin_row（跨行引用），也不安全——拆分后该行已被过滤或搬到别处。
+    """
+    if '!' in ref or ':' in ref:
+        return False
+    m = _SAFE_REF_RE.match(ref)
+    if not m:
+        return False
+    row = int(m.group(4))
+    return row == origin_row
+
+
+def _safe_translate(formula, origin, dest):
+    """公式安全性校验 + 行号平移。
+
+    只有当公式里所有单元格引用都满足 _is_row_safe_ref（同行、同表、单格）时，才认为
+    这个公式「整行搬到哪都还对」，用 openpyxl 的 Translator 把行号从 origin 平移到 dest
+    并返回新公式；否则返回 None，表示不安全——调用方应保留已经写入的缓存数值，不覆盖成公式。
+    任何解析异常都视为不安全，退回 None（宁可落成数值，不可能给出算错的公式）。
+    """
+    try:
+        origin_row = int(re.match(r'^\$?[A-Za-z]{1,3}\$?(\d+)$', origin).group(1))
+        tok = Tokenizer(formula)
+        for t in tok.items:
+            if t.type == 'OPERAND' and t.subtype == 'RANGE':
+                if not _is_row_safe_ref(t.value, origin_row):
+                    return None
+        return Translator(formula, origin=origin).translate_formula(dest)
+    except Exception:
+        return None
 
 
 # =====================================================
@@ -419,15 +476,21 @@ class _OutputBook:
 
 
 def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache,
-                 heartbeat=None):
+                 heartbeat=None, formula_ws=None):
     """把过滤后的数据行追加到输出 sheet 的当前游标下。
 
     rows_df 的 index 是源表的【原始 0 基行号】，excel_row = index + 1。
     preserve=True 时从 ws_src 按原始行号逐格复制「值 + 格式」；否则只写值（来自 pandas）。
+    formula_ws 非 None 时（keep_formulas 开启且 preserve 有效），对每个公式单元格尝试
+    「同行安全平移」：能平移则覆盖为新公式，不能则保留已写入的缓存数值（见 _safe_translate）。
     heartbeat(n) 每写入约 200 行回调一次，用于向界面报进度并让出 GIL（保持界面响应）。
     """
     ws_out = sheet_info['ws']
     start = sheet_info['next_row']
+    # 心跳按「已处理单元格数」折算成行数阈值，而非固定行数：宽表（列数多）单元格
+    # 级操作更贵，若仍按固定 200 行让一次 GIL，两次让出之间工作线程霸占 GIL 的时间会随列数
+    # 线性变长，表现为列数越多界面越卡（甚至处理详情面板都打不开）。目标约 4000 格/次让出。
+    batch = max(20, 4000 // max(1, src_max_col))
 
     if preserve and ws_src is not None:
         for offset, src_idx in enumerate(rows_df.index):
@@ -447,8 +510,17 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
                             dst.number_format = src_cell.number_format
                     except Exception:
                         pass
-            if heartbeat and (offset + 1) % 200 == 0:
-                heartbeat(200)
+                if formula_ws is not None:
+                    fcell = formula_ws.cell(row=excel_row, column=c)
+                    if isinstance(fcell.value, str) and fcell.value.startswith('='):
+                        col_letter = get_column_letter(c)
+                        translated = _safe_translate(
+                            fcell.value, f"{col_letter}{excel_row}", f"{col_letter}{out_row}")
+                        if translated is not None:
+                            dst.value = translated
+                        # 不安全：dst.value 保持上面已写入的缓存数值，不覆盖
+            if heartbeat and (offset + 1) % batch == 0:
+                heartbeat(batch)
     else:
         for offset, (_, row_series) in enumerate(rows_df.iterrows()):
             out_row = start + offset
@@ -456,10 +528,10 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
                 if pd.isna(val):
                     continue
                 ws_out.cell(row=out_row, column=c_idx).value = val
-            if heartbeat and (offset + 1) % 200 == 0:
-                heartbeat(200)
-    if heartbeat and len(rows_df) % 200:
-        heartbeat(len(rows_df) % 200)
+            if heartbeat and (offset + 1) % batch == 0:
+                heartbeat(batch)
+    if heartbeat and len(rows_df) % batch:
+        heartbeat(len(rows_df) % batch)
 
     sheet_info['next_row'] = start + len(rows_df)
 
@@ -476,19 +548,27 @@ def _summary_key_path(output_root, primary, src_stem, single_file, merge):
     """『汇总』输出键与路径。
 
     单文件 / merge=True → 扁平 {主取值}.xlsx（跨文件合并到一个）。
-    文件夹 + merge=False → {主取值}/汇总/{原文件名}.xlsx（原文件拆分，不合并）。
+    文件夹 + merge=False → {主取值}/汇总/{主取值}_{原文件名}.xlsx（原文件拆分，不合并）。
+    文件名带上主取值前缀：同一份源表拆到不同主取值的文件夹里，原本各自都叫
+    「{原文件名}.xlsx」，一旦脱离文件夹（比如直接从各文件夹里把文件拖出来一起发）
+    就分不清谁是谁，前缀是让文件名本身自带身份。
     """
     p = safe_filename(primary)
     if single_file or merge:
         return ('汇总', primary), os.path.join(output_root, f"{p}.xlsx")
-    return ('汇总', primary, src_stem), os.path.join(output_root, p, "汇总", f"{src_stem}.xlsx")
+    return ('汇总', primary, src_stem), os.path.join(output_root, p, "汇总", f"{p}_{src_stem}.xlsx")
 
 
-def _person_key_path(output_root, primary, person):
-    """『到人』输出键与路径：{主取值}/到人/{姓名}.xlsx（同一人跨文件合并到一个）。"""
+def _person_key_path(output_root, primary, person, src_stem):
+    """『到人』输出键与路径：{主取值}/到人/{姓名}_{原文件名}.xlsx（同一人跨文件合并到一个）。
+
+    键不含 src_stem——同一人跨文件合并进同一个输出簿的语义不变；src_stem 只影响
+    文件名，且只有「第一个产生该人输出」的源文件的文件名会被采用（emit() 只在
+    key 首次出现时使用传入的 save_path，后续文件命中同一 key 时复用已建好的输出簿）。
+    """
     p = safe_filename(primary)
     s = safe_filename(person)
-    return ('到人', primary, person), os.path.join(output_root, p, "到人", f"{s}.xlsx")
+    return ('到人', primary, person), os.path.join(output_root, p, "到人", f"{s}_{src_stem}.xlsx")
 
 
 # =====================================================
@@ -505,6 +585,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     · tick_fn(0..1) 报告本文件内部进度（读取→拆分各阶段），供界面进度条使用。
     """
     preserve_format = config.get('preserve_format', True)
+    keep_formulas   = config.get('keep_formulas', False)
     split_column    = soft_clean(config.get('split_column', ''))
     person_column   = soft_clean(config.get('person_column', ''))
     exact           = config.get('exact_match', True)
@@ -528,6 +609,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     src_stem = safe_filename(os.path.splitext(out_base)[0], "source")
 
     wb_src = None
+    wb_formula = None
 
     def tick(frac):
         """报告本文件内部进度（0~1），供界面进度条平滑推进。"""
@@ -546,6 +628,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         preserve_ok = preserve_format and not is_tmp
         if preserve_format and is_tmp and log_fn:
             log_fn("  ⚠️ .xls 转换后无法保留原始格式（仅保留数据，表头格式也会丢失）")
+        keep_formulas_ok = keep_formulas and preserve_ok
+        if keep_formulas and not preserve_ok and log_fn:
+            log_fn("  ⚠️ 保留公式需同时开启保留格式（且非 .xls 转换文件），本次已忽略该选项")
 
         # ---------- 读数据 ----------
         try:
@@ -562,6 +647,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             h = resolve_header_row(df.values[:20].tolist(), config)
             if h != -1 and h <= len(df):
                 sheet_headers[sn] = h
+            elif log_fn:
+                log_fn(f"  ⚠️ sheet「{sn}」没识别出表头行，已跳过该 sheet")
         if not sheet_headers:
             if log_fn:
                 log_fn("  ⚠️ 未找到有效表头，跳过")
@@ -576,6 +663,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             for sn, h in sheet_headers.items():
                 if sn in wb_src.sheetnames:
                     header_meta[sn] = _read_header_format(wb_src[sn], h)
+            if keep_formulas_ok:
+                # 额外打开一份 data_only=False 的源工作簿，专门取公式文本（不影响 wb_src 的缓存值读取）
+                wb_formula = openpyxl.load_workbook(work_path, read_only=False, data_only=False)
         except Exception as e:
             if log_fn:
                 log_fn(f"  ❌ 读取格式失败：{e}")
@@ -601,7 +691,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 last_hb_log = rows_written
                 log_fn(f"    …已拆分写入 {rows_written} 行")
 
-        def emit(key, save_path, sheet_name, h_idx, rows_df, ws_src, src_max_col):
+        def emit(key, save_path, sheet_name, h_idx, rows_df, ws_src, src_max_col, formula_ws):
             nonlocal total_rows
             if len(rows_df) == 0 or sheet_name not in header_meta:
                 return
@@ -618,7 +708,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 log_fn(f"  ⚠️ 列数与首个来源不一致（{first_cols}→{src_max_col}），"
                        f"按列位置合并可能错位：sheet「{sheet_name}」")
             _append_rows(sinfo, rows_df, preserve_ok, ws_src, src_max_col, style_cache,
-                         heartbeat=heartbeat)
+                         heartbeat=heartbeat, formula_ws=formula_ws)
             total_rows += len(rows_df)
             touched_keys.add(key)
 
@@ -630,6 +720,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             df = df_dict[sn]
             col_idx = _find_col_index(df, h, split_column)
             if col_idx is None:
+                if log_fn:
+                    log_fn(f"  ⚠️ sheet「{sn}」第 {h} 行（识别出的表头行）里没找到拆分字段"
+                           f"「{split_column}」，已跳过该 sheet")
                 continue
             pcol_idx = _find_col_index(df, h, person_column) if do_person else None
 
@@ -643,6 +736,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             targets = selected if selected_set else sorted({v for v in prim if not is_skip_value(v, skip)})
             ws_src = wb_src[sn] if (preserve_ok and sn in wb_src.sheetnames) else None
             src_max_col = ws_src.max_column if ws_src is not None else df.shape[1]
+            formula_ws = (wb_formula[sn] if (keep_formulas_ok and wb_formula is not None
+                          and sn in wb_formula.sheetnames) else None)
 
             for ti, pval in enumerate(targets):
                 if stop_flag and stop_flag():
@@ -658,7 +753,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
 
                 # 汇总（始终产出）
                 k, p = _summary_key_path(output_root, pval, src_stem, single_file, merge)
-                emit(k, p, sn, h, sub, ws_src, src_max_col)
+                emit(k, p, sn, h, sub, ws_src, src_max_col, formula_ws)
 
                 # 到人（可选附加产出）
                 if persons is not None:
@@ -666,8 +761,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     for person in sorted({v for v in sub_persons if not is_skip_value(v, skip)}):
                         rows_df = sub[sub_persons == person]
                         if len(rows_df):
-                            k2, p2 = _person_key_path(output_root, pval, person)
-                            emit(k2, p2, sn, h, rows_df, ws_src, src_max_col)
+                            k2, p2 = _person_key_path(output_root, pval, person, src_stem)
+                            emit(k2, p2, sn, h, rows_df, ws_src, src_max_col, formula_ws)
 
         if log_fn and total_rows:
             log_fn(f"  ✅ 本文件命中 {total_rows} 行 → 分入 {len(touched_keys)} 个输出文件")
@@ -677,6 +772,11 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         if wb_src is not None:
             try:
                 wb_src.close()
+            except Exception:
+                pass
+        if wb_formula is not None:
+            try:
+                wb_formula.close()
             except Exception:
                 pass
         if is_tmp and os.path.exists(work_path):

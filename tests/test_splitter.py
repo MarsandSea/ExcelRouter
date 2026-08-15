@@ -153,6 +153,54 @@ def test_header_format_preserved(two_books):
     assert ws["A2"].font.bold is True
 
 
+# ---------- 保留公式（keep_formulas，仅同行公式安全平移）----------
+
+def _make_formula_book(path):
+    """单文件、表头第1行；D 列是同行公式（可安全平移），E 列是跨行区域公式（不安全）。
+
+    销售部记录放在第3行，拆分后会上移到输出第2行，制造行号平移场景。
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for c, h in enumerate(["部门", "单价", "数量", "金额", "合计"], 1):
+        ws.cell(row=1, column=c, value=h)
+    ws.append(["技术部", 10, 2, "=B2*C2", "=SUM(D2:D3)"])   # row2
+    ws.append(["销售部", 5, 4, "=B3*C3", "=SUM(D2:D3)"])    # row3
+    wb.save(path)
+
+
+def test_keep_formulas_single_file(tmp_path):
+    inp = tmp_path / "结算表.xlsx"
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_formula_book(inp)
+
+    cfg = _base_cfg(str(inp), str(out), split_column="部门",
+                    header_mode="row", header_row=1, keep_formulas=True)
+    res = run_split(cfg, log_fn=lambda m: None)
+    wb = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))
+    ws = wb.active
+    # 同行公式：安全，平移行号后仍是活公式
+    assert ws["D2"].value == "=B2*C2"
+    # 跨行区域公式：不安全，落成缓存数值（不是公式字符串）
+    assert not (isinstance(ws["E2"].value, str) and ws["E2"].value.startswith("="))
+
+
+def test_keep_formulas_default_off(tmp_path):
+    inp = tmp_path / "结算表.xlsx"
+    out = tmp_path / "out"
+    out.mkdir()
+    _make_formula_book(inp)
+
+    cfg = _base_cfg(str(inp), str(out), split_column="部门",
+                    header_mode="row", header_row=1)   # keep_formulas 不传，走默认 False
+    res = run_split(cfg, log_fn=lambda m: None)
+    wb = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))
+    ws = wb.active
+    assert not (isinstance(ws["D2"].value, str) and ws["D2"].value.startswith("="))
+
+
 # ---------- 到人（双产出 + 范围过滤）----------
 
 def test_to_person_all(two_books):
@@ -161,12 +209,12 @@ def test_to_person_all(two_books):
                               merge_across_files=False), log_fn=lambda m: None)
     # 汇总照常产出
     assert os.path.isdir(os.path.join(res, "销售部", "汇总"))
-    # 到人：销售部里 A 的张三/李四/王五 + B 的钱七 都各一个
-    for name in ("张三", "李四", "王五", "钱七"):
-        assert os.path.exists(os.path.join(res, "销售部", "到人", f"{name}.xlsx")), name
+    # 到人：销售部里 A 的张三/李四/王五 + B 的钱七 都各一个；文件名带来源文件名后缀
+    for name, stem in (("张三", "A"), ("李四", "A"), ("王五", "A"), ("钱七", "B")):
+        assert os.path.exists(os.path.join(res, "销售部", "到人", f"{name}_{stem}.xlsx")), name
     # 技术部到人：A 赵六 + B 孙八
-    assert os.path.exists(os.path.join(res, "技术部", "到人", "赵六.xlsx"))
-    assert os.path.exists(os.path.join(res, "技术部", "到人", "孙八.xlsx"))
+    assert os.path.exists(os.path.join(res, "技术部", "到人", "赵六_A.xlsx"))
+    assert os.path.exists(os.path.join(res, "技术部", "到人", "孙八_B.xlsx"))
 
 
 def test_to_person_scope_filter(two_books):
@@ -175,10 +223,10 @@ def test_to_person_scope_filter(two_books):
     res = run_split(_base_cfg(inp, out, to_person=True, person_column="姓名",
                               person_file_filter=["A"], merge_across_files=False),
                     log_fn=lambda m: None)
-    assert os.path.exists(os.path.join(res, "销售部", "到人", "张三.xlsx"))   # A 表
-    assert not os.path.exists(os.path.join(res, "销售部", "到人", "钱七.xlsx"))  # B 表，不在范围
+    assert os.path.exists(os.path.join(res, "销售部", "到人", "张三_A.xlsx"))   # A 表
+    assert not os.path.exists(os.path.join(res, "销售部", "到人", "钱七_B.xlsx"))  # B 表，不在范围
     # 但 B 表仍进了汇总
-    assert os.path.exists(os.path.join(res, "销售部", "汇总", "B.xlsx"))
+    assert os.path.exists(os.path.join(res, "销售部", "汇总", "销售部_B.xlsx"))
 
 
 # ---------- 只拆部分取值 ----------
@@ -272,7 +320,7 @@ def test_zip_bundles_summary_with_person(two_books):
     assert os.path.exists(zpath)
     names = [n.replace("\\", "/") for n in zipfile.ZipFile(zpath).namelist()]
     assert any(n.startswith("汇总/") and n.endswith("销售部.xlsx") for n in names), names   # 汇总进包
-    assert any(n.startswith("到人/") and n.endswith("张三.xlsx") for n in names), names      # 到人也在包里
+    assert any(n.startswith("到人/") and n.endswith("张三_A.xlsx") for n in names), names    # 到人也在包里
 
 
 def test_dedupe_path_helper():
