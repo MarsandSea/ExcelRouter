@@ -12,9 +12,20 @@
   "person_file_filter": [],
   "value_alias_map": {},
   "skip_values": ["合计", "小计", "总计", "平均", ""],
-  "merge_across_files": true,
+  "merge_across_files": false,
   "make_zip": true,
   "exact_match": true,
   "preserve_format": true,
-  "auto_open_output": true
+  "keep_formulas": false,
+  "auto_open_output": true,
+  "ui_mode": "excel",
+  "pdf_input_paths": [],
+  "pdf_mapping_path": "",
+  "pdf_grid_column": "",
+  "pdf_password_column": "",
+  "pdf_receiver_column": "",
+  "pdf_watermark": true,
+  "pdf_watermark_text": "{grid} {date}",
+  "pdf_watermark_opacity": 0.15,
+  "pdf_watermark_angle": 45
 }

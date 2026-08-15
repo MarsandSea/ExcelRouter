@@ -114,6 +114,15 @@ jobs:
           "release_id=$($resp.id)" >> $env:GITHUB_OUTPUT
 
       - name: Upload assets to Gitee Release
+        # Uses curl.exe (bundled on windows-latest runners), not
+        # Invoke-RestMethod -Form. PowerShell hashtables have no guaranteed
+        # key order, so -Form @{ access_token=...; file=... } can stream the
+        # (large) file part before the access_token part; Gitee's upload
+        # endpoint then times out waiting for the token and rejects the
+        # request as unauthenticated (40001) even though the token is valid
+        # -- this is exactly what broke the v2.5.1 upload. curl -F preserves
+        # the order fields are given on the command line, so access_token
+        # always arrives first.
         if: steps.gitee_release.outcome == 'success'
         continue-on-error: true
         shell: pwsh
@@ -127,7 +136,13 @@ jobs:
             "dist/ExcelRouter-v$ver.exe"
           )
           foreach ($f in $files) {
-            Invoke-RestMethod -Uri "https://gitee.com/api/v5/repos/Marsandsea/Excelrouter/releases/$releaseId/attach_files" `
-              -Method Post `
-              -Form @{ access_token = $env:GITEE_TOKEN; file = Get-Item $f }
+            $resp = curl.exe -s -S --fail-with-body `
+              -F "access_token=$env:GITEE_TOKEN" `
+              -F "file=@$f" `
+              "https://gitee.com/api/v5/repos/Marsandsea/Excelrouter/releases/$releaseId/attach_files"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "curl upload failed for $f`: $resp"
+              exit 1
+            }
+            Write-Host "Uploaded $f`: $resp"
           }
