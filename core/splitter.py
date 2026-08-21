@@ -39,6 +39,7 @@ import re
 import time
 import shutil
 import tempfile
+import threading
 import warnings
 import datetime
 from copy import copy
@@ -214,6 +215,47 @@ def normalize_to_xlsx(file_path, log_fn=None):
         if log_fn:
             log_fn(f"  ⚠️ xls 转换失败：{e}")
         return file_path, False
+
+
+# =====================================================
+# 长耗时阻塞调用的"仍在运行"心跳（pd.read_excel / openpyxl.load_workbook 无进度回调）
+# =====================================================
+
+class _Ticker:
+    """在一段无法拆分、无进度回调的阻塞调用（整份 pandas/openpyxl 读取）期间，
+    定时打一条"仍在处理"日志，避免宽表/大文件读取几十秒甚至更久时，界面在这段
+    空窗期里毫无变化，被用户误判为卡死（实际只是单线程还在读，见 CLAUDE.md 用户反馈）。
+    用独立守护线程纯计时打日志，不碰被计时的调用本身，调用结束后 stop 即可。
+    """
+
+    def __init__(self, log_fn, label, first_delay=4.0, interval=7.0):
+        self._log_fn = log_fn
+        self._label = label
+        self._first_delay = first_delay
+        self._interval = interval
+        self._stop_evt = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        if self._log_fn:
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def _run(self):
+        elapsed = 0.0
+        delay = self._first_delay
+        while not self._stop_evt.wait(delay):
+            elapsed += delay
+            self._log_fn(f"    …仍在{self._label}，已等待 {int(elapsed)} 秒"
+                          f"（文件较大/列较多时属正常现象，不是卡死，请继续等待）")
+            delay = self._interval
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stop_evt.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.5)
+        return False
 
 
 # =====================================================
@@ -634,7 +676,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
 
         # ---------- 读数据 ----------
         try:
-            df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine='openpyxl')
+            with _Ticker(log_fn, "读取数据"):
+                df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine='openpyxl')
         except Exception as e:
             if log_fn:
                 log_fn(f"  ❌ 读取失败：{e}")
@@ -659,13 +702,14 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             log_fn("  ⏳ 正在读取格式…")
         header_meta = {}
         try:
-            wb_src = openpyxl.load_workbook(work_path, read_only=False, data_only=True)
-            for sn, h in sheet_headers.items():
-                if sn in wb_src.sheetnames:
-                    header_meta[sn] = _read_header_format(wb_src[sn], h)
-            if keep_formulas_ok:
-                # 额外打开一份 data_only=False 的源工作簿，专门取公式文本（不影响 wb_src 的缓存值读取）
-                wb_formula = openpyxl.load_workbook(work_path, read_only=False, data_only=False)
+            with _Ticker(log_fn, "读取格式"):
+                wb_src = openpyxl.load_workbook(work_path, read_only=False, data_only=True)
+                for sn, h in sheet_headers.items():
+                    if sn in wb_src.sheetnames:
+                        header_meta[sn] = _read_header_format(wb_src[sn], h)
+                if keep_formulas_ok:
+                    # 额外打开一份 data_only=False 的源工作簿，专门取公式文本（不影响 wb_src 的缓存值读取）
+                    wb_formula = openpyxl.load_workbook(work_path, read_only=False, data_only=False)
         except Exception as e:
             if log_fn:
                 log_fn(f"  ❌ 读取格式失败：{e}")
