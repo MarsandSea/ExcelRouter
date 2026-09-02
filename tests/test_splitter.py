@@ -342,3 +342,50 @@ def test_safe_sheet_title_helper():
     used2 = set()
     assert _safe_sheet_title("X", used2) == "X"
     assert _safe_sheet_title("X", used2) == "X(2)"
+
+# ---------- 收尾摘要行（v2.7，GUI 完成摘要的数据源）----------
+
+def test_summary_line(two_books):
+    """run_split 收尾应打恰好一行 [SUMMARY] JSON，含分组/文件/行数/跳过统计。"""
+    import json
+    inp, out = two_books
+    logs = []
+    result = run_split(_base_cfg(inp, out), log_fn=logs.append)
+    summary = [m for m in logs if m.startswith("[SUMMARY] ")]
+    assert len(summary) == 1
+    s = json.loads(summary[0][len("[SUMMARY] "):])
+    assert s["mode"] == "excel"
+    assert s["groups"] == 2            # 销售部 + 技术部
+    assert s["rows"] == 6              # 4 + 2 行数据（合计行按跳过值忽略）
+    assert s["files"] >= 2
+    assert s["skipped_sheets"] == 0
+    assert s["failed_files"] == 0
+    assert s["stopped"] is False
+    assert s["output"] == result
+
+def test_summary_line_counts_skipped_sheets(tmp_path):
+    """拆分字段找不到而跳过的 sheet 要计入 skipped_sheets。"""
+    import json
+    inp = tmp_path / "in"
+    out = tmp_path / "out"
+    inp.mkdir()
+    # 两个 sheet：一个有「部门」列，一个没有 → 后者被跳过
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "有部门"
+    for c, h in enumerate(["工号", "姓名", "部门"], 1):
+        ws1.cell(row=1, column=c, value=h)
+    ws1.cell(row=2, column=1, value="001")
+    ws1.cell(row=2, column=2, value="张三")
+    ws1.cell(row=2, column=3, value="销售部")
+    ws2 = wb.create_sheet("没有部门")
+    for c, h in enumerate(["编号", "说明"], 1):
+        ws2.cell(row=1, column=c, value=h)
+    ws2.cell(row=2, column=1, value="x1")
+    ws2.cell(row=2, column=2, value="备注")
+    wb.save(inp / "multi.xlsx")
+    logs = []
+    run_split(_base_cfg(str(inp), str(out)), log_fn=logs.append)
+    s = json.loads([m for m in logs if m.startswith("[SUMMARY] ")][0][len("[SUMMARY] "):])
+    assert s["skipped_sheets"] == 1
+    assert s["groups"] == 1

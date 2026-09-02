@@ -12,6 +12,8 @@ MIT License
 
 import io
 import os
+import json
+import secrets
 import time
 
 from openpyxl import Workbook, load_workbook
@@ -101,6 +103,86 @@ def read_mapping(xlsx_path, grid_col, password_col, receiver_col=""):
     finally:
         wb.close()
 
+
+# =====================================================
+# 映射清单模板 / 随机密码（v2.7 新增，追加式 API）
+# =====================================================
+
+# 随机密码字符集：排除 0O1lI 等易混字符，避免微信里口口相传时认错
+_PWD_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+def gen_password(n=8):
+    """生成 n 位随机密码（加密学安全的 secrets，排除易混字符）。"""
+    return "".join(secrets.choice(_PWD_ALPHABET) for _ in range(n))
+
+def write_mapping_template(path):
+    """生成「网格 → 密码」映射清单模板 xlsx，返回写入路径。
+
+    首个 sheet 是待填写的空模板（表头：网格/密码/接收人 + 两行示例，示例行
+    使用前请删除）；第二个 sheet 放填写说明，避免说明文字混进数据行被
+    read_mapping 误当成网格。
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "映射清单"
+    ws.append(["网格", "密码", "接收人"])
+    ws.append(["东区营业厅（示例，请删除）", gen_password(), "张三（示例）"])
+    ws.append(["西区营业厅（示例，请删除）", gen_password(), "李四（示例）"])
+    for col, w in {"A": 24, "B": 16, "C": 14}.items():
+        ws.column_dimensions[col].width = w
+    ws.cell(row=2, column=2).number_format = "@"
+    ws.cell(row=3, column=2).number_format = "@"
+
+    note = wb.create_sheet("填写说明")
+    for line in [
+        "每行一个网格：网格名必填，密码为该网格的专属打开密码，接收人选填（仅方便照着清单群发）。",
+        "密码建议 8 位以上，不要用 123456、手机号这类容易猜到的密码。",
+        "示例行（第 2、3 行）使用前请删除。",
+        "没有密码思路？可以不选密码列，工具会在开始前询问是否自动生成随机密码。",
+        "加密采用 AES-256，忘记密码无法找回；含明文密码的「分发清单.xlsx」只留给分发人自己用。",
+    ]:
+        note.append([line])
+    note.column_dimensions["A"].width = 100
+    wb.save(path)
+    return path
+
+def fill_random_passwords(mapping_path, grid_col, password_col="", out_path=None):
+    """为映射清单里的每个网格生成随机密码，写入**新文件**（不改动原清单）。
+
+    password_col 已存在时只填空白单元格（已手填的密码保留）；不存在时在表尾
+    新增「密码」列。返回 (输出路径, 实际生成的密码个数)。
+    """
+    wb = load_workbook(mapping_path)
+    try:
+        ws = wb.worksheets[0]
+        header = [soft_clean(c.value) for c in ws[1]]
+        if grid_col not in header:
+            raise ValueError(f"清单表头里找不到网格列「{grid_col}」")
+        g_idx = header.index(grid_col)
+        if password_col and password_col in header:
+            p_idx = header.index(password_col)
+        else:
+            p_idx = len(header)
+            ws.cell(row=1, column=p_idx + 1, value="密码")
+        count = 0
+        for r in range(2, ws.max_row + 1):
+            if not soft_clean(ws.cell(row=r, column=g_idx + 1).value):
+                continue
+            cell = ws.cell(row=r, column=p_idx + 1)
+            if soft_clean(cell.value):
+                continue                    # 已有密码的保留，不覆盖
+            cell.value = gen_password()
+            cell.number_format = "@"        # 强制文本，防 Excel 吞前导零
+            count += 1
+        if not count:
+            raise ValueError("没有需要生成密码的网格（可能密码列都已填好）")
+        if not out_path:
+            stem, ext = os.path.splitext(mapping_path)
+            out_path = f"{stem}_含密码{ext or '.xlsx'}"
+        wb.save(out_path)
+        return out_path, count
+    finally:
+        wb.close()
 
 def _find_cjk_font():
     """在 Windows 系统字体目录里找一款可用的中文 .ttf。找不到返回 None。"""
@@ -333,4 +415,16 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
     else:
         log_fn(f"✅ 完成：{ok_grids} 个网格成功" + (f"，{fail_grids} 个失败" if fail_grids else ""))
     log_fn("🔒 提醒：分发清单里有明文密码，只留给自己用，不要随文件一起发出去")
+
+    # 机器可读收尾行（v2.7）：GUI 提取后渲染完成摘要；追加式，不改返回值与契约。
+    summary = {
+        "mode": "pdf",
+        "grids_ok": ok_grids,
+        "grids_fail": fail_grids,
+        "files": done,
+        "stopped": stopped,
+        "output": output_root if ok_grids else None,
+        "manifest": manifest_path if ok_grids else None,
+    }
+    log_fn(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
     return output_root if ok_grids else None

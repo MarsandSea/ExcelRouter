@@ -170,3 +170,61 @@ def test_stop_flag(workspace):
     out = run_pdf_dist(cfg, log_fn=logs.append, stop_flag=lambda: True)
     assert out is None                                    # 一个网格都没做
     assert any("停止" in m for m in logs)
+
+# ---------- 模板 / 随机密码 / 收尾摘要行（v2.7）----------
+
+def test_write_mapping_template(tmp_path):
+    """模板：首行表头三列，第二个 sheet 放说明（不影响 read_mapping 只读第一个 sheet）。"""
+    from core.pdf_dist import write_mapping_template
+    p = tmp_path / "tpl.xlsx"
+    write_mapping_template(str(p))
+    assert list_mapping_columns(str(p)) == ["网格", "密码", "接收人"]
+    wb = openpyxl.load_workbook(p)
+    assert "填写说明" in wb.sheetnames
+    wb.close()
+
+def test_fill_random_passwords_blanks_only(tmp_path):
+    """只填空白的密码单元格；已手填的保留；原文件不被改动。"""
+    from core.pdf_dist import fill_random_passwords
+    mp = tmp_path / "m.xlsx"
+    _make_mapping(mp, [("G1", None, ""), ("G2", "keepme", ""), ("G3", None, "")])
+    out, n = fill_random_passwords(str(mp), "GridName", "Pwd")
+    assert n == 2                       # 只补 G1 / G3
+    assert out.endswith("_含密码.xlsx")
+    rows, _ = read_mapping(out, "GridName", "Pwd")
+    pw = {r["grid"]: r["password"] for r in rows}
+    assert pw["G2"] == "keepme"         # 已填的不覆盖
+    assert len(pw["G1"]) == 8 and len(pw["G3"]) == 8
+    assert pw["G1"] != pw["G3"]
+    rows0, _ = read_mapping(str(mp), "GridName", "Pwd")
+    assert [r["grid"] for r in rows0] == ["G2"]   # 原文件保持原样
+
+def test_fill_random_passwords_new_column(tmp_path):
+    """清单没有密码列时新增「密码」列；密码字符集排除易混字符。"""
+    from core.pdf_dist import fill_random_passwords, gen_password
+    mp = tmp_path / "m2.xlsx"
+    _make_mapping(mp, [("东区", "", ""), ("西区", "", "")], headers=("网格",))
+    out, n = fill_random_passwords(str(mp), "网格")
+    assert n == 2
+    rows, _ = read_mapping(out, "网格", "密码")
+    assert len(rows) == 2
+    for _ in range(50):
+        pwd = gen_password()
+        assert len(pwd) == 8
+        assert not set(pwd) & set("0O1lI")   # 无易混字符
+
+def test_summary_line_pdf(workspace):
+    """run_pdf_dist 收尾应打恰好一行 [SUMMARY] JSON。"""
+    import json
+    tmp, cfg = workspace
+    logs = []
+    out = run_pdf_dist(cfg, log_fn=logs.append)
+    summary = [m for m in logs if m.startswith("[SUMMARY] ")]
+    assert len(summary) == 1
+    s = json.loads(summary[0][len("[SUMMARY] "):])
+    assert s["mode"] == "pdf"
+    assert s["grids_ok"] == 2           # GridA / GridB（GridC 空密码被跳过）
+    assert s["grids_fail"] == 0
+    assert s["files"] == 2
+    assert s["output"] == out
+    assert s["manifest"]

@@ -22,8 +22,8 @@ no telemetry, works offline.
 - 作者 / Author: AbeLin
 - 协议 / License: MIT（免费，个人与商业使用均可，保留版权声明即可）
 - 平台 / Platform: Windows 10 / 11 64 位，免安装，解压即用
-- 技术栈 / Stack: Python 3.9+、customtkinter（GUI）、pandas（数据过滤）、openpyxl（格式复制）、
-  pypdf + fpdf2 + cryptography（PDF 加密与水印）
+- 技术栈 / Stack: Python 3.9+、customtkinter（GUI）、tkinterdnd2（拖拽）、pandas（数据过滤）、
+  openpyxl（格式复制）、pypdf + fpdf2 + cryptography（PDF 加密与水印）
 - 代码仓库 / Repo: https://github.com/MarsandSea/excel-router
 - 国内镜像 / China mirror: https://gitee.com/Marsandsea/Excelrouter
 - 下载 / Download: 上述任一仓库的 Releases 页；提供 onedir ZIP（推荐，极少杀毒误报）
@@ -34,7 +34,8 @@ no telemetry, works offline.
 ## 能做什么 / What it does
 
 - 按任意一个字段的取值拆分：自动识别表头行（前 15 行启发式），自动枚举该字段的全部取值，
-  每个取值输出一个文件，无需预先列清单
+  每个取值输出一个文件，无需预先列清单；拆分前显示「将拆成哪几组」预览并可勾选只拆一部分，
+  分组异常多时主动警告防误选字段；支持拖入文件/文件夹开始
 - 整个文件夹批量处理：一次拆完一批 Excel，按取值打包成 ZIP，可直接转发给对应负责人
 - 保留原格式：字体、颜色、边框、数字格式、列宽、表头的合并单元格原样保留
 - 跨文件合并（可选，默认关闭）：同一取值出现在多个源文件时合并进同一个结果文件
@@ -44,7 +45,8 @@ no telemetry, works offline.
 - 保留公式（可选，默认关闭）：同一行内的公式（如 金额=单价×数量）平移行号后保留为活公式；
   跨行汇总 / 跨表引用的公式（SUM、VLOOKUP）转成当前数值，避免出现算错的公式
 - 兼容 .xls（自动转换）、多 Sheet、递归子目录
-- PDF 加密分发：按「网格→密码」映射清单批量加密 + 打专属水印 + 生成分发清单.xlsx
+- PDF 加密分发：按「网格→密码」映射清单批量加密 + 打专属水印 + 生成分发清单.xlsx；
+  可一键生成清单模板、自动生成每网格随机密码
 
 ## 不做什么 / What it does NOT do
 

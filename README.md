@@ -76,16 +76,19 @@ formatting, merge across files, optional per-person output — free, open-source
 - **选一个字段就能拆** —— 自动识别表头，下拉选「拆分字段」，每个取值拆成一个文件，无需预先列出。
   *Pick one column and split — auto-detect header, choose a column, one file per value.*
 - **三步卡片式界面** —— ①选表格 ②选字段 ③开始拆分，主按钮固定在底部；不常用的设置收进
-  「▸ 高级设置」默认折叠，界面单屏不用切标签。
-  *Three-step card UI — pick table → pick field → split; advanced options collapse by default.*
+  「▸ 高级设置」默认折叠，界面单屏不用切标签；支持把文件 / 文件夹**直接拖进窗口**。
+  *Three-step card UI — pick table → pick field → split; advanced options collapse by default; drag & drop supported.*
+- **拆分前先看结果（新）** —— 选定拆分字段后自动列出「将拆成哪几组」，可勾选只拆其中一部分；
+  分组异常多时（比如误选了工号列）主动警告，不再导图。
+  *Preview split groups before running, with optional per-value checkboxes and a warning for suspicious many-group fields.*
 - **默认按原表拆分，按需跨文件合并** —— 默认每个源文件各自拆分、打包进同一个 ZIP；
   需要把同一个取值跨文件汇总成一张表时，「高级设置」里勾选「跨文件合并汇总」即可
   （修掉了旧版互相覆盖的问题）。
   *Splits each source file on its own by default, bundled into one ZIP; optionally merge the
   same value across files into a single table via Advanced Settings.*
-- **只拆指定取值** —— 「高级设置」里可填「只拆这些取值」（如只要「东区、西区」），
-  填好后自动记住，下次不用重填。
-  *Restrict splitting to specific values, remembered across runs.*
+- **只拆指定取值** —— ②里点「查看/勾选分组」勾掉不需要的即可（也可在「高级设置」手填），
+  勾选结果自动记住，下次不用重设。
+  *Restrict splitting to specific values via checkboxes, remembered across runs.*
 - **二级拆分（按人分发）** —— 可选再按第二列细分（如 部门 → 姓名），一次产出汇总 + 到人双份结果。
   *Optional secondary split (e.g. Department → Person), producing both summary and per-person outputs.*
 - **保留格式** —— 表头与数据行的字体、颜色、边框、数字格式、合并表头完整保留。
@@ -98,6 +101,9 @@ formatting, merge across files, optional per-person output — free, open-source
   are converted to their current value to avoid showing wrong results. Off by default.*
 - **多 Sheet / 兼容 .xls / 批量递归** —— 一次处理整个文件夹。
 - **大文件不假死** —— 几万行的单文件也有实时进度与心跳日志，界面全程响应（见 [FAQ](docs/FAQ.md#处理大文件几万行时界面卡住像死机了一样是不是崩溃了)）。
+- **完成就知结果长什么样（新）** —— 拆分完成直接告诉你拆出几组、几个文件、多少行，
+  哪个 sheet 被跳过也会点名，不用翻日志猜。
+  *Clear result summary on completion — groups, files, rows, and anything skipped.*
 - **PDF 加密分发（新）** —— 同一份 PDF 发给多个网格/部门：每个网格自动生成**专属打开密码 + 专属水印**
   （泄露可溯源）的副本，并输出「谁收什么、密码是什么」的分发清单，照着微信/邮件群发即可。
   *PDF secure distribution — per-group password-protected & watermarked copies from one PDF, plus a distribution manifest.*
@@ -140,11 +146,12 @@ formatting, merge across files, optional per-person output — free, open-source
 
 界面就是三张卡片，从上到下做完即可：
 
-1. **①选择要拆的表格** —— 点「📄 选一个 Excel 文件」或「📁 选整个文件夹（批量拆）」。
-2. **②按哪个字段拆分** —— 点「🔄 扫描字段」，在「拆分字段」下拉里选（如「部门」）；
-   选文件夹时还能勾「同时拆到人」，再单独按第二列（如姓名）产出个人文件。
+1. **①选择要拆的表格** —— 把文件 / 文件夹**拖进窗口**，或点「📄 选一个 Excel 文件」
+   「📁 选整个文件夹（批量拆）」。
+2. **②按哪个字段拆分** —— 在「拆分字段」下拉里选（如「部门」），下方自动列出
+   「将拆成哪几组」，可点「查看/勾选分组」只拆一部分；选文件夹时还能勾「同时拆到人」。
 3. **③开始拆分** —— 输出位置不用改（自动放进「拆分结果」文件夹），点「▶ 开始拆分」，
-   完成后每个取值一个文件，自动打开输出目录。
+   完成后显示结果摘要（几组 / 几个文件 / 多少行），并自动打开输出目录。
 
 不常用的设置（表头识别策略、只拆部分取值、取值归并、跳过值等）收在
 **「▸ 高级设置（一般用不到）」**里，默认折叠，一般流程用不到点开它。
@@ -166,8 +173,9 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
 
 同一份 PDF（通报、明细等）要发给多个网格/部门，又怕外泄？切到顶部的 **「PDF 加密分发」** 模式：
 
-1. **①选择要分发的 PDF** —— 可多选，每个网格都会拿到全部所选文件。
-2. **②选择密码映射清单** —— 一个 Excel 小表，每行一个网格：网格名、专属密码，可选接收人。
+1. **①选择要分发的 PDF** —— 可多选（支持拖入），每个网格都会拿到全部所选文件。
+2. **②选择密码映射清单** —— 一个 Excel 小表，每行一个网格：网格名、专属密码，可选接收人；
+   没有清单点「生成模板」一键产出；没有密码思路可以不选密码列，开始时选择自动生成随机密码。
    选完自动识别列，确认「网格列 / 密码列 / 接收人列」三个下拉即可。
 3. **③开始分发** —— 每个网格生成一份 **专属打开密码 + 专属水印**（网格名+日期，斜向平铺，
    泄露可溯源）的副本，并输出一份「分发清单.xlsx」（网格 | 文件 | 密码 | 接收人），照着群发即可。
@@ -195,8 +203,6 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
 
 ## 💡 快问快答 / Quick FAQ
 
-- **有 Mac 版 / 在线版吗？** —— 没有。只提供 Windows（10/11 64 位）打包版；不做在线版，
-  因为在线版意味着要把你的数据上传到别人的服务器。
 - **数据会被上传吗？安全吗？** —— 不会。全程本地处理，程序不联网、无任何遥测或自动上报，
   拔掉网线照样能用。源码开源，可自行审查。
 - **下载的 exe 被杀毒软件报毒？** —— 是 PyInstaller 打包的**常见误报**，不是病毒。优先下
@@ -206,6 +212,8 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
 - **`.xls` 老格式支持吗？** —— 能拆、数据完整，但转换后**无法保留原格式**；格式重要就先用
   Excel 另存为 `.xlsx`。
 - **免费吗？公司内部能用吗？** —— 免费，MIT 协议，个人和商业使用都可以，保留版权声明即可。
+- **有 Mac 版 / 在线版吗？** —— 没有，只有 Windows 版。在线版意味着要把你的数据上传到别人
+  的服务器，与「数据不出本机」冲突，不做；Mac / Linux 待 Star 数 100+ 后评估提供。
 
 更多问题见 **[完整 FAQ](docs/FAQ.md)**。
 
@@ -234,8 +242,8 @@ pytest -q
 直接运行 `build.bat`（onedir + onefile 双产物，已含必需参数），或参考
 **[发版手册](docs/RELEASING.md)** 了解 CI 自动发版流程与防误报细节。
 
-> ⚠️ `--collect-all customtkinter` 与 `--add-data "config;config"` 两个参数缺一不可，
-> 否则打包后的 exe 会启动崩溃或找不到默认配置。
+> ⚠️ `--collect-all customtkinter`、`--collect-all tkinterdnd2`、 `--add-data "config;config"` 三个参数缺一不可，
+> 否则打包后的 exe 会启动崩溃、拖拽失效或找不到默认配置。
 
 ---
 

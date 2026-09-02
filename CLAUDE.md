@@ -11,7 +11,26 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.6.0**，GitHub 仓库：`MarsandSea/excel-router`。
+当前版本 **v2.7.0**，GitHub 仓库：`MarsandSea/excel-router`。
+
+> **v2.7：普通用户全流程 UX 升级（2026-09）**。站在「第一次打开 exe 的办公人员」角度补四个断点：
+> ① **取值预览**：选定拆分字段后自动枚举该列取值（接入 `core.splitter.list_values`，此前只有
+> CLI 契约、GUI 从未接入），②卡片直接显示「将拆成 N 组」，可展开勾选只拆部分取值
+> （勾选结果写回 `selected_values`，全选/全不选=留空=拆全部）；N>50 橙色警告「可能选错字段」
+> 并在开始时二次确认。② **拖拽**：新增 tkinterdnd2 可选依赖（`App` 变为
+> `CTk + TkinterDnD.DnDWrapper` 混编，import 失败静默退回无拖拽）——表格/文件夹拖进
+> ①卡片即可开始，PDF 和映射清单同理；打包三处都要加 `--collect-all tkinterdnd2`。
+> ③ **小屏适配**：窗口高度按屏幕自适应（1366×768 老笔记本下 800px 会出屏）+ 记住上次
+> 窗口大小位置（config 新键 `window_geometry`）；页脚新增「大字号」切换（`ui_scale`，
+> 重启生效）。④ **完成摘要**：core 两个 run_* 收尾各打一行 `[SUMMARY] {json}`（机器可读，
+> 追加式不改返回值/签名），GUI 渲染「拆出 N 组 · M 文件 · K 行 · Z 个 ZIP + 跳过/失败点名
+> + 输出路径」多行摘要；日志里 ⚠ 行计数给「处理详情」打角标，失败时出现「📋 复制日志」。
+> 其余：扫描结果带文件数+总 MB（>50 个或 >200MB 附耗时长提示）；开跑前检测 `~$` 锁文件
+> 提醒「正被 Excel 打开读到的是旧内容」；「🔄 扫描字段」改名「🔄 重新识别」（自动扫描已是
+> 主路径，按钮只是兜底）；「跨文件合并汇总」旁补内存风险提示。PDF 模式：②卡片加
+> 「生成模板」一键产出映射清单模板（说明放第二个 sheet，不污染数据区）；不选密码列
+> 开始时可选**自动生成随机密码**（新函数 `fill_random_passwords`，只填空白、不改原文件、
+> 另存 `*_含密码.xlsx`）；选完清单显示「N 个网格 × M 个 PDF = K 个加密副本」预览。
 
 > v1.0 原是「网格化管理」专用（按网格 + 工号识别）。v2.0 已**通用化**：表头自动识别、
 > 按列名选列、自动枚举取值、跨文件合并。作者原来的网格 + 岗位工作流用「专家模式」
@@ -151,6 +170,8 @@ excel-router/
 | `pdf_watermark` | 是否加网格专属水印 | `true` |
 | `pdf_watermark_text` | 水印模板，支持 `{grid}`（网格名）`{date}`（日期） | `"{grid} {date}"` |
 | `pdf_watermark_opacity` / `pdf_watermark_angle` | 水印透明度 / 旋转角（无 GUI 入口，改配置文件生效） | `0.15` / `45` |
+| `window_geometry` | 上次关闭时的窗口大小位置；空 = 按屏幕高度自适应（v2.7） | `""` |
+| `ui_scale` | 界面缩放百分比（大字号=115），重启生效（v2.7） | `100` |
 
 ### core/splitter.py 的关键函数
 
@@ -171,7 +192,10 @@ excel-router/
   `keep_formulas` 开启（且 `preserve_format` 有效）时额外打开一份 `data_only=False` 的源工作簿取
   公式文本，逐格式单元格调用 `_safe_translate`——**同行公式**平移后仍是活公式，其余（汇总/跨行/
   跨表公式）落成当前缓存数值，绝不把「会算错」的公式发给接收人
-- `run_split(config, ...)` —— 主流程：**输入可为单文件或目录** → 累积 → 统一保存 → 按主取值打 ZIP
+- `run_split(config, ...)` —— 主流程：**输入可为单文件或目录** → 累积 → 统一保存 → 按主取值打 ZIP；
+  `process_file` 的 `stats` 可变 dict 参数跨文件累计「跳过 sheet/失败文件」，收尾打一行
+  **`[SUMMARY] {json}`**（mode/groups/files/rows/zips/skipped_sheets/failed_files/failed_saves/
+  stopped/output）——GUI 菜单据渲染完成摘要；追加式输出不改返回值，skill 只是多打一行
 
 **架构要点：pandas 负责过滤数据（向量化 mask），openpyxl 负责复制格式。**
 
@@ -211,9 +235,13 @@ excel-router/
   **writer 每个网格必须重建**：pypdf 的 merge_page 就地改页对象，复用会导致水印跨网格叠加；
   `writer.append(reader)` 是深拷贝，不会污染共享 reader
 - `write_manifest(entries, out_path)` —— 写「分发清单.xlsx」，密码列强制文本格式（`number_format='@'`）
+- `write_mapping_template(path)` / `fill_random_passwords(mapping, grid_col, password_col="", out_path=None)`
+  / `gen_password(n=8)`（v2.7）——映射清单模板生成/随机密码补填写。模板把「填写说明」放
+  **第二个 sheet**（避免说明文字混进数据被 read_mapping 误当网格）；随机密码用 `secrets`，
+  字符集排除 0O1lI 易混字符，只填空白格不覆盖手填，**写入新文件**（`*_含密码.xlsx`）不动原清单
 - `run_pdf_dist(config, log_fn, progress_fn, stop_flag)` —— **签名与 run_split 完全一致**，
   GUI 队列泵零改动接入；AES-256 加密，cryptography 缺失时降级 RC4-128 + 警告；
-  单网格失败记日志继续；源 PDF 自带密码的跳过不中断
+  单网格失败记日志继续；源 PDF 自带密码的跳过不中断；收尾同样打 `[SUMMARY] {json}`
 
 输出结构：`输出根/{网格}/{原文件名}.pdf` + `分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态）。
 **清单含明文密码**，完成日志里有「勿随文件发出」提醒——不要删这句。
@@ -266,6 +294,13 @@ row3 工具条（「▸ 处理详情」日志折叠钮 | 「💬 反馈建议」
   「💬 反馈建议」按钮 `_open_feedback` 打开问卷 + 把版本号复制进剪贴板；`_on_done` 仅在**成功完成**
   时在日志追加一行反馈引导（失败路径不加，避免像推卸责任）。**不做任何遥测/自动上报**——
   「数据不出本地」是产品卖点，反馈只能是用户主动点开的外部链接，不要改成程序内嵌表单或自动上传。
+
+**v2.7 界面机制增量（勿回退）：** 拖拽由 `_enable_drop`/`_parse_drop_paths` 承载，
+仅依赖 tkinterdnd2 存在性（`_DND_OK`），exe 缺二进制时静默无拖拽 不报错；取值预览三个状态
+`_tpl_path`/`_values_all`/`_value_vars` 随扫描重置，`("values", (col, token, vals))` 泵消息
+带序号防过期回填；`[SUMMARY]` 与 ⚠ 计数在 `_pump_ui` 消费日志时提取（**[SUMMARY] 行不进
+日志框显示**，提取失败退回原有纯日志行为）；`_collect_config` 透传 `ui_scale`/`window_geometry`
+（否则成功一次就把字号配置写丢了）；「🔄 扫描字段」已改名「🔄 重新识别」，README/FAQ 口径同步。
 
 **拆分线程 → 主线程通信（v2.4，重要，勿回退）：** 子线程把日志/进度/完成信号 `put` 进
 `self._ui_q`（`queue.Queue`），主线程 `_pump_ui` 每 100ms 用 `after(100, self._pump_ui)` 自我调度、
@@ -320,6 +355,10 @@ v1.0 逐文件独立处理、每个输出文件都新建 Workbook 后 `save` 覆
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 py main.py                 # 本机解释器是 py 启动器，见 [[python-launcher-gotcha]]
+# 注意（2026-09 实测）：从其它 Agent 沙箱（如灵犀）的 shell 调本机 Python 时，
+# 沙箱会注入 PYTHONHOME 指向它自带的环境，导致 py/真实解释器报
+# pyexpat DLL load failed、pip 解析到错误 site-packages。解法：命令前加
+# PYTHONHOME= PYTHONPATH= 前缀，或直接调用真实解释器绝对路径。
 ruff check .               # 静态检查，必须全绿（配置见 ruff.toml，存量豁免勿扩大）
 npx pyright --pythonpath "$(py -c 'import sys; print(sys.executable)')"
                            # 类型检查（范围 gui/+main.py；必须传 --pythonpath，
@@ -354,6 +393,8 @@ PyInstaller 致命坑仍然成立、缺一不可：
 >    和字体文件，缺了会导致 exe 一启动就崩溃（报错找不到 blue.json 之类）。
 > 2. **`--add-data "config;config"` 必须有**：否则打包后找不到默认配置文件
 >    （Windows 分号 `;` 分隔，Linux/Mac 是冒号 `:`）。
+> 3. **`--collect-all tkinterdnd2` 必须有（v2.7 起）**：tkinterdnd2 自带 tkdnd 原生二进制，
+>    缺了打包后拖拽静默失效（不崩，但功能没了）。build.bat 与 CI 三处已加，别删。
 >
 > 代码已做路径适配：`gui/app.py` 用 `sys._MEIPASS` 读打包进去的默认配置，用户配置
 > `user_config.json` 存到 exe 所在目录。**不要把配置读取改回纯相对路径**，打包后会失效。
