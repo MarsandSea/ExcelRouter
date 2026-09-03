@@ -11,7 +11,19 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.7.0**，GitHub 仓库：`MarsandSea/excel-router`。
+当前版本 **v2.7.1**，GitHub 仓库：`MarsandSea/excel-router`。
+
+> **v2.7.1：界面品牌化精修（2026-09）**。零新依赖零体积增加，不引入 theme.json（自定义主题
+> JSON 缺键有崩溃风险），全部走**代码内调色板常量 + 组件参数覆盖**：品牌主色「移动蓝」
+> `PRIMARY=("#0E7FD1","#38BDF8")`（浅/深双主题取值集中在常量区，`ACCENT` 已是它的别名），
+> 用于主按钮/步骤徽章/进度条/分段选择高亮/Hero 品牌色块；步骤卡片 corner_radius=12 + 1px
+> 淡边框 `CARD_BORDER`；主按钮加高到 44/圆角 10；完成摘要改由浅绿横幅 `OK_BANNER_BG`
+> 承载（有警告时退中性底色）。**字体统一的两个关键事实（实测）**：CTkFont 未指定 family 时
+> 取 `ThemeManager.theme["CTkFont"]["family"]`（改 `FontManager._default_font` 无效），且组件
+> 构造时读主题值——所以 `_init_fonts()` 必须在 root 建立后、任何组件创建前调用（现在在
+> `App.__init__` 开头），生效条件是 root 存在（`tkfont.families()` 要 root）。新增页脚「🌓
+> 深浅色」循环按钮（config 键 `appearance_mode`: system/light/dark，即时生效）。验收方式：
+> PIL ImageGrab 三态截图（浅/深/完成）目检对比度，别只看代码。
 
 > **v2.7：普通用户全流程 UX 升级（2026-09）**。站在「第一次打开 exe 的办公人员」角度补四个断点：
 > ① **取值预览**：选定拆分字段后自动枚举该列取值（接入 `core.splitter.list_values`，此前只有
@@ -172,6 +184,7 @@ excel-router/
 | `pdf_watermark_opacity` / `pdf_watermark_angle` | 水印透明度 / 旋转角（无 GUI 入口，改配置文件生效） | `0.15` / `45` |
 | `window_geometry` | 上次关闭时的窗口大小位置；空 = 按屏幕高度自适应（v2.7） | `""` |
 | `ui_scale` | 界面缩放百分比（大字号=115），重启生效（v2.7） | `100` |
+| `appearance_mode` | 深浅色：system / light / dark，页脚循环按钮即时切换（v2.7.1） | `"system"` |
 
 ### core/splitter.py 的关键函数
 

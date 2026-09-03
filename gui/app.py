@@ -76,7 +76,7 @@ PDF_RECV_NONE = "（不需要）"
 # UI 泵用的「本轮没有此类消息」哨兵（不能用 None：扫描失败时 payload 可能为空）
 _MISSING = object()
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.7.1"
 # 匿名反馈问卷地址（问卷 URL 确定后替换此处即可，一行改动 + 打 tag 发版）
 FEEDBACK_URL = "https://f.wps.cn/g/pBOAWUQc/"
 # 在线 FAQ（「❓ 常见问题」按钮）：链接 Gitee 镜像而非 GitHub——国内办公网络访问
@@ -88,7 +88,32 @@ C_OK    = ("#15803d", "#4ade80")
 C_WARN  = ("#b45309", "#fbbf24")
 C_ERR   = ("#b91c1c", "#f87171")
 C_MUTED = ("gray40", "gray60")
-ACCENT  = ("#3B8ED0", "#1F6AA5")   # 与 ctk blue 主题一致，步骤徽章/主按钮同源
+
+# ── 品牌调色板（v2.7.1，浅色/深色双主题集中取值）──────────────
+# 主色「移动蓝」：使用者是移动系办公人群，品牌联想自然；比 ctk 默认 blue
+# (#3B8ED0) 更饱和明亮，主按钮/徽章/进度条统一从这套取色，形成记忆点。
+# 完成态用明确的浅绿横幅承载——「显眼」最重要的时刻是完成瞬间。
+PRIMARY        = ("#0E7FD1", "#38BDF8")   # 主按钮、步骤徽章、进度条、分段选择高亮
+PRIMARY_HOVER  = ("#0B6BB0", "#7DD3FC")
+OK_BANNER_BG   = ("#DCFCE7", "#14532D")   # 完成摘要横幅底色（文字仍用 C_OK）
+CARD_BORDER    = ("gray82", "gray28")     # 步骤卡片 1px 淡边框
+# ACCENT 保留为 PRIMARY 的别名：徽章等既有引用不逐处改动，取色来源已经换血
+ACCENT  = PRIMARY
+
+def _init_fonts():
+    """把 CTk 默认字体族设为微软雅黑 UI（Windows 中文渲染明显好于 tk 默认 Roboto 回退）。
+
+    CTkFont 未显式传 family 时取 ThemeManager.theme["CTkFont"]["family"]，这是
+    唯一真正的全局默认入口（实测改 FontManager._default_font 无效）。主题 dict 是
+    set_default_color_theme 时载入的运行时副本，改它对已建/将建组件一致生效；
+    无此字体的系统由 tk 字体回退机制自然落到雅黑/宋体，不额外探测。
+    """
+    try:
+        import tkinter.font as tkfont
+        if "Microsoft YaHei UI" in list(tkfont.families()):
+            ctk.ThemeManager.theme["CTkFont"]["family"] = "Microsoft YaHei UI"
+    except Exception:
+        pass
 
 def _ghost_button(parent, **kw):
     """描边次要按钮：比主按钮弱一级的操作（浏览 / 扫描字段 / 打开文件夹等）。"""
@@ -133,6 +158,8 @@ FALLBACK_CONFIG = {
     # ── 界面个性化（v2.7）──
     "window_geometry": "",     # 上次关闭时的窗口大小位置；空 = 按屏幕自适应
     "ui_scale": 100,           # 界面缩放百分比（大字号=115），重启后生效
+    # ── 界面个性化（v2.7.1）──
+    "appearance_mode": "system",   # system / light / dark，页脚按钮循环切换
 }
 
 ctk.set_appearance_mode("System")
@@ -161,6 +188,9 @@ def save_config(cfg):
 class App(_RootBase):
     def __init__(self):
         super().__init__()
+        # 字体统一必须在任何组件创建前、root 建立后执行：
+        # tkfont.families() 需要 root；而组件的 CTkFont 在构造时读主题值，晚了改无效。
+        _init_fonts()
         if _DND_OK:
             # 加载 tkdnd 二进制（守卫条件已保证 TkinterDnD 非 None）
             self.TkdndVersion = TkinterDnD._require(self)  # type: ignore[union-attr]
@@ -178,6 +208,10 @@ class App(_RootBase):
         scale = self.cfg.get("ui_scale", 100)
         if isinstance(scale, int) and scale != 100:
             ctk.set_widget_scaling(scale / 100)
+        # 深浅色（v2.7.1）：支持手动固定，不再只能跟随系统
+        mode = self.cfg.get("appearance_mode", "system")
+        if mode in ("light", "dark"):
+            ctk.set_appearance_mode(mode)
         self._mode = self.cfg.get("ui_mode", "excel")   # "excel" / "pdf"
         self._pdf_paths = [p for p in self.cfg.get("pdf_input_paths", []) if os.path.exists(p)]
         self._scanned_map_path = None   # 最近扫描过的映射清单路径（防过期结果）
@@ -298,6 +332,9 @@ class App(_RootBase):
         head.grid(row=0, column=0, padx=20, pady=(14, 4), sticky="ew")
         brand = ctk.CTkFrame(head, fg_color="transparent")
         brand.pack(anchor="w")
+        # 品牌色块（v2.7.1）：标题左侧的圆角主色标记，最轻量的品牌记忆点
+        ctk.CTkFrame(brand, width=6, height=30, corner_radius=3,
+                     fg_color=PRIMARY).pack(side="left", padx=(0, 10), pady=(2, 0))
         ctk.CTkLabel(brand, text="ExcelRouter",
                      font=ctk.CTkFont(size=24, weight="bold")).pack(side="left")
         ctk.CTkLabel(brand, text="Excel 智能拆分工具",
@@ -310,7 +347,10 @@ class App(_RootBase):
                      font=ctk.CTkFont(size=11), text_color="gray").pack(anchor="w", pady=(1, 0))
         # 功能模式切换：Excel 拆分（默认） / PDF 按网格加密分发
         self._mode_seg = ctk.CTkSegmentedButton(head, values=["Excel 拆分", "PDF 加密分发"],
-                                                command=self._on_mode_change)
+                                                command=self._on_mode_change,
+                                                selected_color=PRIMARY,
+                                                selected_hover_color=PRIMARY_HOVER,
+                                                height=30, font=ctk.CTkFont(size=12))
         self._mode_seg.set("PDF 加密分发" if self._mode == "pdf" else "Excel 拆分")
         self._mode_seg.pack(anchor="w", pady=(8, 0))
 
@@ -319,13 +359,14 @@ class App(_RootBase):
 
         返回 (card, 标题 Label)：标题引用给需要随模式改文案的卡片用（如③操作卡）。
         """
-        card = ctk.CTkFrame(parent)
+        card = ctk.CTkFrame(parent, corner_radius=12, border_width=1,
+                            border_color=CARD_BORDER)
         card.grid(row=row, column=0, padx=padx, pady=pady, sticky="ew")
         card.grid_columnconfigure(0, weight=1)
         bar = ctk.CTkFrame(card, fg_color="transparent")
         bar.grid(row=0, column=0, padx=12, pady=(10, 2), sticky="w")
         ctk.CTkLabel(bar, text=str(num), width=26, height=26, corner_radius=13,
-                     fg_color=ACCENT, text_color="white",
+                     fg_color=PRIMARY, text_color="white",
                      font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
         title_lbl = ctk.CTkLabel(bar, text=title,
                                  font=ctk.CTkFont(size=14, weight="bold"))
@@ -948,8 +989,11 @@ class App(_RootBase):
 
         btns = ctk.CTkFrame(card, fg_color="transparent")
         btns.grid(row=2, column=0, padx=12, pady=(8, 2), sticky="w")
-        self._start_btn = ctk.CTkButton(btns, text="▶ 开始拆分", width=200, height=38,
+        # 主按钮是全页唯一核心动作（v2.7.1）：加高配粗 + 品牌主色，保证第一眼锁定
+        self._start_btn = ctk.CTkButton(btns, text="▶ 开始拆分", width=220, height=44,
+                                        corner_radius=10,
                                         font=ctk.CTkFont(size=15, weight="bold"),
+                                        fg_color=PRIMARY, hover_color=PRIMARY_HOVER,
                                         command=self._start)
         self._start_btn.grid(row=0, column=0)
         self._stop_btn = ctk.CTkButton(btns, text="⏹ 停止", width=90,
@@ -962,16 +1006,23 @@ class App(_RootBase):
         self._open_btn.grid(row=0, column=2, padx=(10, 0))
         self._open_btn.grid_remove()          # 成功后出现
 
-        self._progress = ctk.CTkProgressBar(card)
+        self._progress = ctk.CTkProgressBar(card, corner_radius=6,
+                                           progress_color=PRIMARY)
         self._progress.grid(row=3, column=0, padx=12, pady=(8, 2), sticky="ew")
         self._progress.set(0)
         self._run_status = ctk.CTkLabel(card, text="完成 ① ② 后直接点「开始拆分」；保存位置不用改，结果会放进自动创建的「拆分结果」文件夹",
                                         font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w")
         self._run_status.grid(row=4, column=0, padx=12, pady=(0, 2), sticky="w")
-        # 完成摘要（v2.7，A4）：拆出几组 / 几个文件 / 几行、跳过与失败的点名、输出路径
-        self._summary_lbl = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=11),
-                                         text_color=C_MUTED, anchor="w", justify="left")
-        self._summary_lbl.grid(row=5, column=0, padx=12, pady=(0, 10), sticky="w")
+        # 完成摘要（v2.7，A4；v2.7.1 横幅化）：浅绿底圆角横幅承载「完成瞬间」的
+        # 明确成功反馈——摘要内容与逻辑不变，只加视觉承载。
+        self._summary_banner = ctk.CTkFrame(card, corner_radius=10,
+                                            fg_color=OK_BANNER_BG)
+        self._summary_banner.grid(row=5, column=0, padx=12, pady=(0, 10), sticky="ew")
+        self._summary_banner.grid_remove()
+        self._summary_lbl = ctk.CTkLabel(self._summary_banner, text="",
+                                         font=ctk.CTkFont(size=12, weight="bold"),
+                                         text_color=C_OK, anchor="w", justify="left")
+        self._summary_lbl.grid(row=0, column=0, padx=14, pady=8, sticky="w")
 
     def _build_bottom(self, parent):
         bar = ctk.CTkFrame(parent, fg_color="transparent")
@@ -990,6 +1041,9 @@ class App(_RootBase):
                      command=lambda: webbrowser.open(FAQ_URL)).pack(side="left")
         _flat_button(right, text="💬 反馈建议", width=90,
                      command=self._open_feedback).pack(side="left")
+        self._appearance_btn = _flat_button(right, text=self._appearance_btn_text(),
+                                            width=96, command=self._cycle_appearance)
+        self._appearance_btn.pack(side="left", padx=(6, 0))
         _flat_button(right, text="🔍 大字号" if self.cfg.get("ui_scale", 100) == 100 else "🔍 标准字号",
                      width=90, command=self._toggle_scale).pack(side="left", padx=(6, 0))
         _flat_button(right, text="保存配置", width=80,
@@ -1332,6 +1386,7 @@ class App(_RootBase):
             # 界面个性化键随每次保存透传，避免跑一次成功后丢失（与 pdf 水印参数同理）
             "ui_scale": self.cfg.get("ui_scale", 100),
             "window_geometry": self.cfg.get("window_geometry", ""),
+            "appearance_mode": self.cfg.get("appearance_mode", "system"),
             "header_mode": mode_map.get(self._header_seg.get(), "auto"),
             "header_row":  header_row,
             "grid_keys":   self._split_list(self._grid_keys_var.get()),
@@ -1444,6 +1499,7 @@ class App(_RootBase):
         self._warn_count = 0
         self._last_summary = None
         self._summary_lbl.configure(text="")
+        self._summary_banner.grid_remove()
         self._copylog_btn.grid_remove()
         self._log_btn.configure(text=self._log_btn_text())
         self._start_btn.configure(state="disabled", text=busy_text)
@@ -1628,6 +1684,23 @@ class App(_RootBase):
         except Exception:
             pass
 
+    def _appearance_btn_text(self):
+        return {"system": "🌓 跟随系统", "light": "☀️ 浅色", "dark": "🌙 深色"}.get(
+            self.cfg.get("appearance_mode", "system"), "🌓 跟随系统")
+
+    def _cycle_appearance(self):
+        """深浅色循环切换：系统 → 浅色 → 深色 → 系统；即时生效并持久化。"""
+        order = ["system", "light", "dark"]
+        cur = self.cfg.get("appearance_mode", "system")
+        new = order[(order.index(cur) + 1) % len(order)]
+        self.cfg["appearance_mode"] = new
+        ctk.set_appearance_mode(new if new != "system" else "System")
+        self._appearance_btn.configure(text=self._appearance_btn_text())
+        try:
+            save_config(self._collect_config())
+        except Exception as e:
+            messagebox.showerror("保存失败", f"无法保存外观设置：{e}")
+
     def _toggle_scale(self):
         """大字号切换：写入配置，下次启动生效（现有控件已按原缩放创建，不即时重排）。"""
         new = 100 if self.cfg.get("ui_scale", 100) != 100 else 115
@@ -1689,8 +1762,12 @@ class App(_RootBase):
         if self._warn_count:
             self._log_btn.configure(text=self._log_btn_text())
         lines.append(f"📁 {output_path}")
-        self._summary_lbl.configure(text="\n".join(lines),
-                                    text_color=C_WARN if has_warn else C_OK)
+        self._summary_lbl.configure(text="\n".join(lines))
+        # 有跳过/失败时横幅退回中性底色，避免「绿底＋橙字」的违和
+        self._summary_banner.configure(
+            fg_color=("gray90", "gray20") if has_warn else OK_BANNER_BG)
+        self._summary_lbl.configure(text_color=C_WARN if has_warn else C_OK)
+        self._summary_banner.grid()
 
     def _on_done(self, cfg, output_path):
         self._running = False
