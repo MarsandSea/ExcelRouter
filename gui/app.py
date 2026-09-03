@@ -1044,8 +1044,9 @@ class App(_RootBase):
         self._appearance_btn = _flat_button(right, text=self._appearance_btn_text(),
                                             width=96, command=self._cycle_appearance)
         self._appearance_btn.pack(side="left", padx=(6, 0))
-        _flat_button(right, text="🔍 大字号" if self.cfg.get("ui_scale", 100) == 100 else "🔍 标准字号",
-                     width=90, command=self._toggle_scale).pack(side="left", padx=(6, 0))
+        self._scale_btn = _flat_button(
+            right, text=self._scale_btn_text(), width=90, command=self._toggle_scale)
+        self._scale_btn.pack(side="left", padx=(6, 0))
         _flat_button(right, text="保存配置", width=80,
                      command=self._save_cfg).pack(side="left", padx=(6, 0))
 
@@ -1701,13 +1702,18 @@ class App(_RootBase):
         except Exception as e:
             messagebox.showerror("保存失败", f"无法保存外观设置：{e}")
 
+    def _scale_btn_text(self):
+        return "🔍 标准字号" if self.cfg.get("ui_scale", 100) != 100 else "🔍 大字号"
+
     def _toggle_scale(self):
-        """大字号切换：写入配置，下次启动生效（现有控件已按原缩放创建，不即时重排）。"""
+        """大字号即时切换（v2.7.1 改）：set_widget_scaling 对已建控件即时生效，
+        点了立刻看到变大/复原；115% 在当前布局余量内，无需重建界面。"""
         new = 100 if self.cfg.get("ui_scale", 100) != 100 else 115
         self.cfg["ui_scale"] = new
+        ctk.set_widget_scaling(new / 100)
+        self._scale_btn.configure(text=self._scale_btn_text())
         try:
             save_config(self._collect_config() | {"ui_scale": new})
-            messagebox.showinfo("字号设置", "字号设置已保存，下次启动程序时生效。")
         except Exception as e:
             messagebox.showerror("保存失败", f"无法保存设置：{e}")
 
