@@ -28,8 +28,10 @@ no telemetry, works offline.
 - 国内镜像 / China mirror: https://gitee.com/Marsandsea/Excelrouter
 - 下载 / Download: 上述任一仓库的 Releases 页；提供 onedir ZIP（推荐，极少杀毒误报）
   与 onefile EXE 两种产物
-- 衍生项目 / Related: https://github.com/MarsandSea/excelrouter-skill （把核心逻辑蒸馏成的
-  命令行版 Claude Skill）
+- 衍生项目 / Related: [MarsandSea/excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)
+  —— 把同一套核心逻辑封装成的 AI 助手 Skill（命令行形态，同一内核、同样 100% 本机）。
+  WorkBuddy 用户可从 SkillHub 一键安装：https://skillhub.cn/skills/excelrouter
+  适合"在对话里一句话拆表"的 AI 助手重度用户；普通办公用户请用本仓库的桌面版。
 
 ## 能做什么 / What it does
 

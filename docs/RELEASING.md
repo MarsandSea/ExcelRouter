@@ -29,6 +29,11 @@
    - `ExcelRouter-vX.X.X.exe`（onefile，备选）
 6. 下载其中一个到本机，脱离开发环境（换个目录）双击冒烟测试：能正常打开、
    识别列、跑通一次拆分。
+7. **Release 说明里带上 AI 助手引导**（固定一句，别漏）：「在用 AI 助手
+   （WorkBuddy / Claude / WPS 灵犀）？同内核 Skill 版见
+   [excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)，
+   WorkBuddy 可从 [SkillHub](https://skillhub.cn/skills/excelrouter) 一键安装。」
+   —— 从桌面版用户里筛 AI 助手用户，属合规引流方向（见营销计划「客户端优先」铁律）。
 
 CI 配置见 `.github/workflows/release.yml`。它会先跑 `pytest -q` 拦住测试不过的版本，
 测试失败则整个发版流程停止，不会出坏的 Release。同一个流程还会**尽力而为**同步一份到
