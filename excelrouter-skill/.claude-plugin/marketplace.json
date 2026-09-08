@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "excelrouter-skill",
+  "description": "ExcelRouter 的 Claude Skill 版：命令行拆分 Excel、PDF 按网格加密分发，核心代码随桌面版发版自动同步。",
+  "owner": {
+    "name": "AbeLin"
+  },
+  "plugins": [
+    {
+      "name": "excelrouter",
+      "description": "把 Excel 表格按字段拆分成多个文件（部门/区域/工号等任意字段），保留原格式，支持跨文件合并与到人二级拆分；另支持 PDF 按网格加密+专属水印批量分发。数据全程本机处理，不上传。",
+      "source": "./",
+      "author": {
+        "name": "AbeLin"
+      },
+      "category": "productivity",
+      "homepage": "https://github.com/MarsandSea/excelrouter-skill"
+    }
+  ]
+}

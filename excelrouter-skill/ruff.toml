@@ -1,0 +1,12 @@
+# Ruff 静态检查配置（只做 lint，不用 ruff format）
+line-length = 120
+target-version = "py39"
+
+[lint]
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+
+[lint.per-file-ignores]
+# vendor/ 是上游 excel-router 的 core/ 逐字副本，由同步 Action 自动覆盖，
+# 不在本仓做代码风格治理——豁免与上游 excel-router/ruff.toml 保持一致。
+"skills/excelrouter/scripts/vendor/core/splitter.py" = ["E701", "B007", "B023"]
+"tests/*" = ["E702", "F401"]

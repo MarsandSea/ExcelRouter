@@ -1,0 +1,217 @@
+name: Publish skill to SkillHub & ClawHub
+
+# skill 与桌面版 core 同仓之后，「从上游拉代码」这一层就不需要了：
+# 发版（打 v* tag）的这一刻，本仓 core/ 就是那个 tag 的内容，直接复制过去即可，
+# 天然满足「跟 tag 不跟 main」。相比老仓库（MarsandSea/excelrouter-skill）那个
+# 每天 cron 去远程比对 tag 的写法，这里少了跨仓网络依赖、tag 比对和「上游已发版
+# 但 skill 还停在旧 tag」的时间差。
+#
+# 触发：打 v* tag（与 release.yml 同一时机）或手动 workflow_dispatch。
+#
+# secrets（配在本仓库，不在已归档的 excelrouter-skill 仓库）：
+#   SKILLHUB_TOKEN —— skillhub.cn 个人中心 → API keys 创建（skh_ 开头）
+#   CLAWHUB_TOKEN  —— clawhub.ai 登录后创建 API token（clh_ 开头）
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  SKILL_DIR: excelrouter-skill/skills/excelrouter
+  VENDOR_DIR: excelrouter-skill/skills/excelrouter/scripts/vendor/core
+  TAG_FILE: excelrouter-skill/skills/excelrouter/scripts/vendor/.upstream-tag
+  UPSTREAM_MD: excelrouter-skill/skills/excelrouter/scripts/vendor/UPSTREAM.md
+  PLUGIN_JSON: excelrouter-skill/.claude-plugin/plugin.json
+  MANIFEST_FILE: excelrouter-skill/skills/excelrouter/manifest.yaml
+  REQ_FILE: excelrouter-skill/skills/excelrouter/requirements.txt
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${GITHUB_REF_NAME:-}" ] && [ "${GITHUB_REF_TYPE:-}" = "branch" ]; then
+            # 手动触发时取本仓最新的 v* tag
+            TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::取不到版本号（没有 v* tag，且不是 tag 触发）"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync core/ into skill vendor (same repo, no upstream fetch)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "$VENDOR_DIR"/*.py
+          cp core/*.py "$VENDOR_DIR"/
+          echo "已同步 core → $VENDOR_DIR"
+          ls -la "$VENDOR_DIR"
+
+      - name: Sync requirements (strip GUI-only deps)
+        # 白名单式排除：桌面版是 GUI 程序，skill 是命令行形态，
+        # 这些 GUI 依赖混进来会让无界面环境（CI / SkillHub 沙箱）装依赖失败或明显变慢。
+        # 注意别写成只排除 customtkinter —— 上游第 2 行就是 tkinterdnd2。
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "# excelrouter skill 运行依赖（由 publish-skill.yml 从本仓 requirements.txt 同步）"
+            echo "# 已去掉桌面 GUI 专用依赖：customtkinter / tkinterdnd2 —— skill 是命令行形态"
+            grep -viE '^(customtkinter|tkinterdnd2)' requirements.txt
+          } > "$REQ_FILE"
+          cat "$REQ_FILE"
+          # 兜底断言：真漏了就在这里炸掉，别把坏包发上去
+          if grep -qiE 'customtkinter|tkinterdnd2' "$REQ_FILE"; then
+            echo "::error::GUI 依赖混进了 skill 的 requirements.txt"
+            exit 1
+          fi
+
+      - name: Update tag file / version fields
+        shell: bash
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          echo "$TAG" > "$TAG_FILE"
+
+          python3 - "$UPSTREAM_MD" "$TAG" "$SHA" "$NOW" <<'PYEOF'
+          import re, sys
+          path, tag, sha, now = sys.argv[1:5]
+          with open(path, encoding="utf-8") as f:
+              content = f.read()
+          block = (
+              "<!-- SYNC:BEGIN 以下内容由 publish-skill.yml 每次发布自动重写，手改无效 -->\n"
+              "## 当前同步状态\n\n"
+              f"- 对应本仓库 tag：`{tag}`\n"
+              f"- 对应 commit：`{sha}`\n"
+              f"- 同步时间：{now}\n"
+              "- 来源：与本仓库 `core/` 同一套代码（skill 与桌面版同仓，无需跨仓拉取）\n"
+              "<!-- SYNC:END -->"
+          )
+          new_content = re.sub(
+              r"<!-- SYNC:BEGIN .*? -->.*?<!-- SYNC:END -->",
+              block, content, count=1, flags=re.S,
+          )
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(new_content)
+          PYEOF
+
+          # 版本号：manifest（SkillHub 展示）/ plugin.json（Claude Code）一起跟上，
+          # 否则 SkillHub 上的版本号会一直停在旧值。
+          python3 - "$MANIFEST_FILE" "$PLUGIN_JSON" "$VERSION" <<'PYEOF'
+          import json, re, sys
+          manifest_path, plugin_path, version = sys.argv[1:4]
+
+          with open(manifest_path, encoding="utf-8") as f:
+              content = f.read()
+          new_content, n = re.subn(
+              r'(?m)^version\s*:.*$', f'version: "{version}"', content, count=1
+          )
+          if n != 1:
+              raise SystemExit(f"在 {manifest_path} 里没找到 version: 行，请检查文件格式")
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              f.write(new_content)
+
+          with open(plugin_path, encoding="utf-8") as f:
+              data = json.load(f)
+          data["version"] = version
+          with open(plugin_path, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          print(f"版本号已同步为 {version}")
+          PYEOF
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps and run skill tests
+        # 只跑 skill 自己的测试：仓库根目录有桌面版的 conftest.py，
+        # 无脑 `pytest -q` 会把桌面版测试也收集进来（那些依赖 GUI 库，跑不动）。
+        run: |
+          pip install -r "$REQ_FILE"
+          pip install pytest
+          pytest -q excelrouter-skill/tests
+
+      - name: Commit synced skill
+        id: commit
+        shell: bash
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "内容无变化，跳过提交与发布"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$VENDOR_DIR" "$TAG_FILE" "$UPSTREAM_MD" "$PLUGIN_JSON" "$MANIFEST_FILE" "$REQ_FILE"
+          git commit -m "chore(skill): 同步本仓 core 并发布 $TAG"
+          git push origin HEAD:${GITHUB_REF_NAME}
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to SkillHub
+        # 尽力而为：发布失败只留黄色警告，不影响本仓发版（与 Gitee 镜像同一策略）。
+        # 先 dry-run 校验格式，通过才真正发布：格式不合格就停在这一步，
+        # 不会把不合格的包送进审核队列。
+        if: steps.commit.outputs.changed == 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          SKILLHUB_TOKEN: ${{ secrets.SKILLHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://skillhub.cn/install/install.sh | bash -s -- --cli-only
+          export PATH="$HOME/.local/bin:$PATH"
+          skillhub login --key "$SKILLHUB_TOKEN" --host https://api.skillhub.cn
+          skillhub publish "$SKILL_DIR" --host https://api.skillhub.cn --dry-run
+          skillhub publish "$SKILL_DIR" --host https://api.skillhub.cn --changelog "同步本仓 core v$VERSION"
+
+      - name: Publish to ClawHub
+        # 与 SkillHub 同一策略：尽力而为，失败只留黄色警告。
+        # 不传 --version：ClawHub 首发从 1.0.0 起，之后内容有变化自动递增 patch，
+        # 与 manifest.yaml 的版本线互不干扰。
+        if: steps.commit.outputs.changed == 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm i -g clawhub
+          clawhub login --token "$CLAWHUB_TOKEN"
+          clawhub skill publish "$SKILL_DIR" \
+            --slug excelrouter \
+            --name "ExcelRouter" \
+            --changelog "Sync core (ExcelRouter)" \
+            --categories productivity \
+            --topics "excel,pdf,split,encryption,batch"
