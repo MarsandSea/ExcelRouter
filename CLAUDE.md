@@ -420,11 +420,16 @@ PyInstaller 致命坑仍然成立、缺一不可：
 
 ## 下游消费者：excelrouter-skill（2026-08-05 新增）
 
-存在一个独立仓库 [excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)，
-把本仓 `core/` 蒸馏成一个 Claude Skill（命令行三个脚本 `er_inspect.py` / `er_split.py` /
-`er_pdf_dist.py`，不依赖 GUI）。它通过 `.github/workflows/sync-upstream.yml`
-**每天自动检查本仓最新的 `v*` 发布 tag**，有新版本就拉取 `core/*.py` + `requirements.txt`
-过去、跑测试、测试通过才提交。这意味着：
+本仓 `excelrouter-skill/` 目录就是那个 Claude Skill（命令行脚本 `er_inspect.py` /
+`er_split.py` / `er_pdf_dist.py` / `er_list.py`，不依赖 GUI），把本仓 `core/` 蒸馏成可被 AI
+助手调用的技能。**它已并入本仓，不再是独立仓库**（原独立仓库 MarsandSea/excelrouter-skill
+已于 2026-09-08 归档）。
+
+发布链路：`.github/workflows/publish-skill.yml` 在**发版打 `v*` tag 时**触发，把本仓 `core/`
+同步进 `excelrouter-skill/skills/excelrouter/scripts/vendor/core/`、过滤掉 GUI 专用依赖、
+同步 manifest/plugin 版本号、跑 skill 测试，然后发布到 SkillHub 与 ClawHub。
+因为 core 与 skill 同仓，不再需要跨仓比对 tag —— 打 tag 那一刻复制过去的 core 就是该 tag 的内容。
+这意味着：
 
 - **`run_split()` / `run_pdf_dist()` / `list_columns()` / `list_values()` /
   `list_mapping_columns()` / `read_mapping()` 的函数签名和 config 字段已经是对外契约**——

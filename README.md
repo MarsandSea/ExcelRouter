@@ -141,7 +141,7 @@ formatting, merge across files, optional per-person output — free, open-source
 | `ExcelRouter-vX.X.X.exe` | 单文件版，下载即用无需解压 | 图方便，但个别杀毒软件可能误报（[why?](docs/FAQ.md#杀毒软件误报)） |
 
 > 🤖 **在用 AI 助手（WorkBuddy / Claude / WPS 灵犀等）？** 也可以不装 exe：给助手装上
-> **[ExcelRouter Skill](https://github.com/MarsandSea/excelrouter-skill)**——同一套核心代码的
+> **[ExcelRouter Skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)**——同一套核心代码的
 > 命令行版，装好后对话里说一句「把这个表按部门拆到人」「给 PDF 按网格加密分发」就能直接干，
 > 同样全程本机不上传。WorkBuddy 用户可在技能市场搜 `excelrouter` 一键安装
 > （[SkillHub 页面](https://skillhub.cn/skills/excelrouter)）。普通办公用户建议继续用上面的图形界面版。
@@ -223,7 +223,7 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
 - **在用 AI 助手（WorkBuddy / Claude 等），可以不装 exe 吗？** —— 可以。有同一套内核的
   **ExcelRouter Skill** 版：装进你的 AI 助手后，对话里说一句「按部门拆分」「按 PDF 网格加密分发」
   就能完成，同样全程本机处理。见
-  [excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)，WorkBuddy 用户可从
+  [excelrouter-skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)，WorkBuddy 用户可从
   [SkillHub](https://skillhub.cn/skills/excelrouter) 一键安装。
 
 更多问题见 **[完整 FAQ](docs/FAQ.md)**。

@@ -31,7 +31,7 @@
    识别列、跑通一次拆分。
 7. **Release 说明里带上 AI 助手引导**（固定一句，别漏）：「在用 AI 助手
    （WorkBuddy / Claude / WPS 灵犀）？同内核 Skill 版见
-   [excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)，
+   [excelrouter-skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)，
    WorkBuddy 可从 [SkillHub](https://skillhub.cn/skills/excelrouter) 一键安装。」
    —— 从桌面版用户里筛 AI 助手用户，属合规引流方向（见营销计划「客户端优先」铁律）。
 
