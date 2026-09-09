@@ -4,7 +4,10 @@
 # 注意：version 跟随上游桌面版（本 skill 的 vendor/core 与桌面版同一套代码）。
 
 name: excelrouter
-display_name: ExcelRouter 表格拆分与 PDF 加密分发
+# 名字里必须**连续**出现用户会搜的词。原名「ExcelRouter 表格拆分」对搜索词
+# 「Excel 表格拆分」是断开的（Excel 后面接的是 Router），分类搜索里会输给
+# 名字恰好连续命中的竞品。改后同时命中「表格拆分」和「Excel 表格拆分」。
+display_name: ExcelRouter — Excel 表格拆分与 PDF 加密分发助手
 version: "2.7.1"
 slug: excelrouter
 description: >
@@ -33,7 +36,9 @@ triggers:
 tags:
   - excel
   - xlsx
+  - 表格拆分
   - 拆分
+  - 分表
   - pdf
   - 加密
   - 水印
@@ -41,5 +46,5 @@ tags:
   - 数据处理
 author: AbeLin
 license: MIT
-homepage: https://github.com/MarsandSea/excelrouter-skill
+homepage: https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill
 requirements: requirements.txt
