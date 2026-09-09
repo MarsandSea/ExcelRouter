@@ -8,6 +8,11 @@ name: Publish skill to SkillHub & ClawHub
 #
 # 触发：打 v* tag（与 release.yml 同一时机）或手动 workflow_dispatch。
 #
+# ⚠️ 手动触发时**默认不同步 core**（sync_core=false），只把 skill 现有内容发出去。
+# 原因：main 分支上的 core/ 是未发版的开发中代码（比最新 tag 超前很多），
+# 手动发布若顺手同步 core，就会把未发版代码标着旧版本号发出去 —— 内容与版本不符。
+# 只有打 tag 时（此刻 core/ == 该 tag 内容）才同步，这才是「跟 tag 不跟 main」。
+#
 # secrets（配在本仓库，不在已归档的 excelrouter-skill 仓库）：
 #   SKILLHUB_TOKEN —— skillhub.cn 个人中心 → API keys 创建（skh_ 开头）
 #   CLAWHUB_TOKEN  —— clawhub.ai 登录后创建 API token（clh_ 开头）
@@ -16,7 +21,12 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      sync_core:
+        description: "同步本仓 core/ 到 skill？手动发布时保持不选，避免把未发版的 core 发出去"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -59,7 +69,23 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      - name: 决定是否同步 core
+        # 只有「打 tag」或「手动勾选 sync_core」才同步；否则跳过，避免把
+        # main 上未发版的 core 发出去（详见文件头说明）。
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] || [ "${{ inputs.sync_core }}" = "true" ]; then
+            echo "sync=true" >> "$GITHUB_OUTPUT"
+            echo "本次会同步 core/"
+          else
+            echo "sync=false" >> "$GITHUB_OUTPUT"
+            echo "本次不同步 core/，直接发布 skill 现有内容"
+          fi
+
       - name: Sync core/ into skill vendor (same repo, no upstream fetch)
+        if: steps.mode.outputs.sync == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -69,6 +95,7 @@ jobs:
           ls -la "$VENDOR_DIR"
 
       - name: Sync requirements (strip GUI-only deps)
+        if: steps.mode.outputs.sync == 'true'
         # 白名单式排除：桌面版是 GUI 程序，skill 是命令行形态，
         # 这些 GUI 依赖混进来会让无界面环境（CI / SkillHub 沙箱）装依赖失败或明显变慢。
         # 注意别写成只排除 customtkinter —— 上游第 2 行就是 tkinterdnd2。
@@ -88,6 +115,7 @@ jobs:
           fi
 
       - name: Update tag file / version fields
+        if: steps.mode.outputs.sync == 'true'
         shell: bash
         env:
           TAG: ${{ steps.ver.outputs.tag }}
@@ -182,7 +210,7 @@ jobs:
         # 尽力而为：发布失败只留黄色警告，不影响本仓发版（与 Gitee 镜像同一策略）。
         # 先 dry-run 校验格式，通过才真正发布：格式不合格就停在这一步，
         # 不会把不合格的包送进审核队列。
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.commit.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         shell: bash
         env:
@@ -200,7 +228,7 @@ jobs:
         # 与 SkillHub 同一策略：尽力而为，失败只留黄色警告。
         # 不传 --version：ClawHub 首发从 1.0.0 起，之后内容有变化自动递增 patch，
         # 与 manifest.yaml 的版本线互不干扰。
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.commit.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         shell: bash
         env:
