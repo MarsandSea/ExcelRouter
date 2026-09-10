@@ -6,10 +6,10 @@ name: excelrouter
 slug: excelrouter
 # version 同样是 skillhub CLI 的必填项（缺了报「SKILL.md 缺少 version」）。
 # 由 publish-skill.yml 在发版时与 manifest.yaml / plugin.json 一起同步，不要手改。
-version: "2.7.2"
+version: "2.7.3"
 # 以下元信息 skillhub CLI 同样会逐个校验（缺哪个报「SKILL.md 缺少 X」），
 # 与 manifest.yaml 保持一致；displayName 由 publish-skill.yml 从 manifest 同步。
-displayName: ExcelRouter — Excel 表格拆分与 PDF 加密分发助手
+displayName: ExcelRouter — Excel拆分、表格拆分、PDF加密分发助手
 author: AbeLin
 license: MIT
 homepage: https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill

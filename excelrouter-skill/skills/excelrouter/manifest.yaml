@@ -4,11 +4,13 @@
 # 注意：version 跟随上游桌面版（本 skill 的 vendor/core 与桌面版同一套代码）。
 
 name: excelrouter
-# 名字里必须**连续**出现用户会搜的词。原名「ExcelRouter 表格拆分」对搜索词
-# 「Excel 表格拆分」是断开的（Excel 后面接的是 Router），分类搜索里会输给
-# 名字恰好连续命中的竞品。改后同时命中「表格拆分」和「Excel 表格拆分」。
-display_name: ExcelRouter — Excel 表格拆分与 PDF 加密分发助手
-version: "2.7.2"
+# 名字里必须**连续**出现用户会搜的词（实测 2026-09-10：SkillHub 搜索只看
+# display_name 的字面连续匹配，description/summary/tags 里的词完全不参与排序）。
+# 中文搜索词通常无空格（如「excel拆分」），所以英文和中文之间不要加空格：
+#   「Excel 拆分」匹配不到「excel拆分」，必须是「Excel拆分」这种连续串。
+# 现名同时连续命中三个真实搜索词：excel拆分 / 表格拆分 / PDF加密分发。
+display_name: ExcelRouter — Excel拆分、表格拆分、PDF加密分发助手
+version: "2.7.3"
 slug: excelrouter
 description: >
   把总表交给 AI，说清楚「按什么拆」，就拆好还给你。常用场景：

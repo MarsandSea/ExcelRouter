@@ -290,7 +290,7 @@ jobs:
           clawhub login --token "$CLAWHUB_TOKEN"
           clawhub skill publish "$SKILL_DIR" \
             --slug excelrouter \
-            --name "ExcelRouter — Excel 表格拆分与 PDF 加密分发助手" \
+            --name "ExcelRouter — Excel拆分、表格拆分、PDF加密分发助手" \
             --changelog "Sync core (ExcelRouter)" \
             --categories productivity \
             --topics "excel,pdf,split,encryption,batch"
