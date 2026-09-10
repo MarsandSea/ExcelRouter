@@ -174,18 +174,32 @@ jobs:
               json.dump(data, f, ensure_ascii=False, indent=2)
               f.write("\n")
 
-          # SKILL.md 的 version 在 frontmatter 里（skillhub CLI 的必填项），
-          # 只动 frontmatter，别碰正文里可能出现的 "version" 字样。
+          # SKILL.md 的 version / displayName 在 frontmatter 里（skillhub CLI 的必填项，
+          # 缺哪个报哪个）。只动 frontmatter，别碰正文里可能出现的同名字样。
+          # displayName 的真源是 manifest.yaml，这里顺手同步过去，避免两处不一致。
           with open(skill_md_path, encoding="utf-8") as f:
               content = f.read()
           m = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", content, re.S)
           if not m:
               raise SystemExit(f"{skill_md_path} 开头的 frontmatter 格式异常，找不到 --- 包裹")
           fm = m.group(1)
-          if re.search(r"(?m)^version\s*:", fm):
-              fm = re.sub(r"(?m)^version\s*:.*$", f'version: "{version}"', fm, count=1)
-          else:
-              fm = fm.rstrip() + f'\nversion: "{version}"'
+
+          with open(manifest_path, encoding="utf-8") as f:
+              mtxt = f.read()
+          dm = re.search(r"(?m)^display_name\s*:\s*(.+)$", mtxt)
+          display_name = dm.group(1).strip().strip('"').strip("'") if dm else None
+
+          def set_fm(fm_text, key, value):
+              if value is None:
+                  return fm_text
+              pat = r"(?m)^" + key + r"\s*:.*$"
+              if re.search(pat, fm_text):
+                  return re.sub(pat, f"{key}: {value}", fm_text, count=1)
+              return fm_text.rstrip() + f"\n{key}: {value}"
+
+          fm = set_fm(fm, "version", f'"{version}"')
+          fm = set_fm(fm, "displayName", display_name)
+
           content = content[:m.start(1)] + fm + content[m.end(1):]
           with open(skill_md_path, "w", encoding="utf-8") as f:
               f.write(content)
