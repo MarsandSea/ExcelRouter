@@ -34,7 +34,7 @@ permissions:
 env:
   SKILL_DIR: excelrouter-skill/skills/excelrouter
   VENDOR_DIR: excelrouter-skill/skills/excelrouter/scripts/vendor/core
-  TAG_FILE: excelrouter-skill/skills/excelrouter/scripts/vendor/.upstream-tag
+  TAG_FILE: excelrouter-skill/.upstream-tag
   UPSTREAM_MD: excelrouter-skill/skills/excelrouter/scripts/vendor/UPSTREAM.md
   PLUGIN_JSON: excelrouter-skill/.claude-plugin/plugin.json
   MANIFEST_FILE: excelrouter-skill/skills/excelrouter/manifest.yaml
@@ -251,6 +251,16 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
+          # 发布前自检：SkillHub 会逐个检查文件类型，skill 目录里只要有一个
+          # . 开头的文件（.upstream-tag / .clawhubignore 之类）就整包拒收，
+          # 报「请求失败 (400): 不允许的文件类型: xxx」。与其等它失败，先在这里拦下。
+          bad="$(find "$SKILL_DIR" -name '.*' -type f -print)"
+          if [ -n "$bad" ]; then
+            echo "::error::skill 目录内有点开头文件，SkillHub 会整包拒收："
+            echo "$bad"
+            echo "处理方式：移到 skill 目录外（如 excelrouter-skill/ 根目录），或删掉。"
+            exit 1
+          fi
           if [ -z "$SKILLHUB_TOKEN" ]; then
             echo "::notice::未配置 SKILLHUB_TOKEN，跳过该渠道发布"
             exit 0
