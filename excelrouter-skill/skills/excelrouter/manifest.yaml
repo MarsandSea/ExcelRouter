@@ -8,7 +8,7 @@ name: excelrouter
 # 「Excel 表格拆分」是断开的（Excel 后面接的是 Router），分类搜索里会输给
 # 名字恰好连续命中的竞品。改后同时命中「表格拆分」和「Excel 表格拆分」。
 display_name: ExcelRouter — Excel 表格拆分与 PDF 加密分发助手
-version: "2.7.1"
+version: "2.7.2"
 slug: excelrouter
 description: >
   把总表交给 AI，说清楚「按什么拆」，就拆好还给你。常用场景：
