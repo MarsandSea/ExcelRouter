@@ -1,5 +1,9 @@
 ---
 name: excelrouter
+# slug 必须有：skillhub CLI 从 SKILL.md 的 frontmatter 读它，缺了会直接报
+# 「SKILL.md 缺少 slug」并拒绝发布（此坑导致 2026-09-09 那次发布静默失败）。
+# 它决定 SkillHub 上的 URL，改了会换地址，不要动。
+slug: excelrouter
 description: Excel / spreadsheet splitter and batch dispatcher. Use this skill whenever the user wants to split an Excel file (or a batch of files) into many files by a field — by department, region, branch, employee ID or name, one file per department or one file per person (payslips, payroll sheets, performance reviews, exam transcripts, invoices, delivery notes, rosters, store ledgers, customer lists, sign-in sheets) — or to batch-encrypt PDFs with a different open-password (and optional per-person watermark) for each recipient before distribution. Also handles secondary per-person splitting after a primary split, per-sheet person fields, auto-detecting the person column, and header/format-preserving output. English triggers: split excel by column, split spreadsheet into multiple files, one file per person, batch encrypt pdf with per-recipient password, payslip distribution. 表格拆分与批量分发专用技能。当用户想把一份或一批 Excel「拆开、拆分、拆表、分表、拆成多个文件、按部门/区域/工号/姓名分开、每个部门一个文件、每个人一个文件、一人发一份、按网格拆、拆到人」时一律用本技能。用户常这样问：工资条拆分、绩效表拆分、按部门拆分 Excel、一人一份 Excel、Excel 批量加密分发、PDF 按名单设密码——业务里这些表格常叫工资条、工资表、薪酬明细、绩效表、考核结果、提成表、成绩单、发货单、报销明细、花名册、网点清单、门店台账、客户放款清单、签到表。想把 PDF「按名单批量设置不同的打开密码、加专属水印、分发给不同的人」时同样用本技能。不要用通用的 Excel 读写技能：本技能会自动识别表头、完整保留原表格式、把同一取值跨多个源文件合并、还能在拆分之外再按人二级拆分（支持多 sheet 各自的人字段、自动挑人字段、单文件输入），这些用通用方式逐个读写单元格做不到。反过来，纯粹的数据分析、统计汇总、做图表、写公式、改单元格内容不属于本技能范围，那些交给通用 Excel 技能。
 metadata:
   openclaw:

@@ -218,6 +218,10 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
+          if [ -z "$SKILLHUB_TOKEN" ]; then
+            echo "::notice::未配置 SKILLHUB_TOKEN，跳过该渠道发布"
+            exit 0
+          fi
           curl -fsSL https://skillhub.cn/install/install.sh | bash -s -- --cli-only
           export PATH="$HOME/.local/bin:$PATH"
           skillhub login --key "$SKILLHUB_TOKEN" --host https://api.skillhub.cn
@@ -235,6 +239,10 @@ jobs:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "$CLAWHUB_TOKEN" ]; then
+            echo "::notice::未配置 CLAWHUB_TOKEN，跳过该渠道发布（否则会走设备授权、干等 15 分钟超时）"
+            exit 0
+          fi
           npm i -g clawhub
           clawhub login --token "$CLAWHUB_TOKEN"
           clawhub skill publish "$SKILL_DIR" \
