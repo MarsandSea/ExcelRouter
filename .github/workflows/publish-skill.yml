@@ -38,6 +38,7 @@ env:
   UPSTREAM_MD: excelrouter-skill/skills/excelrouter/scripts/vendor/UPSTREAM.md
   PLUGIN_JSON: excelrouter-skill/.claude-plugin/plugin.json
   MANIFEST_FILE: excelrouter-skill/skills/excelrouter/manifest.yaml
+  SKILL_MD: excelrouter-skill/skills/excelrouter/SKILL.md
   REQ_FILE: excelrouter-skill/skills/excelrouter/requirements.txt
 
 jobs:
@@ -149,11 +150,12 @@ jobs:
               f.write(new_content)
           PYEOF
 
-          # 版本号：manifest（SkillHub 展示）/ plugin.json（Claude Code）一起跟上，
+          # 版本号：manifest（SkillHub 展示）/ plugin.json（Claude Code）/
+          # SKILL.md frontmatter（skillhub CLI 必填，缺了拒绝发布）三处一起跟上，
           # 否则 SkillHub 上的版本号会一直停在旧值。
-          python3 - "$MANIFEST_FILE" "$PLUGIN_JSON" "$VERSION" <<'PYEOF'
+          python3 - "$MANIFEST_FILE" "$PLUGIN_JSON" "$SKILL_MD" "$VERSION" <<'PYEOF'
           import json, re, sys
-          manifest_path, plugin_path, version = sys.argv[1:4]
+          manifest_path, plugin_path, skill_md_path, version = sys.argv[1:5]
 
           with open(manifest_path, encoding="utf-8") as f:
               content = f.read()
@@ -171,7 +173,24 @@ jobs:
           with open(plugin_path, "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
               f.write("\n")
-          print(f"版本号已同步为 {version}")
+
+          # SKILL.md 的 version 在 frontmatter 里（skillhub CLI 的必填项），
+          # 只动 frontmatter，别碰正文里可能出现的 "version" 字样。
+          with open(skill_md_path, encoding="utf-8") as f:
+              content = f.read()
+          m = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", content, re.S)
+          if not m:
+              raise SystemExit(f"{skill_md_path} 开头的 frontmatter 格式异常，找不到 --- 包裹")
+          fm = m.group(1)
+          if re.search(r"(?m)^version\s*:", fm):
+              fm = re.sub(r"(?m)^version\s*:.*$", f'version: "{version}"', fm, count=1)
+          else:
+              fm = fm.rstrip() + f'\nversion: "{version}"'
+          content = content[:m.start(1)] + fm + content[m.end(1):]
+          with open(skill_md_path, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          print(f"版本号已同步为 {version}（manifest / plugin.json / SKILL.md）")
           PYEOF
 
       - name: Set up Python
@@ -201,7 +220,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$VENDOR_DIR" "$TAG_FILE" "$UPSTREAM_MD" "$PLUGIN_JSON" "$MANIFEST_FILE" "$REQ_FILE"
+          git add "$VENDOR_DIR" "$TAG_FILE" "$UPSTREAM_MD" "$PLUGIN_JSON" "$MANIFEST_FILE" "$SKILL_MD" "$REQ_FILE"
           git commit -m "chore(skill): 同步本仓 core 并发布 $TAG"
           git push origin HEAD:${GITHUB_REF_NAME}
           echo "changed=true" >> "$GITHUB_OUTPUT"
