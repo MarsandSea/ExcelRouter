@@ -40,6 +40,8 @@ env:
   MANIFEST_FILE: excelrouter-skill/skills/excelrouter/manifest.yaml
   SKILL_MD: excelrouter-skill/skills/excelrouter/SKILL.md
   REQ_FILE: excelrouter-skill/skills/excelrouter/requirements.txt
+  REQ_PDF_FILE: excelrouter-skill/skills/excelrouter/requirements-pdf.txt
+  TESTS_DIR: excelrouter-skill/skills/excelrouter/tests
 
 jobs:
   publish:
@@ -95,23 +97,45 @@ jobs:
           echo "已同步 core → $VENDOR_DIR"
           ls -la "$VENDOR_DIR"
 
-      - name: Sync requirements (strip GUI-only deps)
+      - name: Sync requirements (strip GUI-only deps, split PDF extras)
         if: steps.mode.outputs.sync == 'true'
         # 白名单式排除：桌面版是 GUI 程序，skill 是命令行形态，
         # 这些 GUI 依赖混进来会让无界面环境（CI / SkillHub 沙箱）装依赖失败或明显变慢。
         # 注意别写成只排除 customtkinter —— 上游第 2 行就是 tkinterdnd2。
+        #
+        # 同时把 PDF 三件套拆到 requirements-pdf.txt：主文件只留 Excel 拆分必需的 3 个，
+        # 用户不用 PDF 功能就不必装（SkillHub 自动化评测会把"依赖过多"记为扣分项）。
         shell: bash
         run: |
           set -euo pipefail
+          PDF_DEPS='pypdf|fpdf2|cryptography'
           {
-            echo "# excelrouter skill 运行依赖（由 publish-skill.yml 从本仓 requirements.txt 同步）"
-            echo "# 已去掉桌面 GUI 专用依赖：customtkinter / tkinterdnd2 —— skill 是命令行形态"
-            grep -viE '^(customtkinter|tkinterdnd2)' requirements.txt
+            echo "# excelrouter skill 运行依赖 —— 只做 Excel 拆分时，只需要下面这 3 个"
+            echo "# PDF 加密分发才需要的 pypdf / fpdf2 / cryptography 已拆到 requirements-pdf.txt，"
+            echo "# 用不到 PDF 功能就不必装（脚本会在真正用到时报人话提示）。"
+            echo "# 已去掉桌面版 GUI 专用依赖 customtkinter / tkinterdnd2 —— skill 是命令行形态。"
+            grep -viE "^(customtkinter|tkinterdnd2|${PDF_DEPS})" requirements.txt
           } > "$REQ_FILE"
-          cat "$REQ_FILE"
+          {
+            echo "# PDF 批量加密分发的可选依赖 —— 只在需要 PDF 功能时才装："
+            echo "#   pip install -r requirements-pdf.txt"
+            echo "# 只做 Excel 拆分时不需要，跳过即可（脚本内置依赖自检，用到时才提示）。"
+            grep -iE "^(${PDF_DEPS})" requirements.txt
+          } > "$REQ_PDF_FILE"
+          echo "--- requirements.txt ---"; cat "$REQ_FILE"
+          echo "--- requirements-pdf.txt ---"; cat "$REQ_PDF_FILE"
           # 兜底断言：真漏了就在这里炸掉，别把坏包发上去
           if grep -qiE 'customtkinter|tkinterdnd2' "$REQ_FILE"; then
             echo "::error::GUI 依赖混进了 skill 的 requirements.txt"
+            exit 1
+          fi
+          if grep -qiE "${PDF_DEPS}" "$REQ_FILE"; then
+            echo "::error::PDF 依赖没从 requirements.txt 里拆干净"
+            exit 1
+          fi
+          n="$(grep -ciE "^(${PDF_DEPS})" "$REQ_PDF_FILE" || true)"
+          if [ "${n:-0}" -lt 3 ]; then
+            echo "::error::requirements-pdf.txt 只有 $n 个依赖，期望 3 个（上游可能改了包名）"
             exit 1
           fi
 
@@ -213,12 +237,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install deps and run skill tests
-        # 只跑 skill 自己的测试：仓库根目录有桌面版的 conftest.py，
-        # 无脑 `pytest -q` 会把桌面版测试也收集进来（那些依赖 GUI 库，跑不动）。
+        # 只跑 skill 包内的测试（tests/ 随包一起上架，改脚本后能就地验证）：
+        # 仓库根目录有桌面版的 conftest.py，无脑 `pytest -q` 会把桌面版测试也收集进来
+        # （那些依赖 GUI 库，跑不动）。
         run: |
-          pip install -r "$REQ_FILE"
+          pip install -r "$REQ_FILE" -r "$REQ_PDF_FILE"
           pip install pytest
-          pytest -q excelrouter-skill/tests
+          pytest -q "$TESTS_DIR"
 
       - name: Commit synced skill
         id: commit
@@ -234,7 +259,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$VENDOR_DIR" "$TAG_FILE" "$UPSTREAM_MD" "$PLUGIN_JSON" "$MANIFEST_FILE" "$SKILL_MD" "$REQ_FILE"
+          git add "$VENDOR_DIR" "$TAG_FILE" "$UPSTREAM_MD" "$PLUGIN_JSON" "$MANIFEST_FILE" "$SKILL_MD" "$REQ_FILE" "$REQ_PDF_FILE" "$TESTS_DIR"
           git commit -m "chore(skill): 同步本仓 core 并发布 $TAG"
           git push origin HEAD:${GITHUB_REF_NAME}
           echo "changed=true" >> "$GITHUB_OUTPUT"

@@ -6,7 +6,7 @@ name: excelrouter
 slug: excelrouter
 # version 同样是 skillhub CLI 的必填项（缺了报「SKILL.md 缺少 version」）。
 # 由 publish-skill.yml 在发版时与 manifest.yaml / plugin.json 一起同步，不要手改。
-version: "2.7.4"
+version: "2.7.5"
 # 以下元信息 skillhub CLI 同样会逐个校验（缺哪个报「SKILL.md 缺少 X」），
 # 与 manifest.yaml 保持一致；displayName 由 publish-skill.yml 从 manifest 同步。
 displayName: Excel拆分、表格拆分、PDF加密分发助手 — ExcelRouter
@@ -90,10 +90,12 @@ metadata:
 
 **首次使用前装依赖**（同一个 Python 环境装一次就行）：
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt          # 只拆 Excel：3 个包
+pip install -r requirements-pdf.txt      # 要做 PDF 加密分发时，再装这 3 个
 ```
-（这里指 `skills/excelrouter/requirements.txt`；只用 Excel 拆分可以不装 `pypdf`/`fpdf2`/`cryptography`，
-但装了也不冲突。）装不上或缺什么依赖，脚本会自己报人话错误（`check_deps`），照着提示补就行。
+依赖拆成了两份：Excel 拆分只需要 `openpyxl`、`pandas`、`xlrd` 三个；PDF 加密分发才需要
+`pypdf`、`fpdf2`、`cryptography`，用不到 PDF 功能就**不必装**。
+装不上或缺什么依赖，脚本会自己报人话错误（`check_deps`），照着提示补就行。
 
 **Windows 用户注意：** 如果脚本运行时报 `Memory allocation` / `Intel MKL` 相关错误，
 在命令前加 `OPENBLAS_NUM_THREADS=1`：
@@ -147,6 +149,9 @@ OPENBLAS_NUM_THREADS=1 python scripts/er_split.py --input 明细.xlsx --output �
 
 ## 常用参数速查（完整列表见 `python er_split.py --help`）
 
+**绝大多数情况只需要三个参数**：`--input` 源表 / `--output` 输出目录 / `--by` 按哪个字段拆。
+下面这些是按需选的，不用一次记全。
+
 ```bash
 # 单文件，按"部门"拆
 python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
@@ -193,9 +198,10 @@ python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
 - 「按人打包 ZIP」只有**目录输入**才有（内核行为）；单文件按人拆不产 ZIP，文件直接在
   `{网格}/到人/` 下，如需打包另用系统压缩。
 
-## 两个必须主动预警的数据陷阱
+## 已知边界与限制（这些必须提前说清楚，别等用户踩坑）
 
-拆分本身跑成功了，不代表数据是对的——遇到下面两种情况一定要提醒用户，不要假装没看见：
+拆分本身跑成功了，不代表数据是对的——下面这些是工具的真实边界，
+**遇到相关场景要主动提醒用户，不要假装没看见**（提前说明比事后返工便宜得多）：
 
 1. **公式列读成空白**：如果源表的公式从来没被 Excel/WPS 真正计算过一次（比如程序直接生成、
    或者从未打开保存过），pandas 只能读缓存值，读不到就是空白。`er_split.py` 底层会在
@@ -204,12 +210,25 @@ python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
    但跨行/汇总/跨表公式（`SUM`、`VLOOKUP`）做不到，会照旧落成当前缓存值——这是有意为之，
    宁可给数值也不给一个会显示错误结果的公式。
 2. **`.xls`（旧格式）转换后无法保留原格式**：老式 Excel 文件会被自动转成临时 xlsx 处理，
-   但样式信息在这一步就已经丢了，`--fast`/保留格式在 `.xls` 上没区别，提前告诉用户这个限制。
+   但样式信息在这一步就已经丢了，`--fast`/保留格式在 `.xls` 上没区别。
+   格式很重要时，建议用户先在 Excel/WPS 里另存为 `.xlsx` 再拆分。
+3. **数据区的合并单元格不保留**：表头区的合并单元格会保留，但**数据区**的不会——
+   拆分后每一行各自取值，原来几行共用的单元格会出现"除第一行外都是空白"的情况。
+   建议用户不要在源表的数据区使用合并单元格。
+4. **大文件 / 几百列的宽表会明显变慢**：默认 `preserve_format` 是逐格复制格式，
+   几万行宽表可以先试 `--fast`（只写数值、丢格式）看是否够用；跑大任务时把 stderr 里的
+   心跳日志转给用户，别让界面静默几十秒。
+5. **重复拆分同一个目录时，建议换一个输出目录**：默认会在 `--output` 下再建一层带时间戳的
+   子目录；但用了 `--no-timestamp` 时，同名文件会被覆盖，且**上次的结果不会自动清理**，
+   源表里已经删掉的人仍可能留在输出目录里。工资条这类"发错人代价很高"的场景，
+   要么换输出目录，要么先手动清空，拆完用 `er_list.py` 核对一遍再发。
 
 更多参数解释、场景配方、报错排查见 `references/`：
 - `references/config-reference.md` —— 所有参数/config 字段逐条解释（`--config` 专家模式用得上）
 - `references/recipes.md` —— 常见场景 → 命令组合，照抄即可
 - `references/troubleshooting.md` —— 表头识别失败、合并单元格、大文件变慢等排查
+
+改过脚本或换过 Python 环境后想验证一下，跑 `tests/` 里的测试即可，见 `TESTING.md`。
 
 ## PDF 加密分发
 

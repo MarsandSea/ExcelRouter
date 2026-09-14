@@ -11,8 +11,10 @@ import openpyxl
 import pytest
 from openpyxl.styles import Font, PatternFill
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPTS = os.path.join(REPO_ROOT, "skills", "excelrouter", "scripts")
+# 本文件位于 <skill 目录>/tests/ 下：向上两级就是 skill 目录本身（scripts/ 与它同级）。
+# 测试随 skill 一起发布上架，所以路径必须按「包内位置」推导，不能依赖仓库根目录。
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPTS = os.path.join(SKILL_DIR, "scripts")
 
 HEADERS = ["工号", "姓名", "部门", "城市", "金额"]
 

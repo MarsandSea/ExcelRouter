@@ -1,8 +1,7 @@
-# excelrouter skill 运行依赖（自动从上游 excel-router/requirements.txt 同步）
-# 已去掉 customtkinter —— 这是命令行/skill 形态，没有桌面 GUI
+# excelrouter skill 运行依赖 —— 只做 Excel 拆分时，只需要下面这 3 个
+# PDF 加密分发才需要的 pypdf / fpdf2 / cryptography 已拆到 requirements-pdf.txt，
+# 用不到 PDF 功能就不必装（脚本会在真正用到时报人话提示）。
+# 已去掉桌面版 GUI 专用依赖 customtkinter / tkinterdnd2 —— skill 是命令行形态。
 openpyxl>=3.1.0
 pandas>=2.0.0
 xlrd>=2.0.1
-pypdf>=6.0.0
-fpdf2>=2.8.0
-cryptography>=42.0.0
