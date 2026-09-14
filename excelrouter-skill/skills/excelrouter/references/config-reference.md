@@ -26,7 +26,7 @@ dict。大多数场景用 CLI flag 就够了；需要精细控制、或者想直
 | `exact_match` | `--fuzzy-match`（取反） | `True` | `--values` 是否精确匹配；`--fuzzy-match` 改成包含匹配 |
 | `merge_across_files` | `--merge` | `False` | 同一取值跨源文件是否合并到一个输出文件（到人始终按人合并，不受此项影响） |
 | `make_zip` | `--no-zip`（取反） | `True` | 批量拆分后，每个产出了文件夹的主取值是否打 ZIP |
-| `preserve_format` | `--fast`（取反） | `True` | 关闭后数据行只写值不保留格式，明显更快 |
+| `preserve_format` | `--fast`（取反） | `True` | 关闭后数据行只写值不保留格式。**注意：实测提速仅 0–5%（在噪声范围内）**，别把它当加速开关；它的作用是输出不带样式的纯数值。想省时间请用 `--values` 缩小单次规模 |
 | `keep_formulas` | `--keep-formulas` | `False` | 尽量保留"同行公式"为活公式；跨行/汇总/跨表公式仍落成缓存数值。需要 `preserve_format` 同时开启才有意义 |
 
 ## PDF 加密分发（run_pdf_dist）

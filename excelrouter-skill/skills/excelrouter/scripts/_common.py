@@ -15,6 +15,31 @@ import json
 import os
 import sys
 
+
+def _pin_native_threads() -> None:
+    """Windows 上限制 numpy/OpenBLAS 的线程数，绕开内存分配失败导致的崩溃。
+
+    背景：Windows 某些环境下 numpy 底层的 OpenBLAS 默认开多线程，进程会直接崩在
+    `Memory allocation` / `Intel MKL` 报错上，与用户数据无关、也不是本工具的 bug。
+    单线程即可规避。
+
+    两个关键约束：
+    1. 必须在 **numpy 被导入之前** 设置才生效——BLAS 在加载时读这两个变量。
+       所以放在本模块顶层：所有 er_*.py 都把 `from _common import ...` 作为第一个
+       非标准库导入，排在对 pandas / openpyxl / core.* 的导入之前。
+    2. 用 setdefault：**用户自己设过就不覆盖**。想要多线程的人自己设即可。
+
+    只在 Windows 收紧；其他平台不动，避免无谓地拖慢本来正常的 numpy。
+    """
+    if os.name != "nt":
+        return
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    # 同一进程里混进两份 OpenMP 运行时时的经典报错（OMP: Error #15）也一并兜住
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+
+_pin_native_threads()
+
 _VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
 
 # 上游 config/default_config.json 的镜像（截至上游 v2.7.0 tag），外加本 CLI 自有的

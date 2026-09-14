@@ -25,6 +25,7 @@ pytest -q tests/
 | `er_inspect.py` | 自动识别非首行表头；列出字段取值并过滤合计行；目录输入的文件计数；文件不存在时返回人话报错 |
 | `er_split.py` | 缺 `--by` 时友好报错；`--dry-run` 不写盘；按字段产出预期目录；`--merge` 跨文件合并成单文件；`--values` 只拆指定取值 |
 | `er_pdf_dist.py` | 读取映射清单列名；按网格加密并生成清单（断言产物 PDF 确实 `is_encrypted`）；缺列名时友好报错 |
+| `_common.py` | Windows 上在导入 numpy **之前**自动把 OpenBLAS 线程数限制为 1（绕开内存分配崩溃）；用户自己设过该变量时不覆盖 |
 
 另有针对拆分算法与 PDF 分发内部逻辑的单元测试，见上游仓库
 <https://github.com/MarsandSea/excel-router> 的 `tests/`（桌面版与本 skill 共用同一套 `core/`）。

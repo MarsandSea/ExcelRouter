@@ -46,18 +46,27 @@ stderr 打印警告，看到就转告用户"请先用 Excel 或 WPS 打开源表
 
 ## 大文件/大批量跑得很慢，甚至看起来像卡住
 
-- 默认 `preserve_format=True` 是逐格式复制，几万行的宽表会明显慢，先试 `--fast`。
-- 进度通过 stderr 的 `[进度 N%]` 行汇报；如果长时间停在同一个百分比，看有没有报警告/错误，
-  不一定是卡死（保留格式模式下大文件本来就慢）。
+- **先估时间，别急着判断"卡死"**：耗时基本随单元格总量线性增长，约 **1.5 万个单元格/秒**
+  （实测：1 万行×15 列约 11 秒，5 万行×15 列约 49 秒，3 千行×150 列约 26 秒）。
+  完整表格见 SKILL.md 的「规模与耗时参考」。
+- ⚠️ **`--fast` 实测基本不提速**（0–5%，在噪声范围内）——瓶颈是单元格总量和产出文件个数，
+  不是逐格复制格式。别把它当加速开关。真要省时间：用 `--values` 拆一部分，或把源表分批处理。
+- 进度通过 stderr 的 `[进度 N%]` 行汇报；如果长时间停在同一个百分比，看有没有报警告/错误。
 - `--merge` 会把所有输出工作簿整批留在内存到最后统一保存，宽表+大批量文件时内存压力更大，
   非必要不加这个选项。
 
 ## Windows 脚本运行报 `Memory allocation` / `Intel MKL` 错误
 
-numpy 底层的 OpenBLAS 在 Windows 上默认多线程，某些环境下会因内存分配失败直接崩溃。
-在命令前加 `OPENBLAS_NUM_THREADS=1` 限制单线程即可：
+numpy 底层的 OpenBLAS 在 Windows 上默认多线程，某些环境下会因内存分配失败直接崩溃
+（与你的数据无关，也不是本工具的 bug）。
+
+**v2.7.6 起脚本已自动处理**：`scripts/_common.py` 会在导入 numpy **之前**把
+`OPENBLAS_NUM_THREADS` 设为 `1`（另外顺手设 `KMP_DUPLICATE_LIB_OK=TRUE` 兜住
+`OMP: Error #15`），**不需要你手动设置**。
+
+只有在你确实需要多线程时才自己指定，脚本用 `setdefault`，不会覆盖你的设置：
 ```bash
-OPENBLAS_NUM_THREADS=1 python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
+OPENBLAS_NUM_THREADS=8 python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
 ```
 这是 numpy 的已知问题，不影响数据正确性。
 
