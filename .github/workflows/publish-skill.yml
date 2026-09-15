@@ -282,6 +282,20 @@ jobs:
           git push origin HEAD:${GITHUB_REF_NAME}
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Validate SKILL.md frontmatter
+        # 发布前拦掉「静默降级」的元数据问题（2026-09-15 踩坑）：
+        # skillhub CLI 是逐行解析 frontmatter，值里带 ASCII「冒号+空格」它也照样发布成功；
+        # 但 WorkBuddy 客户端用真 YAML 解析，遇到就抛异常 → 技能卡描述降级成**安装目录名**
+        # （实际显示成 excelrouter__skillhub，发布链路却全绿）。
+        # 这里在打包前用真 YAML 解析器复检，不合格直接失败，别让坏元数据上线。
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 装上 pyyaml，让校验走真正的 YAML 解析（与 WorkBuddy 客户端行为一致），
+          # 而不是只做「冒号+空格」的字符串检查。
+          python3 -m pip install --quiet pyyaml
+          python3 check_skillmd.py "$SKILL_DIR"
+
       - name: Publish to SkillHub
         # 尽力而为：发布失败只留黄色警告，不影响本仓发版（与 Gitee 镜像同一策略）。
         # 先 dry-run 校验格式，通过才真正发布：格式不合格就停在这一步，
