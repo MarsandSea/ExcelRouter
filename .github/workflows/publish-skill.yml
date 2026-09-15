@@ -139,12 +139,11 @@ jobs:
             exit 1
           fi
 
-      - name: Update tag file / version fields
+      - name: Update tag file / upstream md
         if: steps.mode.outputs.sync == 'true'
         shell: bash
         env:
           TAG: ${{ steps.ver.outputs.tag }}
-          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           SHA="$(git rev-parse HEAD)"
@@ -174,33 +173,23 @@ jobs:
               f.write(new_content)
           PYEOF
 
-          # 版本号：manifest（SkillHub 展示）/ plugin.json（Claude Code）/
-          # SKILL.md frontmatter（skillhub CLI 必填，缺了拒绝发布）三处一起跟上，
-          # 否则 SkillHub 上的版本号会一直停在旧值。
-          python3 - "$MANIFEST_FILE" "$PLUGIN_JSON" "$SKILL_MD" "$VERSION" <<'PYEOF'
-          import json, re, sys
-          manifest_path, plugin_path, skill_md_path, version = sys.argv[1:5]
+      - name: Align version fields
+        # ⚠️ 这一步**刻意不加 if**：手动触发（sync=false）时也必须对齐。
+        # 原来它和上面的 tag 文件更新合在一起、只在 `sync == 'true'` 时跑，
+        # 导致手动发布时 manifest.yaml / plugin.json 都不会被更新 ——
+        # 2026-09-15 查到的 plugin.json 停在 2.7.4（落后两版）就是这个原因。
+        #
+        # 版本真源是 **SKILL.md frontmatter 的 version**：SkillHub CLI 与 ClawHub
+        # 实际读的都是它。刻意不用 steps.ver.outputs.version —— 那个取自本仓最新的
+        # v* tag，手动触发时可能是旧值（本仓 tag 此刻还停在 v2.7.0）。
+        id: veralign
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$MANIFEST_FILE" "$PLUGIN_JSON" "$SKILL_MD" <<'PYEOF'
+          import json, os, re, sys
+          manifest_path, plugin_path, skill_md_path = sys.argv[1:4]
 
-          with open(manifest_path, encoding="utf-8") as f:
-              content = f.read()
-          new_content, n = re.subn(
-              r'(?m)^version\s*:.*$', f'version: "{version}"', content, count=1
-          )
-          if n != 1:
-              raise SystemExit(f"在 {manifest_path} 里没找到 version: 行，请检查文件格式")
-          with open(manifest_path, "w", encoding="utf-8") as f:
-              f.write(new_content)
-
-          with open(plugin_path, encoding="utf-8") as f:
-              data = json.load(f)
-          data["version"] = version
-          with open(plugin_path, "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
-              f.write("\n")
-
-          # SKILL.md 的 version / displayName 在 frontmatter 里（skillhub CLI 的必填项，
-          # 缺哪个报哪个）。只动 frontmatter，别碰正文里可能出现的同名字样。
-          # displayName 的真源是 manifest.yaml，这里顺手同步过去，避免两处不一致。
           with open(skill_md_path, encoding="utf-8") as f:
               content = f.read()
           m = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", content, re.S)
@@ -208,8 +197,34 @@ jobs:
               raise SystemExit(f"{skill_md_path} 开头的 frontmatter 格式异常，找不到 --- 包裹")
           fm = m.group(1)
 
+          vm = re.search(r'(?m)^version\s*:\s*["\']?([^"\'\s]+)', fm)
+          if not vm:
+              raise SystemExit(f"{skill_md_path} frontmatter 缺 version，skillhub CLI 会拒收")
+          version = vm.group(1).strip()
+          if not re.fullmatch(r"\d+(\.\d+)+", version):
+              raise SystemExit(f"SKILL.md 解析出的版本号不合规：{version!r}")
+
+          # manifest.yaml —— SkillHub 展示用
           with open(manifest_path, encoding="utf-8") as f:
               mtxt = f.read()
+          mtxt, n = re.subn(
+              r'(?m)^version\s*:.*$', f'version: "{version}"', mtxt, count=1
+          )
+          if n != 1:
+              raise SystemExit(f"在 {manifest_path} 里没找到 version: 行，请检查文件格式")
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              f.write(mtxt)
+
+          # plugin.json —— Claude Code 插件市场用
+          with open(plugin_path, encoding="utf-8") as f:
+              data = json.load(f)
+          data["version"] = version
+          with open(plugin_path, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+
+          # SKILL.md frontmatter 的 displayName 以 manifest.yaml 为准，顺手同步
+          # （只动 frontmatter，别碰正文里可能出现的同名字样）
           dm = re.search(r"(?m)^display_name\s*:\s*(.+)$", mtxt)
           display_name = dm.group(1).strip().strip('"').strip("'") if dm else None
 
@@ -223,12 +238,15 @@ jobs:
 
           fm = set_fm(fm, "version", f'"{version}"')
           fm = set_fm(fm, "displayName", display_name)
-
           content = content[:m.start(1)] + fm + content[m.end(1):]
           with open(skill_md_path, "w", encoding="utf-8") as f:
               f.write(content)
 
-          print(f"版本号已同步为 {version}（manifest / plugin.json / SKILL.md）")
+          print(f"版本号已对齐为 {version}（manifest / plugin.json / SKILL.md frontmatter）")
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as f:
+                  f.write(f"version={version}\n")
           PYEOF
 
       - name: Set up Python
@@ -273,7 +291,7 @@ jobs:
         shell: bash
         env:
           SKILLHUB_TOKEN: ${{ secrets.SKILLHUB_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ steps.veralign.outputs.version }}
         run: |
           set -euo pipefail
           # 发布前自检：SkillHub 会逐个检查文件类型，skill 目录里只要有一个
@@ -298,23 +316,34 @@ jobs:
 
       - name: Publish to ClawHub
         # 与 SkillHub 同一策略：尽力而为，失败只留黄色警告。
-        # 不传 --version：ClawHub 首发从 1.0.0 起，之后内容有变化自动递增 patch，
-        # 与 manifest.yaml 的版本线互不干扰。
+        #
+        # ⚠️ 必须显式传 --version：ClawHub CLI 的 `--version` 帮助里写
+        # "defaults to 1.0.0 or next patch"，但实测那个 "next patch" **不会生效** ——
+        # 不传时它每次都申请 1.0.0（本地 dry-run 二次确认：`Would publish excelrouter@1.0.0`），
+        # 于是第二次发布会撞 `Version 1.0.0 already exists` 直接 exit 1。
+        # 2026-09-15 那次「看起来 success 但 ClawHub 没更新」就是这么来的
+        # （continue-on-error 把这个失败吞成了绿 ✓）。
+        #
+        # 版本号取上面 Align version fields 的输出 —— 即 SKILL.md frontmatter 的 version，
+        # 与 SkillHub 同源，两条渠道版本线从此统一。
         if: steps.commit.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         shell: bash
         env:
           CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          VERSION: ${{ steps.veralign.outputs.version }}
         run: |
           set -euo pipefail
           if [ -z "$CLAWHUB_TOKEN" ]; then
             echo "::notice::未配置 CLAWHUB_TOKEN，跳过该渠道发布（否则会走设备授权、干等 15 分钟超时）"
             exit 0
           fi
+          echo "ClawHub 发布版本：$VERSION"
           npm i -g clawhub
           clawhub login --token "$CLAWHUB_TOKEN"
           clawhub skill publish "$SKILL_DIR" \
             --slug excelrouter \
+            --version "$VERSION" \
             --name "Excel拆分、表格拆分、PDF加密分发助手 — ExcelRouter" \
             --changelog "Sync core (ExcelRouter)" \
             --categories productivity \

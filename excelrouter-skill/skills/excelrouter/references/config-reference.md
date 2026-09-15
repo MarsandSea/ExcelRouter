@@ -16,7 +16,7 @@ dict。大多数场景用 CLI flag 就够了；需要精细控制、或者想直
 | `output_path` | `--output` | 必填 | 输出根目录；真实产出在其下 `{MMDDHHMM}结果/` 子目录，务必读返回 JSON 的 `output_path` |
 | `split_column` | `--by` | 必填（除非用 `--config`） | 主拆分字段，按列名 |
 | `selected_values` | `--values a,b` | 空=全部 | 只拆这些取值；留空自动枚举该列全部取值 |
-| `person_column` | `--to-person 字段` | 空 | 到人二级拆分字段；填了就自动打开 `to_person`（仅目录输入有效，单文件会被忽略） |
+| `person_column` | `--to-person 字段` | 空 | 到人二级拆分字段；填了就自动打开 `to_person`。单文件输入同样支持（由 `_person_split.py` 包装层补做，见 SKILL.md「`--to-person` 三种写法」） |
 | `person_file_filter` | `--person-filter kw1,kw2` | 空=全部 | 到人时只处理**文件名**命中这些关键词的源表 |
 | `header_mode` | `--header-mode` | `auto` | `auto`（启发式自动识别）/ `row`（指定行号）/ `keyword`（关键词法，专家兜底） |
 | `header_row` | `--header-row` | `1` | `header_mode=row` 时的 1 基行号 |
@@ -26,7 +26,7 @@ dict。大多数场景用 CLI flag 就够了；需要精细控制、或者想直
 | `exact_match` | `--fuzzy-match`（取反） | `True` | `--values` 是否精确匹配；`--fuzzy-match` 改成包含匹配 |
 | `merge_across_files` | `--merge` | `False` | 同一取值跨源文件是否合并到一个输出文件（到人始终按人合并，不受此项影响） |
 | `make_zip` | `--no-zip`（取反） | `True` | 批量拆分后，每个产出了文件夹的主取值是否打 ZIP |
-| `preserve_format` | `--fast`（取反） | `True` | 关闭后数据行只写值不保留格式。**注意：实测提速仅 0–5%（在噪声范围内）**，别把它当加速开关；它的作用是输出不带样式的纯数值。想省时间请用 `--values` 缩小单次规模 |
+| `preserve_format` | `--fast`（取反） | `True` | 关闭后数据行只写值不保留格式。**它不省时间**（实测提速 0–5%），作用是输出不带样式的纯数值；想省时间请用 `--values` 缩小单次规模。详见 SKILL.md「关于 `--fast`」 |
 | `keep_formulas` | `--keep-formulas` | `False` | 尽量保留"同行公式"为活公式；跨行/汇总/跨表公式仍落成缓存数值。需要 `preserve_format` 同时开启才有意义 |
 
 ## PDF 加密分发（run_pdf_dist）
