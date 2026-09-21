@@ -320,7 +320,7 @@ def test_zip_bundles_summary_with_person(two_books):
     assert os.path.exists(zpath)
     names = [n.replace("\\", "/") for n in zipfile.ZipFile(zpath).namelist()]
     assert any(n.startswith("汇总/") and n.endswith("销售部.xlsx") for n in names), names   # 汇总进包
-    assert any(n.startswith("到人/") and n.endswith("张三_A.xlsx") for n in names), names    # 到人也在包里
+    assert any(n.startswith("到人/") and n.endswith("张三.xlsx") for n in names), names     # 到人也在包里（v2.7.2：merge 模式不带源文件名）
 
 
 def test_dedupe_path_helper():
@@ -389,3 +389,56 @@ def test_summary_line_counts_skipped_sheets(tmp_path):
     s = json.loads([m for m in logs if m.startswith("[SUMMARY] ")][0][len("[SUMMARY] "):])
     assert s["skipped_sheets"] == 1
     assert s["groups"] == 1
+
+
+# ---------- 到人：同一人跨多个源文件（v2.7.2 回归，名实不符 bug）----------
+
+def _make_month_books(inp):
+    """三张月度数据源：张三在 7/8/9 月都有行，李四只在 7 月。"""
+    for mon, rows in [("7月明细", [("张三", 100), ("李四", 200)]),
+                      ("8月明细", [("张三", 300)]),
+                      ("9月明细", [("张三", 400)])]:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["姓名", "部门", "金额"])
+        for r in rows:
+            ws.append([r[0], "销售部", r[1]])
+        wb.save(os.path.join(inp, f"{mon}.xlsx"))
+
+
+def test_to_person_cross_files_merge(tmp_path):
+    """merge=True：同一人跨源的全部行进一张「姓名.xlsx」，不再叫「姓名_第一个源.xlsx」。"""
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir()
+    _make_month_books(str(inp))
+    res = run_split(_base_cfg(str(inp), str(out), to_person=True,
+                              person_column="姓名"), log_fn=lambda m: None)
+    d = os.path.join(res, "销售部", "到人")
+    # 名实相符：文件名不带源文件名，且只有一张
+    assert sorted(os.listdir(d)) == ["张三.xlsx", "李四.xlsx"]
+    wb = openpyxl.load_workbook(os.path.join(d, "张三.xlsx"))
+    ws = wb.active
+    amounts = sorted(ws.cell(row=i, column=3).value for i in range(2, ws.max_row + 1))
+    wb.close()
+    assert amounts == [100, 300, 400]        # 7/8/9 月的行都在，一行不少
+    # 旧命名不应再出现
+    assert not os.path.exists(os.path.join(d, "张三_7月明细.xlsx"))
+
+
+def test_to_person_cross_files_no_merge(tmp_path):
+    """merge=False：每人每源一张，与汇总的按原表拆分对称；行不串表。"""
+    inp, out = tmp_path / "in", tmp_path / "out"
+    inp.mkdir()
+    _make_month_books(str(inp))
+    res = run_split(_base_cfg(str(inp), str(out), to_person=True, person_column="姓名",
+                              merge_across_files=False), log_fn=lambda m: None)
+    d = os.path.join(res, "销售部", "到人")
+    assert set(os.listdir(d)) == {
+        "李四_7月明细.xlsx", "张三_7月明细.xlsx", "张三_8月明细.xlsx", "张三_9月明细.xlsx"}
+    for fname, expect in [("张三_7月明细.xlsx", [100]), ("张三_8月明细.xlsx", [300]),
+                          ("张三_9月明细.xlsx", [400]), ("李四_7月明细.xlsx", [200])]:
+        wb = openpyxl.load_workbook(os.path.join(d, fname))
+        ws = wb.active
+        amounts = [ws.cell(row=i, column=3).value for i in range(2, ws.max_row + 1)]
+        wb.close()
+        assert amounts == expect, (fname, amounts)

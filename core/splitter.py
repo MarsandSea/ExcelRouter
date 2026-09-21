@@ -602,16 +602,25 @@ def _summary_key_path(output_root, primary, src_stem, single_file, merge):
     return ('汇总', primary, src_stem), os.path.join(output_root, p, "汇总", f"{p}_{src_stem}.xlsx")
 
 
-def _person_key_path(output_root, primary, person, src_stem):
-    """『到人』输出键与路径：{主取值}/到人/{姓名}_{原文件名}.xlsx（同一人跨文件合并到一个）。
+def _person_key_path(output_root, primary, person, src_stem, merge):
+    """『到人』输出键与路径，与『汇总』的 merge 语义对称（v2.7.2 修名实不符）：
 
-    键不含 src_stem——同一人跨文件合并进同一个输出簿的语义不变；src_stem 只影响
-    文件名，且只有「第一个产生该人输出」的源文件的文件名会被采用（emit() 只在
-    key 首次出现时使用传入的 save_path，后续文件命中同一 key 时复用已建好的输出簿）。
+    · merge=True（跨文件合并，把整个文件夹当一个整体）→ 键 ('到人', primary, person)，
+      路径 {主取值}/到人/{姓名}.xlsx：同一人的全部行合并进这一张表，文件名不带
+      源文件名——旧版在 merge 模式下文件名取第一个源文件（张三_7月.xlsx 里装着
+      8/9 月的行），名字与内容不符，用户以为其他月份被覆盖丢了。
+    · merge=False（按原表拆分）→ 键 ('到人', primary, person, src_stem)，
+      路径 {主取值}/到人/{姓名}_{原文件名}.xlsx：每人每源一张，与汇总的
+      {主取值}_{原文件名}.xlsx 对称；不同月份表结构独立时也避免按列位置合并错位。
+
+    键含不含 src_stem 决定合并还是分表；src_stem 不再只影响文件名。
     """
     p = safe_filename(primary)
     s = safe_filename(person)
-    return ('到人', primary, person), os.path.join(output_root, p, "到人", f"{s}_{src_stem}.xlsx")
+    if merge:
+        return ('到人', primary, person), os.path.join(output_root, p, "到人", f"{s}.xlsx")
+    return ('到人', primary, person, src_stem), os.path.join(
+        output_root, p, "到人", f"{s}_{src_stem}.xlsx")
 
 
 # =====================================================
@@ -820,7 +829,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     for person in sorted({v for v in sub_persons if not is_skip_value(v, skip)}):
                         rows_df = sub[sub_persons == person]
                         if len(rows_df):
-                            k2, p2 = _person_key_path(output_root, pval, person, src_stem)
+                            k2, p2 = _person_key_path(output_root, pval, person, src_stem, merge)
                             emit(k2, p2, sn, h, rows_df, ws_src, src_max_col, formula_ws)
 
         if log_fn and total_rows:
