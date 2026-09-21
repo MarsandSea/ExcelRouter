@@ -159,8 +159,12 @@ def fill_random_passwords(mapping_path, grid_col, password_col="", out_path=None
         if grid_col not in header:
             raise ValueError(f"清单表头里找不到网格列「{grid_col}」")
         g_idx = header.index(grid_col)
+        # v2.7.2 修 issue #1：password_col 未指定时先复用既有「密码」列，避免追加重复
+        # 同名列（旧版追加后 header.index 命中原空白列，生成的密码被 read_mapping 漏读）
         if password_col and password_col in header:
             p_idx = header.index(password_col)
+        elif not password_col and "密码" in header:
+            p_idx = header.index("密码")      # 复用既有列，只填空白格
         else:
             p_idx = len(header)
             ws.cell(row=1, column=p_idx + 1, value="密码")

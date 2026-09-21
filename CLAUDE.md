@@ -24,6 +24,12 @@
 > 输出契约变化：merge 模式到人文件名去掉源文件后缀。测试补了两个跨多源回归用例
 > （`test_to_person_cross_files_merge/no_merge`）——旧测试每人只出现在单个源文件，
 > 这正是 bug 逃逸的原因，新用例必须保留。
+>
+> 同版修复 issue #1（fill_random_passwords）：`password_col` 未指定且清单已有「密码」列时
+> 追加重复同名列，且 `read_mapping` 的 `header.index` 命中原空白列→生成的密码全部漏读。
+> 修法：未指定时先复用既有「密码」列（只填空白格），没有才新增。回归用例
+> `test_fill_random_passwords_reuse_existing_blank_col`。**注意：excelrouter skill 侧的
+> 规避补丁在上游修复后可删**（skill 仓独立维护，删补丁需另跑 skill 侧测试）。
 
 > **v2.7.1：界面品牌化精修（2026-09）**。零新依赖零体积增加，不引入 theme.json（自定义主题
 > JSON 缺键有崩溃风险），全部走**代码内调色板常量 + 组件参数覆盖**：品牌主色「移动蓝」

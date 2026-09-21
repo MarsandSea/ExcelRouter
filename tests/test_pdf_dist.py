@@ -228,3 +228,19 @@ def test_summary_line_pdf(workspace):
     assert s["files"] == 2
     assert s["output"] == out
     assert s["manifest"]
+
+def test_fill_random_passwords_reuse_existing_blank_col(tmp_path):
+    """issue #1 回归：清单已有空白「密码」列且未指定 password_col 时，复用该列，
+    不得追加重复同名列（旧版追加后 read_mapping 命中原空白列，密码全部漏读）。"""
+    from core.pdf_dist import fill_random_passwords
+    mp = tmp_path / "m.xlsx"
+    _make_mapping(mp, [("G1", None, ""), ("G2", None, "")], headers=("网格", "密码"))
+    out, n = fill_random_passwords(str(mp), "网格")
+    assert n == 2
+    wb = openpyxl.load_workbook(out)
+    header = [c.value for c in wb.worksheets[0][1]]
+    wb.close()
+    assert header.count("密码") == 1            # 无重复列
+    rows, _ = read_mapping(out, "网格", "密码")
+    pw = {r["grid"]: r["password"] for r in rows}
+    assert len(pw) == 2 and all(p and len(p) == 8 for p in pw.values())   # 密码可读回
