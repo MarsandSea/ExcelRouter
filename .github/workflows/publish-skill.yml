@@ -124,12 +124,15 @@ jobs:
           } > "$REQ_PDF_FILE"
           echo "--- requirements.txt ---"; cat "$REQ_FILE"
           echo "--- requirements-pdf.txt ---"; cat "$REQ_PDF_FILE"
-          # 兜底断言：真漏了就在这里炸掉，别把坏包发上去
-          if grep -qiE 'customtkinter|tkinterdnd2' "$REQ_FILE"; then
+          # 兜底断言：真漏了就在这里炸掉，别把坏包发上去。
+          # ⚠️ 必须先滤掉注释行：上面写入的说明注释里就写着 customtkinter / tkinterdnd2
+          # 这两个词，全文件 grep 会自噬误报（v2.7.2 发版时首次踩中）。
+          _deps() { grep -viE '^[[:space:]]*#' "$1"; }
+          if _deps "$REQ_FILE" | grep -qiE 'customtkinter|tkinterdnd2'; then
             echo "::error::GUI 依赖混进了 skill 的 requirements.txt"
             exit 1
           fi
-          if grep -qiE "${PDF_DEPS}" "$REQ_FILE"; then
+          if _deps "$REQ_FILE" | grep -qiE "${PDF_DEPS}"; then
             echo "::error::PDF 依赖没从 requirements.txt 里拆干净"
             exit 1
           fi
