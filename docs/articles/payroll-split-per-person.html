@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工资表批量拆分成单人文件：邮件合并 / 脚本 / 工具三条路 — ExcelRouter</title>
+<meta name="description" content="工资表拆成一人一份：邮件合并、脚本生成、本地批量工具，三种做法的边界在哪。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/payroll-split-per-person.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="工资表批量拆分成单人文件：邮件合并 / 脚本 / 工具三条路">
+<meta property="og:description" content="工资表拆成一人一份：邮件合并、脚本生成、本地批量工具，三种做法的边界在哪。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/articles/payroll-split-per-person.html">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":"工资表批量拆分成单人文件：邮件合并 / 脚本 / 工具三条路","description":"工资表拆成一人一份：邮件合并、脚本生成、本地批量工具，三种做法的边界在哪。",
+ "mainEntityOfPage":"https://marsandsea.github.io/ExcelRouter/articles/payroll-split-per-person.html",
+ "author":{"@type":"Person","name":"AbeLin"},
+ "publisher":{"@type":"Person","name":"AbeLin"},
+ "inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><a href="./"><b>实用文章</b></a>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>工资表批量拆分成单人文件：邮件合并 / 脚本 / 工具三条路</h1>
+  <p class="byline">作者 AbeLin · ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具</p>
+<h2>需求前提</h2>
+<p>工资条分发的核心不是「怎么拆」，是「怎么保证谁也看不到别人的」。这一点决定了方案选择。</p>
+<h2>方案一：邮件合并（Word + Outlook）</h2>
+<p>用 Word 的邮件合并功能读取 Excel 名单，配合 Outlook 逐人发送。</p>
+<p>优点：Office 自带，一次能发几百人。</p>
+<p>缺点：</p>
+<ul><li>只能承载纯文本字段，多层表头、颜色、合并单元格全部丢失</li><li>无法作为附件发送完整表格</li><li>依赖 Outlook 客户端配置</li></ul>
+<p>适用：只有「姓名 + 几个数字」的简单通知。</p>
+<h2>方案二：脚本生成 + 程序化发送</h2>
+<pre><code>import openpyxl
+from pathlib import Path
+
+wb = openpyxl.load_workbook("工资总表.xlsx")
+ws = wb.active
+
+for row in ws.iter_rows(min_row=2, values_only=True):
+    name, *data = row
+    # 实际项目中这里需要新建工作簿、复制表头与样式后再写入
+    ...</code></pre>
+<p>优点：格式可控、逻辑透明，能接进完整的自动化流水线。</p>
+<p>缺点：</p>
+<ul><li>需要编程能力，工资列一变动就要改代码</li><li>公司邮箱对批量外发普遍有限制，容易被反垃圾策略拦截</li><li>「保留原表格式」这件事在 openpyxl 里要写不少代码（见第 5 篇）</li></ul>
+<h2>方案三：本地批量拆分工具</h2>
+<p>关键约束：<strong>必须在本机运行</strong>。工资数据过一次公网服务，性质就变了。</p>
+<p>这类工具的典型流程：选表 → 指定「姓名」列 → 输出每人一个文件。</p>
+<ul><li>原格式保留，不需要二次排版</li><li>支持二级拆分：先按部门拆，部门内再按人拆，一次运行同时产出「部门汇总」和「每人一份」</li><li>支持按部门自动打 zip，便于分发</li><li>全程本地，断网可运行</li></ul>
+<h2>三种方案对比</h2>
+<table><tr><th>维度</th><th>邮件合并</th><th>脚本</th><th>本地工具</th></tr><tr><td>需要编程</td><td>否</td><td>是</td><td>否</td></tr><tr><td>保留格式</td><td>否</td><td>需额外开发</td><td>是</td></tr><tr><td>数据出网</td><td>否</td><td>取决于发送方式</td><td>否</td></tr><tr><td>二级拆分</td><td>否</td><td>需自己实现</td><td>是</td></tr><tr><td>批量打包</td><td>否</td><td>可</td><td>是</td></tr></table>
+<h2>总结</h2>
+<ol><li>只有几个字段的简单通知，邮件合并够用</li><li>每月都做、格式有要求，选能保留格式的本机工具</li><li>需要按部门汇总 + 按人分发两套结果，必须支持二级拆分</li><li>无论哪种方案：先备份原表，先拿两三行小样本试跑，确认无误再全量执行</li><li>工资类数据，把「是否联网」当成硬性筛选条件</li></ol>
+<blockquote><p>示例中的工具是 ExcelRouter（开源 MIT），桌面版与 AI 技能版共用同一套内核：</p><p>GitHub：<a href="https://github.com/MarsandSea/ExcelRouter">https://github.com/MarsandSea/ExcelRouter</a></p><p>Gitee 镜像：<a href="https://gitee.com/Marsandsea/Excelrouter">https://gitee.com/Marsandsea/Excelrouter</a></p></blockquote>
+
+  <div class="cta">
+    <h3>文中提到的工具：ExcelRouter</h3>
+    <p>把一个或一整批 Excel 按部门、区域、工号等字段拆成多个文件，<strong>完整保留复杂表头与格式</strong>，
+       可再按人二级拆分并打包 ZIP。Windows + 银河麒麟 / 统信 UOS，免费开源（MIT），
+       <strong>全程本机处理，不联网、不上传</strong>。</p>
+    <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">下载（国内 · Gitee）</a>
+    <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">GitHub 源码 ⭐</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="./">更多文章</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>

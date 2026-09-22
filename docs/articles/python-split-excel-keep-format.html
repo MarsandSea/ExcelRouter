@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 拆分 Excel 保留原格式：表头、合并单元格怎么处理 — ExcelRouter</title>
+<meta name="description" content="用 openpyxl 拆分 Excel 还保住原格式：表头、合并单元格、行号错位的最小可用实现。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/python-split-excel-keep-format.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Python 拆分 Excel 保留原格式：表头、合并单元格怎么处理">
+<meta property="og:description" content="用 openpyxl 拆分 Excel 还保住原格式：表头、合并单元格、行号错位的最小可用实现。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/articles/python-split-excel-keep-format.html">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":"Python 拆分 Excel 保留原格式：表头、合并单元格怎么处理","description":"用 openpyxl 拆分 Excel 还保住原格式：表头、合并单元格、行号错位的最小可用实现。",
+ "mainEntityOfPage":"https://marsandsea.github.io/ExcelRouter/articles/python-split-excel-keep-format.html",
+ "author":{"@type":"Person","name":"AbeLin"},
+ "publisher":{"@type":"Person","name":"AbeLin"},
+ "inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><a href="./"><b>实用文章</b></a>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>Python 拆分 Excel 保留原格式：表头、合并单元格怎么处理</h1>
+  <p class="byline">作者 AbeLin · ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具</p>
+<h2>为什么格式会丢</h2>
+<p>pandas 的读写链路是「值 → DataFrame → 值」，样式信息根本不在它的处理范围内。而 xlsx 的格式信息（字体、填充、边框、合并区域、列宽、条件格式）存在文件内部的样式表和 sheet 定义里，不是单元格值的一部分。</p>
+<p>所以只要走「读数据再写数据」的路线，格式必然丢失。要保留，只能逐单元格复制样式。</p>
+<h2>最小可用实现（openpyxl）</h2>
+<pre><code>from copy import copy
+from pathlib import Path
+import openpyxl
+
+
+def copy_cell(src, dst, src_r, src_c, dst_r):
+    s = src.cell(row=src_r, column=src_c)
+    d = dst.cell(row=dst_r, column=src_c)
+    d.value = s.value
+    if s.has_style:
+        d.font = copy(s.font)
+        d.border = copy(s.border)
+        d.fill = copy(s.fill)
+        d.number_format = s.number_format
+        d.protection = copy(s.protection)
+        d.alignment = copy(s.alignment)
+
+
+def split_by_column(src_path, key_col, header_rows, out_dir):
+    wb = openpyxl.load_workbook(src_path)
+    ws = wb.active
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. 按拆分列分组，记录行号
+    groups = {}
+    for r in range(header_rows + 1, ws.max_row + 1):
+        key = ws.cell(row=r, column=key_col).value
+        if key is None:
+            continue
+        groups.setdefault(str(key), []).append(r)
+
+    # 2. 每组生成一个新工作簿
+    for key, rows in groups.items():
+        new_wb = openpyxl.Workbook()
+        new_ws = new_wb.active
+
+        # 复制表头
+        for r in range(1, header_rows + 1):
+            for c in range(1, ws.max_column + 1):
+                copy_cell(ws, new_ws, r, c, r)
+
+        # 复制数据行
+        for i, r in enumerate(rows, start=header_rows + 1):
+            for c in range(1, ws.max_column + 1):
+                copy_cell(ws, new_ws, r, c, i)
+
+        # 复制列宽
+        for col, dim in ws.column_dimensions.items():
+            new_ws.column_dimensions[col].width = dim.width
+
+        # 复制表头区域的合并单元格
+        for rng in ws.merged_cells.ranges:
+            if rng.max_row &lt;= header_rows:
+                new_ws.merge_cells(str(rng))
+
+        new_wb.save(out_dir / f"{key}.xlsx")</code></pre>
+<h2>几个必须注意的点</h2>
+<p><strong>1. 合并单元格要做行号偏移</strong></p>
+<p>表头里的合并区域可以直接照搬；一旦有跨表头和数据行的合并，重算区间会很麻烦，需要在拆分前就确认表结构。数据行内部如果也有合并，必须按新行号重新计算 <code>min_row / max_row</code>。</p>
+<p><strong>2. 列宽 / 行高要单独复制</strong></p>
+<p>它们不属于单元格，<code>column_dimensions</code> 和 <code>row_dimensions</code> 各自维护。</p>
+<p><strong>3. 条件格式、图表、数据验证基本带不走</strong></p>
+<p>openpyxl 对这几类的复制支持很有限，实际项目里通常会丢。如果这些是刚需，逐单元格复制这条路会非常难走。</p>
+<p><strong>4. 大文件性能</strong></p>
+<p>逐单元格复制样式的开销远大于只写值。几万行 × 十几列的表建议先实测一遍耗时。</p>
+<h2>结论</h2>
+<p>如果只是「把值拆开」，pandas 十几行就够了；但只要涉及多层表头、合并单元格、条件格式，逐单元格复制样式的代码量和维护成本会迅速上升，而且条件格式基本无解。</p>
+<p>所以这类需求通常有个分界：</p>
+<ul><li>格式简单 → 自己写脚本</li><li>格式复杂、且要长期反复做 → 用专门做「保留格式」的工具更划算</li></ul>
+<h2>总结</h2>
+<ol><li>xlsx 格式存在于文件内部样式表，不在单元格值里，所以「读数据」路线必然丢格式</li><li>openpyxl 逐单元格复制可以保住字体、填充、边框、列宽、表头合并</li><li>合并单元格需按新行号重算；条件格式 / 图表基本无法随行搬运</li><li>先实测目标表的复杂度，再决定自研还是用现成工具</li></ol>
+<blockquote><p>如果表结构比较复杂（多层表头 + 合并单元格 + 条件格式），我后来改用了一个专门做</p><p>「保留格式拆分」的开源工具 ExcelRouter：</p><p>GitHub：<a href="https://github.com/MarsandSea/ExcelRouter">https://github.com/MarsandSea/ExcelRouter</a></p><p>国内镜像：<a href="https://gitee.com/Marsandsea/Excelrouter">https://gitee.com/Marsandsea/Excelrouter</a></p></blockquote>
+
+  <div class="cta">
+    <h3>文中提到的工具：ExcelRouter</h3>
+    <p>把一个或一整批 Excel 按部门、区域、工号等字段拆成多个文件，<strong>完整保留复杂表头与格式</strong>，
+       可再按人二级拆分并打包 ZIP。Windows + 银河麒麟 / 统信 UOS，免费开源（MIT），
+       <strong>全程本机处理，不联网、不上传</strong>。</p>
+    <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">下载（国内 · Gitee）</a>
+    <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">GitHub 源码 ⭐</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="./">更多文章</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>

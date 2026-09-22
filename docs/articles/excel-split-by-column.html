@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 按列批量拆分成多个工作簿：三种方案实测对比 — ExcelRouter</title>
+<meta name="description" content="按列拆分的三条路：Power Query、Python 脚本、专用工具，含耗时与格式保留对比。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/excel-split-by-column.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Excel 按列批量拆分成多个工作簿：三种方案实测对比">
+<meta property="og:description" content="按列拆分的三条路：Power Query、Python 脚本、专用工具，含耗时与格式保留对比。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/articles/excel-split-by-column.html">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":"Excel 按列批量拆分成多个工作簿：三种方案实测对比","description":"按列拆分的三条路：Power Query、Python 脚本、专用工具，含耗时与格式保留对比。",
+ "mainEntityOfPage":"https://marsandsea.github.io/ExcelRouter/articles/excel-split-by-column.html",
+ "author":{"@type":"Person","name":"AbeLin"},
+ "publisher":{"@type":"Person","name":"AbeLin"},
+ "inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><a href="./"><b>实用文章</b></a>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>Excel 按列批量拆分成多个工作簿：三种方案实测对比</h1>
+  <p class="byline">作者 AbeLin · ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具</p>
+<h2>背景</h2>
+<p>把一张总表按某一列拆成多个工作簿，是办公场景里非常高频的需求：按部门拆发给负责人、按区域拆做分发、按门店拆做台账。但大多数方案都会在同一个地方翻车——格式没了。</p>
+<p>本文把三种常见做法列出来，说清各自的适用边界。</p>
+<h2>方案一：Power Query（零代码）</h2>
+<p>路径：数据 → 获取和转换 → 按列筛选 → 导出为新文件。</p>
+<p>优点：</p>
+<ul><li>Excel 自带，零成本</li><li>不用写任何代码</li></ul>
+<p>缺点：</p>
+<ul><li>部门/区域有多少个，就要重复操作多少遍</li><li>只处理「数据」，不处理「格式」：多层表头、合并单元格、条件格式、列宽全部丢失</li><li>拆完通常要重新排版一遍，分组多的时候比重做还慢</li></ul>
+<p>适用：一次性任务、单行普通表、拆完不需要给人看格式。</p>
+<h2>方案二：Python 脚本（openpyxl / pandas）</h2>
+<p>最小示例：</p>
+<pre><code>import pandas as pd
+
+df = pd.read_excel("总表.xlsx", header=None)
+groups = df.groupby(df.columns[key_col])
+
+for name, sub in groups:
+    sub.to_excel(f"out/{name}.xlsx", index=False, header=False)</code></pre>
+<p>优点：格式和逻辑完全可控，能接后续流程（自动打 zip、自动发邮件）。</p>
+<p>缺点：</p>
+<ul><li>pandas 走的是「读数据」路线，样式、合并单元格、列宽同样会丢；要保留格式得改走 openpyxl 逐单元格复制（见第 5 篇）</li><li>双层分组（先按部门、再按人）需要自己写两层循环</li><li>表头行数、字段位置一变动就要改代码</li></ul>
+<p>适用：有编程基础、需求长期稳定、或需要接自动化流程的场景。</p>
+<h2>方案三：专用工具</h2>
+<p>这类工具的核心能力就是「保留格式」和「批量处理」，直接选一张表、指定拆分列即可。</p>
+<ul><li>拆出来的每个文件，表头、颜色、合并单元格、列宽与原表一致</li><li>支持整个文件夹批量处理</li><li>支持「二级拆分」：先按部门拆，再在每个部门内按人拆到一人一个文件</li><li>支持只对文件名含特定关键字的表执行二级规则</li></ul>
+<h2>三种方案对比</h2>
+<table><tr><th>维度</th><th>Power Query</th><th>Python 脚本</th><th>专用工具</th></tr><tr><td>上手成本</td><td>低</td><td>高</td><td>低</td></tr><tr><td>保留格式</td><td>否</td><td>需额外处理</td><td>是</td></tr><tr><td>批量处理</td><td>需重复操作</td><td>可</td><td>是</td></tr><tr><td>二级拆分</td><td>否</td><td>需自己实现</td><td>是</td></tr><tr><td>适合场景</td><td>一次性、无格式要求</td><td>长期、需接流程</td><td>长期、格式有要求</td></tr></table>
+<h2>总结</h2>
+<ol><li>先看表头结构：单行普通表，Power Query 就够；有多层表头或合并单元格，必须选保留格式的方案</li><li>看频率：偶尔一次用自带功能；每周都做、格式有要求，用能保留格式的工具</li><li>看是否需要二级拆分：需要拆到人（如工资条），Power Query 和多数脚本模板都做不了</li><li>无论哪种方案，操作前先备份原表，先拿小样本跑一遍</li></ol>
+<blockquote><p>文中的专用工具是 ExcelRouter，开源 MIT 协议：</p><p>GitHub：<a href="https://github.com/MarsandSea/ExcelRouter">https://github.com/MarsandSea/ExcelRouter</a></p><p>国内镜像：<a href="https://gitee.com/Marsandsea/Excelrouter">https://gitee.com/Marsandsea/Excelrouter</a></p></blockquote>
+
+  <div class="cta">
+    <h3>文中提到的工具：ExcelRouter</h3>
+    <p>把一个或一整批 Excel 按部门、区域、工号等字段拆成多个文件，<strong>完整保留复杂表头与格式</strong>，
+       可再按人二级拆分并打包 ZIP。Windows + 银河麒麟 / 统信 UOS，免费开源（MIT），
+       <strong>全程本机处理，不联网、不上传</strong>。</p>
+    <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">下载（国内 · Gitee）</a>
+    <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">GitHub 源码 ⭐</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="./">更多文章</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>

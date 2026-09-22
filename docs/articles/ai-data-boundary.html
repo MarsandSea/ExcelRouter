@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 AI 处理敏感数据前，先分清这三层的边界 — ExcelRouter</title>
+<meta name="description" content="把表格交给 AI 处理前，先分清模型层、执行层、存储层——怎么判断它到底联不联网。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/ai-data-boundary.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="用 AI 处理敏感数据前，先分清这三层的边界">
+<meta property="og:description" content="把表格交给 AI 处理前，先分清模型层、执行层、存储层——怎么判断它到底联不联网。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/articles/ai-data-boundary.html">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":"用 AI 处理敏感数据前，先分清这三层的边界","description":"把表格交给 AI 处理前，先分清模型层、执行层、存储层——怎么判断它到底联不联网。",
+ "mainEntityOfPage":"https://marsandsea.github.io/ExcelRouter/articles/ai-data-boundary.html",
+ "author":{"@type":"Person","name":"AbeLin"},
+ "publisher":{"@type":"Person","name":"AbeLin"},
+ "inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><a href="./"><b>实用文章</b></a>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>用 AI 处理敏感数据前，先分清这三层的边界</h1>
+  <p class="byline">作者 AbeLin · ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具</p>
+<h2>问题的本质</h2>
+<p>「AI 会不会泄露我的数据」这个问题问得太笼统。把它拆成三层，答案就清楚了：数据在哪一层，决定了它有没有出网。</p>
+<h2>第一层：模型层（生成建议）</h2>
+<p>你把数据贴进对话框，让 AI 帮你写方法、写脚本。这一层数据<strong>确实过了网</strong>，进入了服务方的请求链路。</p>
+<p>结论：这一层只喂脱敏的假数据。改字段名、把真实姓名换成「张三」、金额乘以随机系数，都行。目的是让它理解结构，不是让它看到真值。</p>
+<h2>第二层：执行层（实际处理）</h2>
+<p>写好的脚本、工具在你自己机器上跑，读本地文件、写本地目录。这一层<strong>不出网</strong>，断网也能运行。</p>
+<p>关键原则：<strong>敏感的事让 AI 想办法，别让 AI 碰真数据。</strong></p>
+<h2>第三层：存储层（结果落盘）</h2>
+<p>结果保存到哪里，同样决定了风险。</p>
+<ul><li>保存在本地目录 → 风险等价于你本地磁盘的安全策略</li><li>保存到网盘 / 在线文档 → 又回到「出网」</li><li>上传到在线转换网站 → 这层最危险，很多在线工具会把文件留存</li></ul>
+<h2>怎么判断一个工具到底联不联网</h2>
+<ol><li>断网测试：关掉 WiFi / 拔网线再跑，能正常运行基本就是纯本地</li><li>看隐私政策：出现「上传」「云端处理」「用于模型训练」这类字样要警惕</li><li>流量监控：运行时观察有没有对外请求（Windows 可用资源监视器）</li></ol>
+<p>这三条比任何宣传语都可靠。</p>
+<h2>企业环境的现实约束</h2>
+<p>很多单位有明文规定禁止向外部服务传输工作数据。本地工具天然不触碰这条红线，报备流程也简单得多。</p>
+<h2>总结</h2>
+<ol><li>把「让 AI 想方法」和「让程序去跑」分开，前者用假数据，后者在本地</li><li>敏感数据只在本机流转，断网可运行是硬性验收项</li><li>警惕在线转换类网站，那是最常见的泄露入口</li><li>选工具时先问一句：它断网能不能跑？</li></ol>
+<blockquote><p>我处理工资、客户资料时用的工具是本地跑的（ExcelRouter，开源 MIT）：</p><p>GitHub：<a href="https://github.com/MarsandSea/ExcelRouter">https://github.com/MarsandSea/ExcelRouter</a></p><p>Gitee 镜像：<a href="https://gitee.com/Marsandsea/Excelrouter">https://gitee.com/Marsandsea/Excelrouter</a></p></blockquote>
+
+  <div class="cta">
+    <h3>文中提到的工具：ExcelRouter</h3>
+    <p>把一个或一整批 Excel 按部门、区域、工号等字段拆成多个文件，<strong>完整保留复杂表头与格式</strong>，
+       可再按人二级拆分并打包 ZIP。Windows + 银河麒麟 / 统信 UOS，免费开源（MIT），
+       <strong>全程本机处理，不联网、不上传</strong>。</p>
+    <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">下载（国内 · Gitee）</a>
+    <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">GitHub 源码 ⭐</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="./">更多文章</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>

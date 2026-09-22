@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 生成代码的 4 个高危点：路径、删除、异常、循环（附修复代码） — ExcelRouter</title>
+<meta name="description" content="AI 生成代码的 4 个高危点：路径写死、无预览的破坏性操作、静默吞异常、无边界循环。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/ai-code-risks.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="AI 生成代码的 4 个高危点：路径、删除、异常、循环（附修复代码）">
+<meta property="og:description" content="AI 生成代码的 4 个高危点：路径写死、无预览的破坏性操作、静默吞异常、无边界循环。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/articles/ai-code-risks.html">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":"AI 生成代码的 4 个高危点：路径、删除、异常、循环（附修复代码）","description":"AI 生成代码的 4 个高危点：路径写死、无预览的破坏性操作、静默吞异常、无边界循环。",
+ "mainEntityOfPage":"https://marsandsea.github.io/ExcelRouter/articles/ai-code-risks.html",
+ "author":{"@type":"Person","name":"AbeLin"},
+ "publisher":{"@type":"Person","name":"AbeLin"},
+ "inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><a href="./"><b>实用文章</b></a>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>AI 生成代码的 4 个高危点：路径、删除、异常、循环（附修复代码）</h1>
+  <p class="byline">作者 AbeLin · ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具</p>
+<h2>引子</h2>
+<p>AI 写代码已经很快了，但快不等于能用。最近遇到一个典型问题：一个同步文件的脚本稳定运行了一年，某天工作目录被移动后直接报错「源目录不存在」。</p>
+<p>排查后发现第一行是：</p>
+<pre><code>SRC = r"D:\work\some-project\data"</code></pre>
+<p>写死的绝对路径。目录一挪，脚本就找不到目标了。</p>
+<p>这类问题在 AI 生成的代码里出现频率很高，因为它无法预知你以后会把项目放在哪。下面四条是我实际踩过的坑，附修复方式。</p>
+<h2>一、路径写死</h2>
+<p><strong>问题</strong>：绝对路径依赖具体机器和目录结构，换环境即失效。</p>
+<p><strong>修复</strong>：</p>
+<pre><code>from pathlib import Path
+
+BASE = Path(__file__).resolve().parent
+SRC = BASE / "data"
+OUT = BASE / "out"</code></pre>
+<p>用当前脚本的位置推导路径，脚本跟着项目走，移动到任何位置都不会失效。</p>
+<p>顺带一个 Windows 细节：路径字符串含反斜杠时要么加 <code>r</code> 前缀，要么统一改用 pathlib，避免转义问题。</p>
+<h2>二、破坏性操作没有预览</h2>
+<p><strong>问题</strong>：AI 很喜欢直接写整套删除 / 重建目录的逻辑。</p>
+<pre><code>import shutil
+shutil.rmtree(OUT)   # 直接执行，无法撤销
+OUT.mkdir()</code></pre>
+<p><strong>修复</strong>：给所有破坏性操作加 dry-run 开关，默认先打印。</p>
+<pre><code>def clean_dir(target, dry_run=True):
+    for p in target.rglob("*"):
+        if p.is_file():
+            if dry_run:
+                print("[dry-run] 将删除:", p)
+            else:
+                p.unlink()</code></pre>
+<p>原则：<strong>任何删除、覆盖、重建操作，先打印一遍让人确认。</strong></p>
+<h2>三、异常被静默吞掉</h2>
+<p><strong>问题</strong>：</p>
+<pre><code>try:
+    process()
+except:
+    pass</code></pre>
+<p>静默失败比崩溃危险得多——崩溃时你知道出事了，静默时你以为它成功了。</p>
+<p><strong>修复</strong>：</p>
+<pre><code>import logging
+
+try:
+    process()
+except Exception as e:
+    logging.exception("处理失败: %s", e)
+    raise</code></pre>
+<p>至少记录日志，并明确决定是继续还是中断。</p>
+<h2>四、没有边界检查就循环</h2>
+<p><strong>问题</strong>：一次性把大文件读进内存、几万行逐行写，小样本正常，真实数据就卡死或 OOM。</p>
+<p><strong>修复</strong>：改用只读模式 + 迭代器。</p>
+<pre><code>import openpyxl
+
+wb = openpyxl.load_workbook("big.xlsx", read_only=True)
+ws = wb.active
+for row in ws.iter_rows(values_only=True):
+    handle(row)
+wb.close()</code></pre>
+<p>检查点：</p>
+<ul><li>有没有分块处理？</li><li>有没有开只读模式？</li><li>内存峰值估算过吗？</li></ul>
+<h2>总结</h2>
+<ol><li>路径一律用 <code>Path(__file__).parent</code> 推导，禁止写死绝对路径</li><li>删除 / 覆盖类操作必须带 dry-run，先打印再执行</li><li>异常必须记录并显式处理，禁止空 <code>except</code></li><li>大文件用只读 + 迭代，避免全量读入内存</li><li>AI 负责写得快，review 的责任仍然在人——尤其是会动文件系统的那部分代码</li></ol>
+<blockquote><p>文中这四条坑，是我在维护一个开源小工具（ExcelRouter，批量拆 Excel 的桌面程序，MIT）</p><p>的过程中实际踩出来的，代码可以直接翻：</p><p>GitHub：<a href="https://github.com/MarsandSea/ExcelRouter">https://github.com/MarsandSea/ExcelRouter</a></p><p>国内镜像：<a href="https://gitee.com/Marsandsea/Excelrouter">https://gitee.com/Marsandsea/Excelrouter</a></p></blockquote>
+
+  <div class="cta">
+    <h3>文中提到的工具：ExcelRouter</h3>
+    <p>把一个或一整批 Excel 按部门、区域、工号等字段拆成多个文件，<strong>完整保留复杂表头与格式</strong>，
+       可再按人二级拆分并打包 ZIP。Windows + 银河麒麟 / 统信 UOS，免费开源（MIT），
+       <strong>全程本机处理，不联网、不上传</strong>。</p>
+    <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">下载（国内 · Gitee）</a>
+    <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">GitHub 源码 ⭐</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="./">更多文章</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>

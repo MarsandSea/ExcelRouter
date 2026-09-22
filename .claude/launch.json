@@ -4,8 +4,26 @@
     {
       "name": "promo-static-server",
       "runtimeExecutable": "py",
-      "runtimeArgs": ["-m", "http.server", "8730", "--directory", "docs/promo"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8730",
+        "--directory",
+        "docs/promo"
+      ],
       "port": 8730
+    },
+    {
+      "name": "docs-site",
+      "runtimeExecutable": "py",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8731",
+        "--directory",
+        "docs"
+      ],
+      "port": 8731
     }
   ]
 }

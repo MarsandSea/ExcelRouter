@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>把内部工具封装成 AI 可调用的技能：一次让 AI 真干活的实践 — ExcelRouter</title>
+<meta name="description" content="把一个内部工具封装成 AI 可调用的技能，让助手真的去干活而不只是给建议。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/tool-as-ai-skill.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="把内部工具封装成 AI 可调用的技能：一次让 AI 真干活的实践">
+<meta property="og:description" content="把一个内部工具封装成 AI 可调用的技能，让助手真的去干活而不只是给建议。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/articles/tool-as-ai-skill.html">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":"把内部工具封装成 AI 可调用的技能：一次让 AI 真干活的实践","description":"把一个内部工具封装成 AI 可调用的技能，让助手真的去干活而不只是给建议。",
+ "mainEntityOfPage":"https://marsandsea.github.io/ExcelRouter/articles/tool-as-ai-skill.html",
+ "author":{"@type":"Person","name":"AbeLin"},
+ "publisher":{"@type":"Person","name":"AbeLin"},
+ "inLanguage":"zh-CN"}
+</script>
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><a href="./"><b>实用文章</b></a>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>把内部工具封装成 AI 可调用的技能：一次让 AI 真干活的实践</h1>
+  <p class="byline">作者 AbeLin · ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具</p>
+<h2>大部分人对 AI 的使用停在前两步</h2>
+<ul><li>第一步：问问题</li><li>第二步：写文案</li></ul>
+<p>这两步的共同点是只在「生成」环节打转——AI 拿不到你的文件，也执行不了任何操作。</p>
+<p>要让它真正干活，需要第三步：<strong>给它工具</strong>。</p>
+<h2>思路：把确定性流程封装成技能</h2>
+<p>判断标准很简单：<strong>一件事如果你每周都要做，而且做法固定，那它就该被做成工具。</strong></p>
+<p>把这样的流程封装成一个「技能」（Skill），AI 在需要时自己加载、自己调用。以表格批量拆分为例，一次操作的完整链路是：</p>
+<pre><code>用户：把这个文件夹里几个月的明细，按区域拆开，每个区域里再按姓名拆到每个人
+  ↓
+AI：识别意图 → 匹配到拆分技能 → 读取技能说明 → 构造参数 → 调用脚本
+  ↓
+脚本：读取本地文件 → 按一级字段分组 → 组内按二级字段拆到人 → 输出 + 打包
+  ↓
+AI：汇报结果（生成了哪些文件、放在哪）</code></pre>
+<p>全程不需要用户写代码，也不需要打开 Excel。</p>
+<h2>技能包的最小结构</h2>
+<pre><code>excelrouter/
+├── SKILL.md          # 元信息 + 使用说明，AI 靠它判断何时加载、怎么调用
+└── scripts/
+    └── er_split.py   # 实际执行脚本</code></pre>
+<p>SKILL.md 的 frontmatter 需要提供足够的触发线索：</p>
+<pre><code>---
+name: excelrouter
+description: 表格拆分与批量分发技能。当用户想拆分 Excel、按部门/区域/姓名拆成多个文件时使用。
+---</code></pre>
+<p>关键点：<code>description</code> 里要写清<strong>用户会怎么描述这件事</strong>（拆表、拆分、按部门、一人一份、按网格拆），因为 AI 是拿这些词做匹配的。触发词写得太窄，就会出现「用户说了但 AI 没反应过来」。</p>
+<h2>和「让 AI 写完代码再粘过去跑」的区别</h2>
+<table><tr><th>维度</th><th>技能（Skill）</th><th>每次贴代码</th></tr><tr><td>上下文</td><td>AI 知道何时该用、参数怎么填</td><td>每次都要重新描述一遍</td></tr><tr><td>复用性</td><td>装一次，长期可用</td><td>每次复制粘贴</td></tr><tr><td>一致性</td><td>参数和流程固定，结果稳定</td><td>每次生成的代码都可能不同</td></tr><tr><td>心智负担</td><td>说人话即可</td><td>要检查代码、改路径、装依赖</td></tr></table>
+<p>打个比方：前者相当于装了个 App，后者是每次现场抄一段代码。</p>
+<h2>这种方式的边界（要说清楚）</h2>
+<ul><li>适合：明确的、重复的、做法固定的动作</li><li>不适合：一次性的、需要大量判断的事</li><li>前提：动作本身是确定性的，有清楚的输入和输出规范</li></ul>
+<h2>一个容易被忽略的设计点：保持双入口一致</h2>
+<p>同一套内核，同时提供图形界面和技能接口：</p>
+<ul><li>普通同事用图形界面（免安装、零命令行）</li><li>用 AI 工具的人直接说人话</li></ul>
+<p><strong>两者必须共用同一套核心代码</strong>，否则会出现「你用 AI 拆的和他用界面拆的格式不一样」，协作时就是事故。</p>
+<h2>实践案例</h2>
+<p>ExcelRouter 就是这个思路的一个实现：桌面版和 AI 技能版共用同一套内核，拆出来的结果行为一致。技能是开源的（MIT），源码可直接查阅。</p>
+<p>当然，不用 AI 工具也有完整的桌面版，用不用 AI 不影响功能。</p>
+<h2>总结</h2>
+<ol><li>让 AI 干活的关键是「给它工具」，而不只是给它数据</li><li>把做法固定、周期性重复的流程封装成技能，装一次长期复用</li><li>SKILL.md 的 description 要覆盖用户的真实说法，这是触发的关键</li><li>双入口（界面 + AI）必须共用同一套内核，保证结果一致</li><li>明确边界：只适合确定性、可重复的动作</li></ol>
+<blockquote><p>案例中的技能和桌面版都在这个仓库（开源 MIT）：</p><p>GitHub：<a href="https://github.com/MarsandSea/ExcelRouter">https://github.com/MarsandSea/ExcelRouter</a></p><p>国内镜像：<a href="https://gitee.com/Marsandsea/Excelrouter">https://gitee.com/Marsandsea/Excelrouter</a></p></blockquote>
+
+  <div class="cta">
+    <h3>文中提到的工具：ExcelRouter</h3>
+    <p>把一个或一整批 Excel 按部门、区域、工号等字段拆成多个文件，<strong>完整保留复杂表头与格式</strong>，
+       可再按人二级拆分并打包 ZIP。Windows + 银河麒麟 / 统信 UOS，免费开源（MIT），
+       <strong>全程本机处理，不联网、不上传</strong>。</p>
+    <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">下载（国内 · Gitee）</a>
+    <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">GitHub 源码 ⭐</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="./">更多文章</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>

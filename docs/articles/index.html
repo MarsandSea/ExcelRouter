@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 拆分实用文章 — ExcelRouter</title>
+<meta name="description" content="围绕 Excel 批量拆分的实用文章：按列/按部门拆分的几种做法对比、工资条一人一份怎么批量做、拆分后怎么保住原格式、把表格交给 AI 处理的数据边界。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/articles/">
+<link rel="icon" href="../logo.png">
+<link rel="stylesheet" href="article.css">
+</head>
+<body>
+
+<nav class="top"><div class="wrap">
+  <a href="../">← ExcelRouter</a><span>·</span><b>实用文章</b>
+</div></nav>
+
+<div class="wrap">
+<article>
+  <h1>实用文章</h1>
+  <p class="byline">Excel 批量拆分的几种做法、踩过的坑，以及把表格交给 AI 处理时的边界</p>
+
+  <ul class="cards">
+    <li><a href="excel-split-by-column.html">Excel 按列批量拆分成多个工作簿：三种方案实测对比</a><p>按列拆分的三条路：Power Query、Python 脚本、专用工具，含耗时与格式保留对比。</p></li>
+    <li><a href="payroll-split-per-person.html">工资表批量拆分成单人文件：邮件合并 / 脚本 / 工具三条路</a><p>工资表拆成一人一份：邮件合并、脚本生成、本地批量工具，三种做法的边界在哪。</p></li>
+    <li><a href="ai-data-boundary.html">用 AI 处理敏感数据前，先分清这三层的边界</a><p>把表格交给 AI 处理前，先分清模型层、执行层、存储层——怎么判断它到底联不联网。</p></li>
+    <li><a href="ai-code-risks.html">AI 生成代码的 4 个高危点：路径、删除、异常、循环（附修复代码）</a><p>AI 生成代码的 4 个高危点：路径写死、无预览的破坏性操作、静默吞异常、无边界循环。</p></li>
+    <li><a href="python-split-excel-keep-format.html">Python 拆分 Excel 保留原格式：表头、合并单元格怎么处理</a><p>用 openpyxl 拆分 Excel 还保住原格式：表头、合并单元格、行号错位的最小可用实现。</p></li>
+    <li><a href="tool-as-ai-skill.html">把内部工具封装成 AI 可调用的技能：一次让 AI 真干活的实践</a><p>把一个内部工具封装成 AI 可调用的技能，让助手真的去干活而不只是给建议。</p></li>
+  </ul>
+
+  <div class="cta">
+    <h3>ExcelRouter</h3>
+    <p>整个文件夹一键拆完：按部门、区域、工号等字段自动拆分，保留原格式，打包分发。
+       免费开源（MIT），数据仅在本机处理。</p>
+    <a class="btn" href="../">看看它能做什么</a>
+    <a class="btn ghost" href="https://gitee.com/Marsandsea/Excelrouter/releases">直接下载</a>
+  </div>
+</article>
+</div>
+
+<footer>
+  <p><a href="../">ExcelRouter 首页</a> · <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> · <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a></p>
+  <p>作者 AbeLin · MIT 开源 · 数据仅在本机处理</p>
+</footer>
+
+</body>
+</html>
