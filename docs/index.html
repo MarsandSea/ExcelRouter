@@ -265,10 +265,13 @@
       <td><strong>优先选这个</strong>，解压后双击 <code>ExcelRouter.exe</code></td></tr>
   <tr><td><code>ExcelRouter-vX.X.X.exe</code></td><td>Windows 10/11 64 位</td>
       <td>单文件版，下载即用；个别杀毒软件可能误报（见下方 FAQ）</td></tr>
-  <tr><td><code>...-linux-x86_64.tar.gz</code></td><td>银河麒麟 V10 / 统信 UOS</td>
-      <td>兆芯、海光、Intel 机型</td></tr>
-  <tr><td><code>...-linux-aarch64.tar.gz</code></td><td>银河麒麟 V10 / 统信 UOS</td>
-      <td>飞腾、鲲鹏机型（含华为擎云笔记本）</td></tr>
+  <tr><td><code>...-linux-x86_64.tar.gz</code><br><code>...-linux-aarch64.tar.gz</code></td>
+      <td>银河麒麟 V10 / 统信 UOS</td>
+      <td><strong>按需构建</strong>：代码已完整支持（x86_64 与 aarch64 双架构，
+          真机实测过），但 Linux 产物需在目标机器上打包才能保证兼容，
+          因此不随每个版本自动发布。需要的话
+          <a href="https://github.com/MarsandSea/ExcelRouter/issues/new">提个 Issue</a>
+          说明架构，我构建后挂到 Release 上。</td></tr>
 </table>
 
 <p><strong>信创机器怎么装</strong>：终端敲 <code>uname -m</code> 看架构，下对应的 tar.gz，
