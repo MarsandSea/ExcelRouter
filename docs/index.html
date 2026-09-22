@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 按部门/区域批量拆分成多个文件（保留原格式）— ExcelRouter 免费开源工具</title>
+<meta name="description" content="ExcelRouter 是一个免费开源（MIT）的 Excel 批量拆分工具：把一个或一整批 Excel 按部门、区域、工号、姓名等任意字段拆成多个文件，完整保留复杂表头与单元格格式，可再按人二级拆分并打包 ZIP。支持 Windows 与国产化 Linux（银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64）。全程本机处理，不联网、不上传。">
+<link rel="canonical" href="https://marsandsea.github.io/ExcelRouter/">
+<link rel="icon" href="logo.png">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="Excel 按部门/区域批量拆分成多个文件（保留原格式）— ExcelRouter">
+<meta property="og:description" content="免费开源的 Excel 批量拆分工具：整个文件夹一键拆完，保留复杂表头格式，可拆到人并打包 ZIP。Windows + 麒麟/UOS，数据不出本机。">
+<meta property="og:url" content="https://marsandsea.github.io/ExcelRouter/">
+<meta property="og:image" content="https://marsandsea.github.io/ExcelRouter/screenshot_output.jpg">
+<meta name="twitter:card" content="summary_large_image">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "ExcelRouter",
+  "alternateName": "Excel 智能拆分工具",
+  "applicationCategory": "BusinessApplication",
+  "operatingSystem": "Windows 10/11 64-bit, 银河麒麟 V10, 统信 UOS (x86_64 / aarch64)",
+  "description": "把一个或一整批 Excel 表格按任意字段（部门、区域、工号、姓名等）的取值批量拆分成多个文件，完整保留原有复杂表头与单元格格式，可选再按人二级拆分，并按组打包 ZIP 分发。全程本机运行，不联网、不上传数据。另含 PDF 按网格加密分发模式。",
+  "url": "https://marsandsea.github.io/ExcelRouter/",
+  "downloadUrl": "https://github.com/MarsandSea/ExcelRouter/releases/latest",
+  "codeRepository": "https://github.com/MarsandSea/ExcelRouter",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "author": {"@type": "Person", "name": "AbeLin"},
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "CNY"},
+  "featureList": [
+    "按任意字段把 Excel 拆分成多个文件",
+    "整个文件夹批量拆分",
+    "保留多层合并表头与单元格格式",
+    "同一取值跨多个源文件自动合并",
+    "二级拆分到每个人（工资条一人一份）",
+    "按分组自动打包 ZIP",
+    "PDF 按网格加密 + 水印分发",
+    "支持银河麒麟 V10 / 统信 UOS 信创环境"
+  ]
+}
+</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type":"Question","name":"怎么把一个 Excel 按某一列拆分成多个文件？",
+     "acceptedAnswer":{"@type":"Answer","text":"用 ExcelRouter：选表格 → 在「拆分字段」下拉里选那一列 → 开始拆分。该列有几个不同的取值就生成几个文件，表头与格式按原样保留，不需要写 VBA 或 Power Query。"}},
+    {"@type":"Question","name":"Excel 拆分后格式全丢了怎么办？",
+     "acceptedAnswer":{"@type":"Answer","text":"Power Query 和多数脚本方案只搬数据，会洗掉格式。ExcelRouter 的默认「标准（保留格式）」模式用 openpyxl 逐格复制字体、颜色、边框、数字格式、列宽与合并的表头单元格，拆出来的文件和原表长得一样；赶时间时可切「极速（纯数据）」。"}},
+    {"@type":"Question","name":"工资条怎么一人一份批量拆？",
+     "acceptedAnswer":{"@type":"Answer","text":"勾选「同时拆到人」并指定姓名所在字段，一次运行同时产出「按部门/区域的汇总」和「每人一个独立文件」两套结果，同一个人分散在多个月份表里的行会自动合并到他那一份里。"}},
+    {"@type":"Question","name":"处理工资、客户资料这类数据，会不会上传到服务器？",
+     "acceptedAnswer":{"@type":"Answer","text":"不会。ExcelRouter 是本机运行的桌面程序，不联网、不上传、无遥测，断网状态下功能完全正常，源码在 GitHub 上以 MIT 协议公开可查。"}},
+    {"@type":"Question","name":"银河麒麟 / 统信 UOS 上能用吗？",
+     "acceptedAnswer":{"@type":"Answer","text":"能。提供 linux-x86_64（兆芯/海光/Intel）与 linux-aarch64（飞腾/鲲鹏，含华为擎云笔记本）两种免安装 tar.gz，解压后运行「启动ExcelRouter.sh」即可，目标机不需要装 Python。"}}
+  ]
+}
+</script>
+
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f7f8fa; --border:#e4e7eb;
+    --ink:#15181c; --ink2:#454c54; --ink3:#79828b;
+    --brand:#0E7FD1; --brand-d:#0b64a6;
+    --green:#0b8a3e; --greenbg:#eefaf1; --greenbd:#bbe5c9;
+    --amber:#b54708; --amberbg:#fff8ec; --amberbd:#fedf89;
+    --red:#d92d20;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+  a{color:var(--brand);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* hero */
+  .hero{padding:64px 0 46px;text-align:center;border-bottom:1px solid var(--border)}
+  .logo{width:60px;height:60px;margin:0 auto 20px;display:block}
+  h1{font-size:33px;line-height:1.35;margin:0 0 16px;letter-spacing:-.02em;font-weight:750}
+  .lead{font-size:17px;color:var(--ink2);margin:0 auto 10px;max-width:720px}
+  .brandline{font-size:14px;color:var(--ink3);margin:0 0 26px}
+  .brandline b{color:var(--ink);font-weight:650}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:18px}
+  .btn{display:inline-block;padding:13px 26px;border-radius:9px;font-weight:650;font-size:15.5px;
+       background:var(--brand);color:#fff;border:1px solid var(--brand)}
+  .btn:hover{background:var(--brand-d);text-decoration:none}
+  .btn.ghost{background:#fff;color:var(--ink);border-color:var(--border)}
+  .btn.ghost:hover{background:var(--panel)}
+  .trust{font-size:13.5px;color:var(--ink3)}
+  .trust b{color:var(--green)}
+
+  h2{font-size:23px;margin:56px 0 18px;letter-spacing:-.01em;padding-bottom:9px;border-bottom:2px solid var(--ink)}
+  h3{font-size:17px;margin:28px 0 8px}
+  p{margin:0 0 14px;color:var(--ink2)}
+  strong{color:var(--ink);font-weight:650}
+  code{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:1px 6px;
+       font-size:13.5px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#b03060}
+
+  ul.plain{margin:0 0 18px;padding-left:22px;color:var(--ink2)}
+  ul.plain li{margin:7px 0}
+
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:0 0 26px}
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 18px 16px}
+  .step .n{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;
+     border-radius:50%;background:var(--brand);color:#fff;font-size:13.5px;font-weight:700;margin-bottom:10px}
+  .step h3{margin:0 0 6px;font-size:16px}
+  .step p{margin:0;font-size:14.5px}
+
+  table{width:100%;border-collapse:collapse;margin:0 0 22px;font-size:14.5px}
+  th{text-align:left;background:var(--panel);padding:10px 12px;border:1px solid var(--border);
+     font-weight:650;font-size:13.5px;color:var(--ink2)}
+  td{padding:10px 12px;border:1px solid var(--border);vertical-align:top;color:var(--ink2)}
+  td:first-child{color:var(--ink);font-weight:550}
+  .yes{color:var(--green);font-weight:700}
+  .no{color:var(--red);font-weight:700}
+  .part{color:var(--amber);font-weight:700}
+
+  figure{margin:0 0 24px}
+  figure img{width:100%;border:1px solid var(--border);border-radius:8px;display:block}
+  figcaption{font-size:13.5px;color:var(--ink3);margin-top:8px;text-align:center}
+  .shots{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+
+  .callout{background:var(--greenbg);border:1px solid var(--greenbd);border-radius:9px;padding:16px 18px;margin:0 0 20px}
+  .callout.warn{background:var(--amberbg);border-color:var(--amberbd)}
+  .callout p:last-child{margin:0}
+
+  details{border:1px solid var(--border);border-radius:8px;padding:0 16px;margin-bottom:10px;background:#fff}
+  details[open]{background:var(--panel)}
+  summary{cursor:pointer;font-weight:650;padding:13px 0;color:var(--ink);font-size:15.5px;list-style-position:inside}
+  details p{margin:0 0 13px}
+
+  footer{margin-top:64px;padding:26px 0 56px;border-top:1px solid var(--border);
+         font-size:13.5px;color:var(--ink3);text-align:center}
+  footer a{color:var(--ink2)}
+
+  @media(max-width:700px){
+    h1{font-size:26px}
+    .steps{grid-template-columns:1fr}
+    .shots{grid-template-columns:1fr}
+    table{font-size:13.5px}
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14171a; --panel:#1c2126; --border:#2b3238;
+      --ink:#eef1f4; --ink2:#b6bfc7; --ink3:#8b959e;
+      --brand:#38BDF8; --brand-d:#7dd3fc;
+      --greenbg:#10261a; --greenbd:#1f5334; --green:#4ade80;
+      --amberbg:#2a1f10; --amberbd:#5c421c; --amber:#fbbf24;
+      --red:#f87171;
+    }
+    :root:not([data-theme="light"]) .btn{color:#06202e}
+    :root:not([data-theme="light"]) .btn.ghost{background:var(--panel);color:var(--ink)}
+    :root:not([data-theme="light"]) details{background:var(--bg)}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <img class="logo" src="logo.svg" alt="ExcelRouter" onerror="this.src='logo.png'">
+    <h1>把一个 Excel 按部门、区域、工号拆成多个文件<br>——整个文件夹一次拆完，格式原样保留</h1>
+    <p class="lead">不用写 VBA，不用 Power Query，不用一个个复制另存。选表格、选字段、点开始，
+      每个取值一个文件，复杂的多层合并表头和单元格格式都在。</p>
+    <p class="brandline"><b>ExcelRouter</b> · Excel 智能拆分工具 · 免费开源（MIT）</p>
+
+    <div class="cta">
+      <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">⬇ 下载（国内 · Gitee）</a>
+      <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter/releases/latest">GitHub Releases</a>
+      <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">查看源码 ⭐</a>
+    </div>
+    <p class="trust">🔒 <b>数据仅在本机处理</b>，不联网、不上传、无遥测 · 免安装免注册 · Windows + 银河麒麟 / 统信 UOS</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+<h2 id="what">它解决的是哪件事</h2>
+
+<p>如果你每个月都要干下面这类活，这个工具就是为它写的：</p>
+
+<ul class="plain">
+  <li>全公司销售 / 结算明细，<strong>按部门或区域拆成多个文件</strong>，分别发给各负责人；</li>
+  <li>工资条、考核表，<strong>一人一个独立文件</strong>，避免任何人看到别人的数据；</li>
+  <li>门店 / 网格 / 项目台账，<strong>按编号拆分</strong>并自动打包成 ZIP 群发；</li>
+  <li>学校成绩单，<strong>按班级拆分</strong>，班主任只拿到自己班的表；</li>
+  <li>每月一份表、连着十几个月，<strong>把同一个部门的数据跨文件合并成一张汇总表</strong>；</li>
+  <li>一份通报 PDF 要发给多个网格，<strong>每个网格一个专属密码 + 专属水印</strong>（泄露可溯源）。</li>
+</ul>
+
+<div class="callout">
+  <p><strong>核心差别在两个地方：</strong>一是<b>格式</b>——拆出来的文件，多层表头、合并单元格、
+  字体颜色、列宽跟原表一模一样，收件人拿到就能直接看，不用二次排版；二是<b>批量</b>——
+  丢进去的可以是<b>整个文件夹</b>，几十张表一次拆完，同一个部门散落在多张表里的行还能自动并成一张。</p>
+</div>
+
+<h2 id="how">三步就能拆完</h2>
+
+<div class="steps">
+  <div class="step"><span class="n">1</span><h3>选表格</h3>
+    <p>选一个 Excel 文件，或者直接选<b>整个文件夹</b>批量拆。也可以把文件拖进窗口。</p></div>
+  <div class="step"><span class="n">2</span><h3>选字段</h3>
+    <p>表头自动识别（哪怕不在第一行），下拉里选「按哪一列拆」，软件当场列出会拆成哪几组。</p></div>
+  <div class="step"><span class="n">3</span><h3>开始拆分</h3>
+    <p>结果自动出现在数据旁边，按组打包好 ZIP。完成后给出摘要：拆了几组、几个文件、多少行。</p></div>
+</div>
+
+<div class="shots">
+  <figure>
+    <img src="screenshot_source.jpg" alt="源表：大标题 + 分组标签 + 列名共三行的复杂表头" loading="lazy">
+    <figcaption>源表：三行复杂表头也能自动找到真正的列名行</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshot_output.jpg" alt="输出结果：按区域分组，每组含汇总 xlsx 与 ZIP 包" loading="lazy">
+    <figcaption>输出：按分组成文件夹，每组一个 ZIP，可再拆到每个人</figcaption>
+  </figure>
+</div>
+
+<h2 id="compare">和其他几种做法比</h2>
+
+<table>
+  <tr>
+    <th>能力</th><th>ExcelRouter</th><th>Power Query</th><th>VBA 宏</th><th>在线拆分网站</th>
+  </tr>
+  <tr><td>保留多层 / 合并表头与单元格格式</td>
+      <td class="yes">✔ 完整保留</td><td class="no">✘ 会被洗掉</td><td class="part">△ 要自己写复制逻辑</td><td class="no">✘ 基本丢失</td></tr>
+  <tr><td>一次处理整个文件夹</td>
+      <td class="yes">✔</td><td class="no">✘ 逐个重做</td><td class="part">△ 要改代码</td><td class="no">✘ 多为单文件</td></tr>
+  <tr><td>同一取值跨多个源文件合并</td>
+      <td class="yes">✔ 自动</td><td class="no">✘</td><td class="no">✘</td><td class="no">✘</td></tr>
+  <tr><td>二级拆分到每个人（工资条）</td>
+      <td class="yes">✔ 一次跑完两套结果</td><td class="no">✘</td><td class="part">△ 等于重写</td><td class="no">✘</td></tr>
+  <tr><td>数据是否离开本机</td>
+      <td class="yes">✔ 不联网，断网可用</td><td class="yes">✔ 本机</td><td class="yes">✔ 本机</td><td class="part">△ 即便宣称本地处理，仍需把文件交给网页</td></tr>
+  <tr><td>银河麒麟 / 统信 UOS（信创）</td>
+      <td class="yes">✔ x86_64 + aarch64</td><td class="no">✘</td><td class="no">✘</td><td class="part">△ 看浏览器</td></tr>
+  <tr><td>价格</td>
+      <td class="yes">免费 · MIT 开源</td><td>Excel 自带</td><td>免费</td><td class="part">常有免费额度 / 付费墙</td></tr>
+</table>
+
+<div class="callout warn">
+  <p><strong>关于「在线工具也说不上传」这件事，值得多说一句。</strong>
+  浏览器里跑的拆分工具确实有真本地处理的，但沙箱的限制摆在那儿：<b>保留多层合并表头 +
+  数据区格式 + 跨文件合并</b>这几件事很难做到，更没法让你把<b>一整个文件夹</b>丢进去。
+  如果你拆完还得重新排版一遍，那其实并没有省下时间。</p>
+</div>
+
+<h2 id="download">下载</h2>
+
+<p><strong>普通用户不需要安装 Python</strong>，下载解压就能用。国内用户走 Gitee 更快。</p>
+
+<table>
+  <tr><th>产物</th><th>平台</th><th>说明</th></tr>
+  <tr><td><code>ExcelRouter-vX.X.X-win64.zip</code></td><td>Windows 10/11 64 位</td>
+      <td><strong>优先选这个</strong>，解压后双击 <code>ExcelRouter.exe</code></td></tr>
+  <tr><td><code>ExcelRouter-vX.X.X.exe</code></td><td>Windows 10/11 64 位</td>
+      <td>单文件版，下载即用；个别杀毒软件可能误报（见下方 FAQ）</td></tr>
+  <tr><td><code>...-linux-x86_64.tar.gz</code></td><td>银河麒麟 V10 / 统信 UOS</td>
+      <td>兆芯、海光、Intel 机型</td></tr>
+  <tr><td><code>...-linux-aarch64.tar.gz</code></td><td>银河麒麟 V10 / 统信 UOS</td>
+      <td>飞腾、鲲鹏机型（含华为擎云笔记本）</td></tr>
+</table>
+
+<p><strong>信创机器怎么装</strong>：终端敲 <code>uname -m</code> 看架构，下对应的 tar.gz，
+解压后运行 <code>./启动ExcelRouter.sh</code>（不要直接运行 <code>ExcelRouter</code> 那个文件，
+启动脚本会设置中文环境与输入法变量）。</p>
+
+<div class="cta" style="justify-content:flex-start">
+  <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">Gitee 下载（国内）</a>
+  <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter/releases/latest">GitHub Releases</a>
+</div>
+
+<h2 id="faq">常见问题</h2>
+
+<details open>
+  <summary>怎么把一个 Excel 按某一列拆分成多个文件？</summary>
+  <p>选表格 → 在「拆分字段」下拉里选那一列 → 点开始。那列有几个不同的取值就生成几个文件，
+  文件名就是取值本身。不需要事先把取值列出来，软件会自己枚举并在开始前告诉你会拆成哪几组。</p>
+</details>
+
+<details>
+  <summary>Excel 拆分后格式全丢了，怎么保留原来的表头和样式？</summary>
+  <p>Power Query 和大多数脚本方案只搬数据，格式会被洗掉。ExcelRouter 默认的
+  <b>「标准（保留格式）」</b>模式会逐格复制字体、颜色、边框、数字格式、列宽以及合并的表头单元格，
+  拆出来的表和原表长得一样。文件很多、赶时间又不在乎排版时，可以切到
+  <b>「极速（纯数据）」</b>，速度会快很多。</p>
+  <p>两个已知限制：<code>.xls</code> 老格式转换后只保留数据；<b>数据区</b>的合并单元格暂不保留（表头的正常保留）。</p>
+</details>
+
+<details>
+  <summary>工资条怎么一人一份批量拆出来？</summary>
+  <p>勾上「同时拆到人」并指定姓名所在的字段。一次运行会同时产出两套结果：按部门/区域的
+  <b>汇总</b>，和<b>每人一个独立文件</b>。同一个人分散在多个月份表里的行会自动合并进他那一份。
+  还可以限定「只对文件名含『工资』的表拆到人」，一批表里混两种规则也能一次跑完。</p>
+</details>
+
+<details>
+  <summary>处理工资、客户资料这类敏感数据，会不会被上传？</summary>
+  <p>不会。它是本机运行的桌面程序，<b>不联网、不上传、没有任何遥测或自动上报</b>，
+  拔网线也能正常拆。源码以 MIT 协议公开在 GitHub 上，这一点可以自己翻代码核实。</p>
+</details>
+
+<details>
+  <summary>银河麒麟 / 统信 UOS 上能用吗？</summary>
+  <p>能。提供 x86_64 与 aarch64（飞腾 / 鲲鹏）两种免安装 tar.gz，目标机不需要装 Python。
+  解压后运行 <code>./启动ExcelRouter.sh</code>。这是目前同类工具里少有的信创支持。</p>
+</details>
+
+<details>
+  <summary>杀毒软件报毒，是不是有问题？</summary>
+  <p>是误报，PyInstaller 打包的 Python 程序几乎都会遇到。优先下载
+  <code>win64.zip</code>（解压版）而不是单文件 exe，误报率明显更低。
+  详细说明见 <a href="https://github.com/MarsandSea/ExcelRouter/blob/main/docs/FAQ.md#杀毒软件误报">FAQ · 杀毒软件误报</a>。</p>
+</details>
+
+<details>
+  <summary>它不做什么？</summary>
+  <p>说清楚边界，免得下载了才发现不合用：<b>不做</b>表头扁平化 / 多层表头降维（定位是原样保留）；
+  <b>不做</b>把多个表合并成一个总表的通用合并（只在拆分时支持「同一取值跨文件合并」）；
+  <b>不做</b>数据透视、清洗与统计分析；<b>没有 Mac 版，也没有在线版</b>
+  （在线版意味着要上传数据，与「数据不出本机」冲突）。</p>
+</details>
+
+<h2 id="more">继续了解</h2>
+
+<ul class="plain">
+  <li><a href="https://github.com/MarsandSea/ExcelRouter/blob/main/docs/%E4%BD%BF%E7%94%A8%E6%8C%87%E5%BC%95.md">📖 3 分钟上手指引</a>——跟着样例完整走一遍</li>
+  <li><a href="https://github.com/MarsandSea/ExcelRouter/blob/main/docs/FAQ.md">❓ 完整 FAQ</a>——杀毒误报、公式列空白、.xls 支持范围、大文件进度</li>
+  <li><a href="https://github.com/MarsandSea/ExcelRouter">💻 GitHub 源码仓库</a>——MIT 协议，欢迎 Issue 与 ⭐ Star</li>
+  <li><a href="https://gitee.com/Marsandsea/Excelrouter">🇨🇳 Gitee 镜像</a>——国内访问更快，同步发版</li>
+  <li>已经在用 Claude Code 这类 AI 助手？还有配套的 <b>ExcelRouter Skill</b>，
+      说人话就能让它调同一套内核拆表，软件都不用打开。</li>
+</ul>
+
+</main>
+
+<footer>
+  <p><b>ExcelRouter</b> · Excel 智能拆分工具 · 作者 <b>AbeLin</b> · MIT 开源 · 永久免费</p>
+  <p>🔒 数据仅在本机处理，不上传任何服务器 ·
+     <a href="https://github.com/MarsandSea/ExcelRouter">GitHub</a> ·
+     <a href="https://gitee.com/Marsandsea/Excelrouter">Gitee</a> ·
+     <a href="https://github.com/MarsandSea/ExcelRouter/issues">反馈问题</a></p>
+</footer>
+
+</body>
+</html>
