@@ -146,6 +146,9 @@ formatting, merge across files, optional per-person output — free, open-source
 | `ExcelRouter-vX.X.X-linux-aarch64.tar.gz` | 麒麟 / UOS（飞腾、鲲鹏，含华为擎云笔记本） | 解压后运行 `启动ExcelRouter.sh` |
 
 > **不确定自己是哪个架构？** 终端里敲 `uname -m`：出 `x86_64` 选第三个，出 `aarch64` 选第四个。
+>
+> **麒麟产物按需发布，版本号可能落后于 Windows** —— 每个版本都在真机上验收成本太高，
+> 所以只在核心逻辑有实质变化时才更新。想要某个版本的麒麟包可以提 Issue。
 > 如果启动时报 `GLIBC_2.xx not found`，说明你的系统比打包机更旧——
 > 在你自己的机器上跑一遍 `build_linux.sh` 重新打一份即可（见 [FAQ](docs/FAQ.md)）。
 

@@ -25,17 +25,13 @@
    git tag vX.X.X
    git push origin vX.X.X
    ```
-5. 去仓库 **Actions** 页看 `Release` 和 `Release (Linux)` 两个工作流跑完
-   （各约 3-8 分钟；它们**彼此独立**，Linux 挂了不会影响 Windows 发版）。
-   跑绿后 **Releases** 页会出现四个产物：
-   - `ExcelRouter-vX.X.X-win64.zip`（Windows onedir，推荐分发）
-   - `ExcelRouter-vX.X.X.exe`（Windows onefile，备选）
-   - `ExcelRouter-vX.X.X-linux-x86_64.tar.gz`（麒麟 / UOS，兆芯/海光/Intel）
-   - `ExcelRouter-vX.X.X-linux-aarch64.tar.gz`（麒麟 / UOS，飞腾/鲲鹏）
+5. 去仓库 **Actions** 页看 `Release` 工作流跑完（约 3-5 分钟），跑绿后
+   **Releases** 页会自动出现两个 Windows 产物：
+   - `ExcelRouter-vX.X.X-win64.zip`（onedir，推荐分发）
+   - `ExcelRouter-vX.X.X.exe`（onefile，备选）
+
+   **麒麟产物不在这一步自动产生** —— 它是独立的手动流水线，按需发布，见 §1.7。
 6. 下载到本机，脱离开发环境（换个目录）冒烟测试：能正常打开、识别列、跑通一次拆分。
-   **麒麟产物必须在真机上冒烟**，重点看三件事：窗口能起来、界面中文不是方块、
-   PDF 水印里的中文不是 `???`（日志里应有一行「🔤 水印字体：...」）。
-   详细验收清单见 §1.7。
 7. **Release 说明里带上 AI 助手引导**（固定一句，别漏）：「在用 AI 助手
    （WorkBuddy / Claude / WPS 灵犀）？同内核 Skill 版见
    [excelrouter-skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)，
@@ -52,7 +48,29 @@ CI 配置见 `.github/workflows/release.yml`（Windows）与 `.github/workflows/
 
 ---
 
-## 1.7 麒麟 / 信创版发版补充（v2.8.0 起）
+## 1.7 麒麟 / 信创版发版（v2.8.0 起，**按需发布**）
+
+### 节奏：不用每个版本都跟
+
+麒麟版**刻意不跟随 tag 自动发布**，`Release (Linux)` 工作流只能手动触发：
+Actions 页 → `Release (Linux)` → Run workflow → 填 tag 名（如 `v2.8.0`）。
+
+这么设计的理由：麒麟产物应当在真机上验收过才发给同事（清单见本节末尾），
+而真机验收是有成本的。每个 tag 都自动发一份没人验过的 Linux 包，
+同事下载到手里出问题，比「麒麟版停在上一个版本」糟糕得多。
+Windows 侧完全不受影响，照常每个 tag 自动发。
+
+**什么时候值得更新麒麟版：**
+
+- core 的拆分 / PDF 逻辑有实质变化（`core/splitter.py`、`core/pdf_dist.py`）
+- 修了影响 Linux 的 bug（平台兼容层、字体探测、打包脚本）
+- 麒麟用户实际报了问题
+- 攒了几个版本，想统一推一次
+
+**不值得更新的：** 纯 Windows 的 UI 微调、杀毒误报处理、只动文档的版本。
+麒麟版版本号落后于 Windows 是**正常状态**，README 的产物表已经说明了这一点。
+
+发布后记得在 Release 说明里提一句「本版含/不含麒麟产物」，免得用户在附件列表里找不到。
 
 ### CI 与真机的分工
 

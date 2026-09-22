@@ -33,7 +33,10 @@
 > 麒麟上**每一次拖放都会被拒**）。⑤ UI 字体候选加 Noto CJK / 文泉驿 / 方正。
 > ⑥ 窗口图标补 `iconphoto(app.png)`（X11 的 `iconbitmap` 只认 XBM）。
 > 打包：新增 `build_linux.sh`（**在目标机器上跑**）+ `packaging/launcher.sh.in`，
-> 只产 onedir tar.gz。另修一个平台无关的真 bug：`core/splitter.py` 的 `__tmp__`
+> 只产 onedir tar.gz。**麒麟版按需发布、不跟随 tag 自动跑**
+> （`release-linux.yml` 只有 `workflow_dispatch`）——真机验收有成本，
+> 发一份没验过的包比版本落后更糟；判断标准与操作见 `docs/RELEASING.md` §1.7。
+> 另修一个平台无关的真 bug：`core/splitter.py` 的 `__tmp__`
 > 过滤原来大小写敏感，`X__TMP__.XLSX` 会被当数据重新吃进去（回归用例已补）。
 
 > **v2.7.2：修「到人」拆分名实不符 bug（2026-09）**。现象：同人跨多个源文件（7/8/9 月表都有
@@ -203,7 +206,7 @@ excel-router/
 │   └── screenshot_*.jpg       # README 用截图
 ├── .github/
 │   ├── workflows/release.yml       # tag push v* 触发：测试→双 PyInstaller 构建→打包→发 Release
-│   ├── workflows/release-linux.yml # 同 tag 触发，独立 workflow：almalinux:8 容器 × 双架构
+│   ├── workflows/release-linux.yml # ★ 只手动触发（按需发布，不跟 tag）：almalinux:8 × 双架构
 │   └── ISSUE_TEMPLATE/        # Bug/Question 结构化表单，config.yml 禁用空白 issue
 └── tests/
     ├── test_platform_compat.py # 平台兼容层单测（纯函数，无 Tk、可无头跑）

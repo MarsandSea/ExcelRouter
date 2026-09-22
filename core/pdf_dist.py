@@ -38,9 +38,16 @@ _FONT_EXTS = (".ttf", ".otf", ".ttc", ".otc")
 #   第 0 面通常是日文面，汉字能渲染但字形是日式变体（直/骨/今 肉眼可辨）。
 #   fpdf2 的 collection_font_number 能选 SC 面，但索引因构建而异，
 #   优先单体文件比猜索引稳。
+# 排序原则：**黑体类优先**——水印是半透明斜排小字，黑体的可读性明显好过仿宋/楷体/魏碑。
 _LINUX_FONT_CANDIDATES = [
-    # ① 麒麟 / UOS 预装的方正字库
-    "FZHTK.TTF", "FZSSK.TTF", "FZKTK.TTF", "FZFSK.TTF",
+    # ① 信创机器实测存在的字体（2026-09 在银河麒麟 V10 x86_64 上实地确认）：
+    #    /usr/share/fonts/cesi/ 是「中文信息处理标准」字库，
+    #    /usr/share/fonts/wps-office/ 是装了 WPS for Linux 就会有的方正字库。
+    "CESI_HT_GB18030.TTF",                 # CESI 黑体，信创机器上的首选
+    "FZHTK.TTF",                           # 方正黑体_GBK（WPS 自带）
+    "CESI_SS_GB18030.TTF", "FZSSK.TTF",    # 宋体
+    "CESI_FS_GB18030.TTF", "CESI_KT_GB18030.TTF",
+    "FZKTK.TTF", "FZFSK.TTF",              # 楷体 / 仿宋（兜底，水印可读性一般）
     # ② 文泉驿：中文桌面发行版几乎必装，且是「中文优先」字形
     "wqy-zenhei.ttc", "wqy-microhei.ttc", "wqy-zenhei.ttf", "wqy-microhei.ttf",
     # ③ Noto / 思源的单体简中面

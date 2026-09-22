@@ -354,3 +354,27 @@ def test_watermark_cjk_end_to_end(tmp_path):
     fonts = reader.pages[0]["/Resources"]["/Font"]
     subtypes = [f.get_object().get("/Subtype") for f in fonts.values()]
     assert "/Type0" in subtypes, f"水印没有嵌入中文字体，说明退回了 Helvetica：{subtypes}"
+
+
+def test_find_cjk_font_real_kylin_layout(tmp_path, monkeypatch):
+    """复刻实测的银河麒麟 V10 字体布局：cesi/ 与 wps-office/ 两个子目录。
+
+    真机上 `fc-list :lang=zh` 只有方正魏碑/仿宋 + CESI 黑体这类字体，没有文泉驿、
+    没有 Noto。水印是半透明斜排小字，必须挑到**黑体**而不是仿宋或魏碑。
+    """
+    (tmp_path / "cesi").mkdir()
+    (tmp_path / "wps-office").mkdir()
+    (tmp_path / "wps-office" / "FZWBK.TTF").write_bytes(b"x")          # 方正魏碑，不在候选里
+    (tmp_path / "wps-office" / "FZFSK.TTF").write_bytes(b"x")          # 方正仿宋，候选但排序靠后
+    (tmp_path / "cesi" / "CESI_HT_GB18030.TTF").write_bytes(b"x")      # CESI 黑体，应当胜出
+
+    monkeypatch.setattr(pdf_dist, "_LINUX_FONT_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(pdf_dist, "_font_usable", lambda p: True)
+    monkeypatch.setattr(pdf_dist.shutil, "which", lambda c: None)
+    monkeypatch.delenv("ER_CJK_FONT", raising=False)
+
+    assert pdf_dist._find_cjk_font_posix() == str(tmp_path / "cesi" / "CESI_HT_GB18030.TTF")
+
+    # 黑体不在时退到仿宋，而不是直接放弃（魏碑始终不该被选中）
+    (tmp_path / "cesi" / "CESI_HT_GB18030.TTF").unlink()
+    assert pdf_dist._find_cjk_font_posix() == str(tmp_path / "wps-office" / "FZFSK.TTF")

@@ -15,10 +15,21 @@ name: Release (Linux)
 # ★ 采用前提：先在真机上用 build_linux.sh 产出过一个验证通过的 tar.gz。
 #   CI 的职责是复现那个包，不是探索。
 
+# ★ 只手动触发，**不跟随 tag 自动跑**。
+#
+# 为什么：麒麟产物必须在真机上验收过才能发给同事（见 docs/RELEASING.md §1.7），
+# 而真机验收是有成本的。如果每个 tag 都自动发一份没人验过的 Linux 包，
+# 同事下载到手里出问题，比「麒麟版停在上一个版本」糟糕得多。
+# 所以节奏解耦：Windows 每个版本都发，麒麟版按需发。
+#
+# 用法：Actions 页 → Release (Linux) → Run workflow → 填要发布的 tag（如 v2.8.0）。
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建并发布的 tag（例如 v2.8.0）"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -53,6 +64,8 @@ jobs:
                          fontconfig wqy-zenhei-fonts
 
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}      # 构建指定 tag 的代码，而不是 main 的半成品
 
       - name: 安装依赖并自测
         run: |
@@ -93,7 +106,6 @@ jobs:
 
   publish:
     needs: build-linux
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -102,6 +114,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          # 附加到指定 tag 已有的 Release 上（Windows 那条流水线先建好的）
+          tag_name: ${{ inputs.tag }}
           files: artifacts/**/*.tar.gz
           # 发布说明交给 Windows 工作流生成，这里不重复生成
           generate_release_notes: false
