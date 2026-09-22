@@ -73,13 +73,16 @@ DEFAULT_CONFIG_PATH = os.path.join(_resource_dir(), "config", "default_config.js
 USER_CONFIG_PATH    = os.path.join(_app_dir(), "user_config.json")
 
 COL_PLACEHOLDER = "（选择表格后自动识别）"
+# 速度模式两档（v2.9）：文案里直接写清代价，用户不用点开帮助就能选
+SPEED_STD  = "标准（保留格式）"
+SPEED_FAST = "极速（纯数据）"
 PDF_COL_PLACEHOLDER = "（选清单后自动识别）"
 PDF_RECV_NONE = "（不需要）"
 
 # UI 泵用的「本轮没有此类消息」哨兵（不能用 None：扫描失败时 payload 可能为空）
 _MISSING = object()
 
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.9.0"
 # 匿名反馈问卷地址（问卷 URL 确定后替换此处即可，一行改动 + 打 tag 发版）
 FEEDBACK_URL = "https://f.wps.cn/g/pBOAWUQc/"
 # 在线 FAQ（「❓ 常见问题」按钮）：链接 Gitee 镜像而非 GitHub——国内办公网络访问
@@ -253,6 +256,24 @@ class App(_RootBase):
         self._values_panel = None     # 展开中的勾选面板
         self._enum_token = 0          # 取值枚举序号：防止过期结果回填
         self._enum_after = None       # 防抖 after id
+        # 取值枚举的「作用域」（v2.9）：_tpl_path 只是批量里的一个样本文件，
+        # 它枚举出的取值天然可能不全，而拆分是对全部文件生效的。这几个状态
+        # 就是为了让界面能说清「这 N 组是哪来的」，不再把抽样结果当全量结论。
+        self._scan_n = 0              # 最近一次扫描到的 Excel 文件数
+        self._scan_bytes = 0          # 同上，总字节（换样本文件时沿用）
+        self._scan_is_dir = False     # 同上，输入是否为文件夹
+        self._tpl_is_sample = False   # _tpl_path 只是多个文件里的一个
+        self._values_scope = "sample"  # 取值来源：sample / all（已全量扫描）
+        self._scan_all_token = 0      # 全量取值扫描序号：防过期结果回填
+        self._scanning_all = False    # 全量取值扫描进行中
+        self._bulk_sync = False       # 全选/清空批量改勾选：合并成一次同步
+        # 「已限定名单」是一个**显式状态**，不能靠「是否全勾」反推：样本表里恰好
+        # 就是用户要的那几组时，全勾既可能是「不筛选」也可能是「只要这几组」。
+        # 早先靠勾选数反推，用户点完「只拆这 N 组」再随手取消一个又勾回来，
+        # 名单就被悄悄清空、退回拆全部——正是这次要修的名实不符。**别改回反推。**
+        self._values_locked = False
+        self._lock_btn = None         # 勾选面板里的「只拆这 N 组」按钮（面板开着才有）
+        self._values_hint = None      # 勾选面板里的提示文字（随锁定/抽样状态变）
         self._warn_count = 0          # 本轮运行日志里 ⚠ 行数（完成后给「处理详情」打角标）
         self._last_summary = None     # core 收尾的 [SUMMARY] JSON（完成摘要用）
         self._pdf_grid_rows = 0       # 映射清单网格行数（分发预览用）
@@ -438,6 +459,12 @@ class App(_RootBase):
         self._split_menu.pack(side="left", padx=(8, 8))
         _ghost_button(row, text="🔄 重新识别", width=104,
                       command=self._scan_input).pack(side="left")
+        # 自动挑的样本是文件夹里排序最靠前的那个表，它未必有代表性（表头写法不同、
+        # 取值只覆盖一部分）。用户比程序更清楚哪张表是标准模板，给个入口自己指。
+        self._tpl_btn = _ghost_button(row, text="📄 换样本表", width=104,
+                                      command=self._pick_template)
+        self._tpl_btn.pack(side="left", padx=(6, 0))
+        self._tpl_btn.pack_forget()      # 仅批量（文件夹、多于 1 个表）时才有意义
 
         ctk.CTkLabel(card, text="拆分字段的每个取值各生成一个文件：比如按「部门」拆 → 销售部.xlsx、财务部.xlsx…",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED).grid(
@@ -449,14 +476,22 @@ class App(_RootBase):
         # 取值预览（v2.7）：选定拆分字段后自动枚举该列取值——点开始之前就能看到
         # 「将拆成哪几组」，并可展开勾选只拆其中一部分（替代高级设置里手填文本的主路径）
         vrow = ctk.CTkFrame(card, fg_color="transparent")
-        vrow.grid(row=4, column=0, padx=12, pady=(0, 4), sticky="w")
+        vrow.grid(row=4, column=0, padx=12, pady=(0, 4), sticky="ew")
+        # 摘要文案与按钮**分两行**：抽样提示那句话很长，和按钮挤在同一行时
+        # 「扫描全部文件的分组」会被推出卡片右边缘（截图目检发现）。
         self._values_status = ctk.CTkLabel(vrow, text="选定拆分字段后，这里会列出将拆出的分组",
-                                           font=ctk.CTkFont(size=11), text_color=C_MUTED)
-        self._values_status.pack(side="left")
-        self._values_btn = _flat_button(vrow, text="▸ 查看/勾选分组", width=110,
+                                           font=ctk.CTkFont(size=11), text_color=C_MUTED,
+                                           anchor="w", justify="left", wraplength=600)
+        self._values_status.pack(anchor="w", fill="x")
+        vbtns = ctk.CTkFrame(vrow, fg_color="transparent")
+        vbtns.pack(anchor="w", pady=(2, 0))
+        self._scanall_btn = _flat_button(vbtns, text="🔍 扫描全部文件的分组", width=170,
+                                         command=self._scan_all_values)
+        self._values_btn = _flat_button(vbtns, text="▸ 查看/勾选分组", width=110,
                                         command=self._toggle_values)
-        self._values_btn.pack(side="left", padx=(6, 0))
-        self._values_btn.pack_forget()      # 枚举到取值后才出现
+        # 两个按钮都由 _refresh_values_ui 按状态 pack/forget（pack 顺序即左右顺序）
+        self._scanall_btn.pack_forget()
+        self._values_btn.pack_forget()   # 两者都由 _refresh_values_ui 按状态显隐
         # 展开中的勾选面板 grid 到 row=5（_toggle_values 控制）
 
         self._batch_frame = self._build_batch(card)
@@ -573,6 +608,9 @@ class App(_RootBase):
         """子线程枚举当前拆分字段的全部取值（复用扫描时识别的模板文件）。"""
         self._enum_after = None
         col = self._split_var.get()
+        # 换了字段，之前的「已全量扫描」结论随之作废（新字段只枚举了样本表）
+        self._values_scope = "sample"
+        self._scan_all_token += 1
         self._values_all, self._value_vars = [], {}
         self._refresh_values_ui()
         if (col in ("", COL_PLACEHOLDER) or not self._tpl_path
@@ -603,10 +641,22 @@ class App(_RootBase):
             self._values_status.configure(
                 text="⚠ 没能枚举取值（不影响拆分，可直接开始）", text_color=C_WARN)
             return
+        self._set_values(vals)
+
+    def _set_values(self, vals):
+        """把枚举到的取值装进勾选面板（抽样枚举与全量扫描共用这一条路径）。"""
         self._values_all = vals
         # 默认全选；高级设置里手填过「只拆这些取值」且能对上号时，按它预选
         wanted = set(self._split_list(self._selvals_var.get()))
         use_filter = bool(wanted) and any(w in vals for w in wanted)
+        if wanted and not use_filter:
+            # 换了拆分字段（或换了输入）之后，上一轮的名单对新字段一个都对不上。
+            # 留着它 = 这一跑按不存在的取值筛选 → 一行都拆不出来，界面却还挂着
+            # 「🔒 只拆其中 N 组」。清掉，并在日志里点名说清楚，别让它静默生效。
+            self._selvals_var.set("")
+            self._log("⚠ 原先限定的分组（" + "、".join(sorted(wanted))
+                      + "）在当前字段里一个都没有，已自动取消限定，本次将按全部分组拆")
+        self._values_locked = use_filter
         self._value_vars = {}
         for v in vals:
             var = ctk.BooleanVar(value=(v in wanted) if use_filter else True)
@@ -618,28 +668,156 @@ class App(_RootBase):
             self._toggle_values()
 
     def _refresh_values_ui(self):
-        """按 _values_all 更新取值摘要行：几组、示例、异常多的告警。"""
+        """按 _values_all 更新取值摘要行：几组、示例、**来源**、异常多的告警。"""
         n = len(self._values_all)
+        self._values_btn.pack_forget()
+        self._scanall_btn.pack_forget()
         if not n:
-            self._values_btn.pack_forget()
             self._close_values_panel()
             if self._split_var.get() not in ("", COL_PLACEHOLDER) and self._tpl_path:
                 self._values_status.configure(
                     text="选定拆分字段后，这里会列出将拆出的分组", text_color=C_MUTED)
             return
         shown = "、".join(self._values_all[:6]) + ("…" if n > 6 else "")
-        if n > 50:
+        sel = self._split_list(self._selvals_var.get())
+        from_sample = self._tpl_is_sample and self._values_scope != "all"
+        # 已显式限定名单时不再喊「其他表可能还有别的分组」——名单对全部文件生效，
+        # 那句警告已经不成立了，和 🔒 角标并排显示只会自相矛盾。
+        sampled = from_sample and not sel
+        if sampled:
+            # ★ 关键的诚实性修复（v2.9）：取值只枚举自一个样本表，拆分却对全部
+            # 文件生效——真实分组数几乎总是更多。旧文案直说「将拆成 6 组」，用户
+            # 按它理解、跑完看到 29 组，会认为是工具算错了而不是自己看的是抽样。
+            # 数字本身没错，错的是把抽样结论说成了全量结论。**别改回去。**
+            tpl = os.path.basename(self._tpl_path or "")
             self._values_status.configure(
-                text=f"⚠ 将拆出 {n} 组：{shown}——取值异常多，若这是工号 / 姓名类字段，建议换个分组字段",
-                text_color=C_WARN)
-        elif n == 1:
-            self._values_status.configure(
-                text=f"只会拆出 1 组「{self._values_all[0]}」——确认字段没选错？",
+                text=f"样本「{tpl}」里有 {n} 组：{shown}"
+                     f"　⚠ 这只是 {self._scan_n} 个表中的 1 个，其他表可能还有别的分组",
                 text_color=C_WARN)
         else:
+            scope = (f"全部 {self._scan_n} 个表共 "
+                     if self._values_scope == "all" and self._scan_n > 1 else "将拆成 ")
+            if n > 50:
+                self._values_status.configure(
+                    text=f"⚠ {scope}{n} 组：{shown}——取值异常多，若这是工号 / 姓名类字段，建议换个分组字段",
+                    text_color=C_WARN)
+            elif n == 1:
+                self._values_status.configure(
+                    text=f"只会拆出 1 组「{self._values_all[0]}」——确认字段没选错？",
+                    text_color=C_WARN)
+            else:
+                self._values_status.configure(
+                    text=f"{scope}{n} 组：{shown}", text_color=C_OK)
+        if sel:
             self._values_status.configure(
-                text=f"将拆成 {n} 组：{shown}", text_color=C_OK)
+                text=self._values_status.cget("text") + f"　🔒 只拆其中 {len(sel)} 组",
+                text_color=C_OK)
+        # 「扫描全部」只要还在抽样态就一直可用：已限定名单的用户也可能想核对全量
+        if from_sample:
+            self._scanall_btn.pack(side="left", padx=(6, 0))
         self._values_btn.pack(side="left", padx=(6, 0))
+        self._refresh_panel_hint()
+
+    def _scan_all_values(self):
+        """读遍输入里全部表格，把「抽样分组」换成完整分组清单。
+
+        做成显式按钮而不是扫描时自动跑：代价是每个文件都要完整读一遍，
+        400 个表的批次自动扫会让「选字段」这一步凭空卡好几分钟。
+        """
+        if self._scanning_all or self._running:
+            return
+        col = self._split_var.get()
+        p = self._input_var.get().strip()
+        if col in ("", COL_PLACEHOLDER) or not p or not os.path.isdir(p):
+            return
+        if self._scan_n > 30 and not messagebox.askyesno(
+                "扫描全部分组",
+                f"要列全分组，需要把 {self._scan_n} 个表各读一遍，可能要几分钟。\n"
+                "（只是读取，不会改动任何文件）\n\n现在开始？"):
+            return
+        self._scanning_all = True
+        self._scan_all_token += 1
+        token = self._scan_all_token
+        cfg = self._collect_config()
+        out_now = self._output_var.get().strip()
+        self._scanall_btn.configure(state="disabled")
+        self._values_status.configure(text="正在读取全部表格的分组…", text_color=C_MUTED)
+
+        def work():
+            from core.splitter import list_values
+            # 文件清单的过滤规则与 run_split / _scan_input 保持一致，
+            # 否则「扫描出的分组」和「真正拆出的分组」又会对不上
+            out_abs = os.path.normcase(os.path.abspath(out_now)) if out_now else None
+            targets = []
+            for root, dirs, fs in os.walk(p):
+                if out_abs:
+                    ra = os.path.normcase(os.path.abspath(root))
+                    if ra == out_abs or ra.startswith(out_abs + os.sep):
+                        dirs[:] = []
+                        continue
+                for fn in sorted(fs):
+                    lf = fn.lower()
+                    if (lf.endswith(('.xlsx', '.xls')) and not fn.startswith('~$')
+                            and not lf.endswith('__tmp__.xlsx')):
+                        targets.append(os.path.join(root, fn))
+            vals, failed = set(), 0
+            for i, fp in enumerate(targets, 1):
+                if token != self._scan_all_token:
+                    return          # 用户换了输入/字段，本轮结果已作废
+                try:
+                    vals.update(list_values(fp, cfg, col))
+                except Exception as e:
+                    failed += 1
+                    self._ui_q.put(("log", f"⚠ 读取「{os.path.basename(fp)}」的分组失败：{e}"))
+                self._ui_q.put(("scanall_prog", (token, i, len(targets))))
+            self._ui_q.put(("scanall", (token, col, sorted(vals), len(targets), failed)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_scan_all_prog(self, payload):
+        token, i, total = payload
+        if token != self._scan_all_token:
+            return
+        self._values_status.configure(
+            text=f"正在读取全部表格的分组… {i}/{total}", text_color=C_MUTED)
+
+    def _on_scan_all(self, payload):
+        """全量扫描回填：此后摘要行显示的是全量结论，不再带抽样警告。"""
+        token, col, vals, nfiles, failed = payload
+        self._scanning_all = False
+        self._scanall_btn.configure(state="normal")
+        if token != self._scan_all_token or col != self._split_var.get():
+            return
+        self._values_scope = "all"
+        self._set_values(vals)
+        note = f"（其中 {failed} 个读取失败，见上面的 ⚠）" if failed else ""
+        self._log(f"✓ 已读遍 {nfiles} 个表：「{col}」共有 {len(vals)} 个分组{note}")
+
+    def _pick_template(self):
+        """手动指定样本表 —— 字段下拉和分组清单都从它读取。"""
+        init = os.path.dirname(self._tpl_path) if self._tpl_path else self._input_var.get().strip()
+        path = filedialog.askopenfilename(
+            title="选一个有代表性的表格（字段和分组从它读取）",
+            initialdir=init if init and os.path.isdir(init) else None,
+            filetypes=[("Excel 文件", "*.xlsx *.xls")])
+        if not path:
+            return
+        cfg = self._collect_config()
+        cur_in = self._input_var.get().strip()
+        self._set_scan_status("正在识别表格里的字段…", C_MUTED)
+
+        def work():
+            try:
+                from core.splitter import list_columns
+                cols = list_columns(path, cfg)
+            except Exception as e:
+                cols = []
+                self._ui_q.put(("log", f"⚠ 扫描「{os.path.basename(path)}」失败：{e}"))
+            # 复用 _on_scan：文件数/体积/输入类型沿用上一次扫描的结果，只换样本表
+            self._ui_q.put(("scan", (cols, self._scan_n, os.path.basename(path),
+                                     self._scan_is_dir, cur_in, path, self._scan_bytes)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _toggle_values(self):
         """展开 / 收起取值勾选面板。"""
@@ -657,38 +835,102 @@ class App(_RootBase):
                      command=lambda: self._set_all_values(True)).pack(side="left")
         _flat_button(bar, text="清空", width=46,
                      command=lambda: self._set_all_values(False)).pack(side="left")
-        ctk.CTkLabel(bar, text="只拆勾选的分组；全选＝拆分全部",
-                     font=ctk.CTkFont(size=11), text_color=C_MUTED).pack(side="left", padx=8)
+        # 「全选＝不筛选」的既有语义在抽样场景下会咬人：样本表里恰好就是用户
+        # 想要的那几组时，全勾等于什么都没筛，其他表的分组照样会拆出来。
+        # 这个按钮让「我只要这几组」变成一个能表达出来的动作。
+        self._lock_btn = _flat_button(bar, text="只拆这几组", width=104,
+                                      command=self._lock_to_listed)
+        self._lock_btn.pack(side="left", padx=(4, 0))
+        self._values_hint = ctk.CTkLabel(bar, text="", font=ctk.CTkFont(size=11),
+                                         text_color=C_MUTED, wraplength=420,
+                                         justify="left")
+        self._values_hint.pack(side="left", padx=8)
+        self._refresh_panel_hint()
         box = ctk.CTkScrollableFrame(panel, height=140)
         box.grid(row=1, column=0, padx=8, pady=(2, 8), sticky="ew")
         for v, var in self._value_vars.items():
             ctk.CTkCheckBox(box, text=v, variable=var).pack(anchor="w")
         self._values_panel = panel
 
+    def _refresh_panel_hint(self):
+        """勾选面板里的按钮与提示随「已限定 / 抽样」状态更新（面板开着才有意义）。
+
+        面板是按当时状态一次性搭起来的，而状态会在面板开着时变（点了「只拆这 N 组」，
+        或点「全选」取消限定），提示不跟着变就会自相矛盾。
+        """
+        if self._values_panel is None or self._lock_btn is None or self._values_hint is None:
+            return
+        n = len(self._value_vars)
+        if self._values_locked:
+            self._lock_btn.configure(text="✓ 已限定", state="disabled")
+            txt = "已限定只拆勾选的这些分组，对全部表都生效；点「全选」可取消限定"
+        else:
+            self._lock_btn.configure(text=f"只拆这 {n} 组", state="normal")
+            if self._tpl_is_sample and self._values_scope != "all":
+                txt = ("只拆勾选的分组。注意：下面这些分组只来自样本表，"
+                       "全勾＝不做筛选（其他表里的分组也会照样拆出来）")
+            else:
+                txt = "只拆勾选的分组；全选＝拆分全部"
+        self._values_hint.configure(text=txt)
+
     def _close_values_panel(self):
         if self._values_panel is not None:
             self._values_panel.destroy()
             self._values_panel = None
+            self._lock_btn = self._values_hint = None
         self._values_open = False
         self._values_btn.configure(text="▸ 查看/勾选分组")
 
     def _set_all_values(self, on):
-        for var in self._value_vars.values():
-            var.set(on)
+        # 「全选 / 清空」是用户表达「不做筛选」的动作，同时解除已限定状态——
+        # 否则点了全选，界面还挂着「已限定」，两边说的不是一回事。
+        self._values_locked = False
+        # 逐个 set 会逐个触发 trace → 逐次重绘摘要行；取值多时明显发卡。
+        # 批量期间挂起同步，循环结束后统一同步一次。
+        self._bulk_sync = True
+        try:
+            for var in self._value_vars.values():
+                var.set(on)
+        finally:
+            self._bulk_sync = False
+        self._sync_selvals()
+
+    def _lock_to_listed(self):
+        """把当前列出的分组**显式**写进「只拆这些取值」（抽样场景专用）。
+
+        与「全选」的区别：全选等价于留空、等价于不筛选；这个按钮写的是一份
+        具体名单，拆分时对全部文件生效——正是「我只要城区这几个网格」的表达。
+        """
+        vals = list(self._value_vars.keys())
+        if not vals:
+            return
+        self._bulk_sync = True
+        try:
+            for var in self._value_vars.values():
+                var.set(True)
+        finally:
+            self._bulk_sync = False
+        self._values_locked = True     # 显式状态：此后即使全勾，名单也不会被清空
+        self._sync_selvals()
+        shown = "、".join(vals[:6]) + ("…" if len(vals) > 6 else "")
+        self._log(f"✓ 已限定只拆这 {len(vals)} 个分组：{shown}")
 
     def _sync_selvals(self):
-        """勾选状态 → selected_values（高级设置文本框同步显示，双向一致）。
+        """勾选状态 + 已限定状态 → selected_values（与高级设置文本框始终一致）。
 
-        全选或全不选都等价于「拆分全部」，保持文本框为空——与「留空=自动枚举
-        全部取值」的既有语义一致，也避免无谓地存一长串取值。
+        取消勾选任何一组＝明确要筛选，自动进入已限定；全不选则回到「不筛选」
+        （留空＝拆分时自动枚举全部取值，与 core 的既有语义一致）。已限定时即使
+        全勾也照样写出名单——这正是「只拆这 N 组」能顶住后续勾选操作的原因。
         """
-        if not self._value_vars:
+        if not self._value_vars or self._bulk_sync:
             return
         checked = [v for v, var in self._value_vars.items() if var.get()]
-        if not checked or len(checked) == len(self._value_vars):
-            self._selvals_var.set("")
-        else:
-            self._selvals_var.set(", ".join(checked))
+        if not checked:
+            self._values_locked = False
+        elif len(checked) < len(self._value_vars):
+            self._values_locked = True
+        self._selvals_var.set(", ".join(checked) if self._values_locked else "")
+        self._refresh_values_ui()   # 摘要行上的「🔒 已限定」角标要跟着变
 
     def _build_adv_area(self, parent):
         self._adv_btn = _flat_button(parent, text="▸ 高级设置（一般用不到）", width=200,
@@ -751,11 +993,12 @@ class App(_RootBase):
         self._auto_open_var = ctk.BooleanVar(value=self.cfg.get("auto_open_output", True))
         ctk.CTkCheckBox(opts, text="精确匹配", variable=self._exact_var).grid(row=0, column=0, padx=8, pady=4)
         ctk.CTkCheckBox(opts, text="跨文件合并汇总", variable=self._merge_var).grid(row=0, column=1, padx=8, pady=4)
-        ctk.CTkCheckBox(opts, text="保留格式", variable=self._preserve_var).grid(row=0, column=2, padx=8, pady=4)
-        ctk.CTkCheckBox(opts, text="完成后打开输出", variable=self._auto_open_var).grid(row=0, column=3, padx=8, pady=4)
-        ctk.CTkCheckBox(opts, text="保留公式（收件人可见计算过程，仅同行公式，需先勾选保留格式）",
-                        variable=self._keep_formula_var).grid(
-            row=1, column=0, columnspan=4, padx=8, pady=(0, 4), sticky="w")
+        ctk.CTkCheckBox(opts, text="完成后打开输出", variable=self._auto_open_var).grid(row=0, column=2, padx=8, pady=4)
+        # 「保留格式」的勾选框已上移到第 ③ 步的「拆分速度」段选（v2.9），这里不再重复
+        self._keep_formula_box = ctk.CTkCheckBox(
+            opts, text="保留公式（收件人可见计算过程，仅同行公式，需选「标准」速度）",
+            variable=self._keep_formula_var)
+        self._keep_formula_box.grid(row=1, column=0, columnspan=4, padx=8, pady=(0, 4), sticky="w")
         ctk.CTkLabel(opts, text="提示：「跨文件合并汇总」会把所有结果留在内存里最后统一写盘，宽表 + 大批量时明显更吃内存；默认的「按原表各自拆分」更稳。",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED,
                      wraplength=560, justify="left").grid(
@@ -1013,8 +1256,28 @@ class App(_RootBase):
         _ghost_button(orow, text="浏览", width=60,
                       command=self._browse_output).grid(row=0, column=2)
 
+        # 速度模式（v2.9）：从「高级设置 → 保留格式」提到主操作区。
+        # 这是唯一能把耗时拉开数倍的选项，藏在折叠面板里等于不存在——用户只会
+        # 得出「这工具拆得慢」的结论，而不会去翻高级设置找到它（真实反馈）。
+        # 这里是 preserve_format 的**唯一**界面入口，高级设置里的那个勾选框已移除，
+        # 别再加回去：同一个开关两处控制，用户永远不确定哪个生效。
+        srow = ctk.CTkFrame(card, fg_color="transparent")
+        srow.grid(row=2, column=0, padx=12, pady=(8, 0), sticky="w")
+        ctk.CTkLabel(srow, text="拆分速度").pack(side="left")
+        self._speed_seg = ctk.CTkSegmentedButton(
+            srow, values=[SPEED_STD, SPEED_FAST], command=self._on_speed_change,
+            selected_color=PRIMARY, selected_hover_color=PRIMARY_HOVER,
+            height=30, font=ctk.CTkFont(size=12))
+        self._speed_seg.set(SPEED_STD if self._preserve_var.get() else SPEED_FAST)
+        self._speed_seg.pack(side="left", padx=(8, 0))
+        self._speed_hint = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=11),
+                                        text_color=C_MUTED, anchor="w", justify="left",
+                                        wraplength=640)
+        self._speed_hint.grid(row=3, column=0, padx=12, pady=(2, 0), sticky="w")
+        self._on_speed_change(self._speed_seg.get())
+
         btns = ctk.CTkFrame(card, fg_color="transparent")
-        btns.grid(row=2, column=0, padx=12, pady=(8, 2), sticky="w")
+        btns.grid(row=4, column=0, padx=12, pady=(8, 2), sticky="w")
         # 主按钮是全页唯一核心动作（v2.7.1）：加高配粗 + 品牌主色，保证第一眼锁定
         self._start_btn = ctk.CTkButton(btns, text="▶ 开始拆分", width=220, height=44,
                                         corner_radius=10,
@@ -1034,21 +1297,47 @@ class App(_RootBase):
 
         self._progress = ctk.CTkProgressBar(card, corner_radius=6,
                                            progress_color=PRIMARY)
-        self._progress.grid(row=3, column=0, padx=12, pady=(8, 2), sticky="ew")
+        self._progress.grid(row=5, column=0, padx=12, pady=(8, 2), sticky="ew")
         self._progress.set(0)
         self._run_status = ctk.CTkLabel(card, text="完成 ① ② 后直接点「开始拆分」；保存位置不用改，结果会放进自动创建的「拆分结果」文件夹",
                                         font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w")
-        self._run_status.grid(row=4, column=0, padx=12, pady=(0, 2), sticky="w")
+        self._run_status.grid(row=6, column=0, padx=12, pady=(0, 2), sticky="w")
         # 完成摘要（v2.7，A4；v2.7.1 横幅化）：浅绿底圆角横幅承载「完成瞬间」的
         # 明确成功反馈——摘要内容与逻辑不变，只加视觉承载。
         self._summary_banner = ctk.CTkFrame(card, corner_radius=10,
                                             fg_color=OK_BANNER_BG)
-        self._summary_banner.grid(row=5, column=0, padx=12, pady=(0, 10), sticky="ew")
+        self._summary_banner.grid(row=7, column=0, padx=12, pady=(0, 10), sticky="ew")
         self._summary_banner.grid_remove()
         self._summary_lbl = ctk.CTkLabel(self._summary_banner, text="",
                                          font=ctk.CTkFont(size=12, weight="bold"),
                                          text_color=C_OK, anchor="w", justify="left")
         self._summary_lbl.grid(row=0, column=0, padx=14, pady=8, sticky="w")
+
+    def _on_speed_change(self, label):
+        """速度模式 → preserve_format，并联动「保留公式」（它必须先有保留格式）。"""
+        std = (label != SPEED_FAST)
+        self._preserve_var.set(std)
+        if std:
+            self._speed_hint.configure(
+                text="完整保留表头、字体、颜色、列宽——收件人拿到的表和原表长得一样。"
+                     "代价是逐格复制格式，文件多时会明显慢一些。")
+        else:
+            self._speed_hint.configure(
+                text="只输出数据（纯文本/数字），不保留格式与公式，速度快很多。"
+                     "适合对方只要数、不看排版的场景。")
+        self._update_formula_state()
+
+    def _update_formula_state(self):
+        """极速模式下「保留公式」无从谈起（它依赖保留格式那条写入路径）：
+        直接置灰并取消勾选，而不是留着一个勾了也不生效的框。"""
+        box = getattr(self, "_keep_formula_box", None)
+        if box is None:
+            return
+        if self._preserve_var.get():
+            box.configure(state="normal")
+        else:
+            self._keep_formula_var.set(False)
+            box.configure(state="disabled")
 
     def _build_bottom(self, parent):
         bar = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1254,6 +1543,16 @@ class App(_RootBase):
         if p != self._input_var.get().strip():
             return    # 结果已过期（用户又换了输入）
         self._tpl_path = tpl_full or None    # 取值枚举复用这份模板文件
+        # 本次扫描的规模先记下来：取值摘要要靠它说清「N 组来自 M 个表里的 1 个」，
+        # 「换样本表」也要沿用这些数字（它只换模板，不重新统计整个文件夹）
+        self._scan_n, self._scan_bytes, self._scan_is_dir = n, total_bytes, is_dir
+        self._tpl_is_sample = bool(is_dir and n > 1)
+        self._values_scope = "sample"
+        self._scan_all_token += 1            # 让进行中的全量扫描结果作废
+        if self._tpl_is_sample:
+            self._tpl_btn.pack(side="left", padx=(6, 0))
+        else:
+            self._tpl_btn.pack_forget()
         # 换了输入，旧的取值预览随之作废
         self._values_all, self._value_vars = [], {}
         self._refresh_values_ui()
@@ -1470,6 +1769,8 @@ class App(_RootBase):
         scan: Any = _MISSING
         pdf_scan: Any = _MISSING
         values: Any = _MISSING
+        scanall: Any = _MISSING
+        scanall_prog: Any = _MISSING
         try:
             while True:
                 kind, payload = self._ui_q.get_nowait()
@@ -1485,6 +1786,10 @@ class App(_RootBase):
                     pdf_scan = payload
                 elif kind == "values":
                     values = payload
+                elif kind == "scanall":
+                    scanall = payload
+                elif kind == "scanall_prog":
+                    scanall_prog = payload
         except queue.Empty:
             pass
         if logs:
@@ -1519,6 +1824,10 @@ class App(_RootBase):
             self._on_pdf_scan(pdf_scan)
         if values is not _MISSING:
             self._on_values(values)
+        if scanall_prog is not _MISSING:
+            self._on_scan_all_prog(scanall_prog)
+        if scanall is not _MISSING:
+            self._on_scan_all(scanall)
         if done is not _MISSING:
             self._on_done(*done)
         self.after(100, self._pump_ui)
@@ -1656,6 +1965,25 @@ class App(_RootBase):
                         "这次运行会把里面的文件也当成数据一起拆，内容可能重复。\n"
                         "建议先把它们移走/删除，或把保存位置改回默认。\n\n仍要继续吗？"):
                     return
+        # ★ 抽样提醒（v2.9）：②里的「N 组」只来自一个样本表，而这一跑是对全部
+        # 文件生效的——不筛选取值时真实分组数几乎总是更多。让用户在这里就知道，
+        # 而不是跑完 20 分钟看到 29 个分组才发现和预览的 6 组不是一回事。
+        if (self._tpl_is_sample and self._values_scope != "all"
+                and not cfg["selected_values"] and self._values_all):
+            ans = messagebox.askyesnocancel(
+                "分组数可能比预览的多",
+                f"第 ② 步显示的 {len(self._values_all)} 个分组只来自样本表"
+                f"「{os.path.basename(self._tpl_path or '')}」，\n"
+                f"这次要拆的是全部 {self._scan_n} 个表，其他表里可能还有别的分组，"
+                "实际拆出的会更多。\n\n"
+                "· 「是」＝照这样拆全部分组\n"
+                "· 「否」＝先读遍所有表列全分组，我再勾选要哪几个\n"
+                "· 「取消」＝什么都不做")
+            if ans is None:
+                return
+            if not ans:
+                self._scan_all_values()
+                return
         # 误选保护（A1）：取值预览发现分组异常多时，开跑前再确认一次
         if len(self._values_all) > 50:
             if not messagebox.askyesno(

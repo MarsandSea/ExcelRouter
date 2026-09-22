@@ -88,19 +88,38 @@ def main() -> int:
     meta = line_parse(fm)
 
     # ① 冒号+空格：最隐蔽、后果最重（客户端描述降级成目录名）
+    #    注意：若值整体用双引号包起来（推荐写法），引号内的 ": " 是**合法**的
+    #    （2026-09-17 起 SKILL.md 用这种写法），这时不再报错。
     for i, raw in enumerate(fm.split("\n"), 1):
         line = raw.rstrip()
         if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
             continue
         key, _, val = line.partition(":")
+        val_s = val.strip()
+        if len(val_s) >= 2 and val_s[0] == '"' and val_s[-1] == '"':
+            continue  # 已被引号包裹 → YAML 层面无歧义
         if _COLON_SPACE_RE.search(val):
             hit = _COLON_SPACE_RE.search(val)
             snippet = val[max(0, hit.start() - 30):hit.start() + 30].strip()
             errors.append(
                 f"frontmatter 第 {i} 行 `{key.strip()}` 的值里含 ASCII「冒号+空格」：…{snippet}…\n"
                 f"        这会让 WorkBuddy 客户端 YAML 解析失败，技能卡描述会降级成目录名。\n"
-                f"        改法：换成中文冒号「：」或破折号「—」，或把长文本拆到别的键。"
+                f"        改法：整体用双引号包起来，或换成中文冒号「：」/ 破折号「—」。"
             )
+
+    # ①b 描述类字段长度上限（mobilework 端硬限制 1024；桌面端无限制所以以前没暴露）
+    #     2026-09-17 导入报「技能描述超过1024字符上限」才发现的。
+    MAX_DESC = 1024
+    for key in ("description", "description_zh", "summary"):
+        v = meta.get(key) or ""
+        # 引号算不算长度取决于平台实现，这里按「值本身」算，并留 5 字符余量提醒
+        if len(v) > MAX_DESC:
+            errors.append(
+                f"`{key}` 长度 {len(v)} 超过 mobilework 的 {MAX_DESC} 字符上限"
+                f"（超 {len(v) - MAX_DESC}）——导入会被拒绝。请精简。"
+            )
+        elif len(v) > MAX_DESC - 10:
+            print(f"   ⚠️  {key} 长度 {len(v)}，非常接近 {MAX_DESC} 上限，建议再压一点")
 
     # ② CLI 必填字段
     for key in REQUIRED_KEYS:

@@ -30,7 +30,21 @@ Thumbs.db
 # Claude Code 本地设置（个人，不上传）
 .claude/settings.local.json
 
+# WorkBuddy 项目级本地状态（工作记录 / 本地技能，个人，不上传）
+# 注意：仓库根一旦有它，git status 会一直显示 `?? .workbuddy/`；
+# 不忽略的话 `git add -A` 会把本地工作日志提交到公开仓库（2026-09-15 复核发现）。
+.workbuddy/
+
 # 真实业务数据 / 个人工作文件（含个人信息，绝不上传）
 upload/
 拆分网格及人员脚本v35.txt
 .lingxi/
+
+# 调试日志（er_logs*.txt 是本地排障输出，别入库；上面的 log_*.txt 规则盖不住）
+er_logs*.txt
+
+# 根目录的 skill 打包产物（dist/ build/ 已在上面忽略）
+excelrouter-skill-*.zip
+
+# 本地自攒的数据（SkillHub 下载曲线等，个人）
+stats/

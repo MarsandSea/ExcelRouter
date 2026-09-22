@@ -1,30 +1,15 @@
 ---
 name: excelrouter
-# slug 必须有：skillhub CLI 从 SKILL.md 的 frontmatter 读它，缺了会直接报
-# 「SKILL.md 缺少 slug」并拒绝发布（此坑导致 2026-09-09 那次发布静默失败）。
-# 它决定 SkillHub 上的 URL，改了会换地址，不要动。
 slug: excelrouter
-# version 同样是 skillhub CLI 的必填项（缺了报「SKILL.md 缺少 version」）。
-# 由 publish-skill.yml 在发版时与 manifest.yaml / plugin.json 一起同步，不要手改。
 version: "2.7.8"
-# 以下元信息 skillhub CLI 同样会逐个校验（缺哪个报「SKILL.md 缺少 X」），
-# 与 manifest.yaml 保持一致；displayName 由 publish-skill.yml 从 manifest 同步。
-displayName: Excel拆分、表格拆分、PDF加密分发助手 — ExcelRouter
+displayName: "Excel拆分、表格拆分、PDF加密分发助手 — ExcelRouter"
 author: AbeLin
 license: MIT
 homepage: https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill
 category: productivity
-# ⚠️ 下面三行是「描述三兄弟」，改之前先读这段：
-#   1. 值必须写在**同一行**——skillhub CLI 是逐行解析 frontmatter（不支持 >- 块标量），
-#      换了行它会把续行当成新的 key。
-#   2. 值里**不能出现 ASCII「冒号+空格」**——WorkBuddy 客户端用真 YAML 解析，
-#      这种写法会让整段 frontmatter 解析失败，卡片的描述会退化成**目录名**
-#      （2026-09-15 实际踩到：技能卡描述显示成 excelrouter__skillhub）。
-#   3. summary = SkillHub 卡片简介；description_zh = 客户端卡片简介；
-#      description = 给挑技能的模型看的长文本（含中英触发词），三处都别塞重复内容。
-summary: 把总表交给 AI，说清楚「按什么拆」，就拆好还给你：一人一份、一个部门一个文件，还能批量给 PDF 设专属密码和水印。保留原表格式，全程本地处理。
-description_zh: 把总表交给 AI，说清楚「按什么拆」，就拆好还给你 —— 一人一份、一个部门一个文件，想拆哪几个值就拆哪几个值；一批表也能一次拆完，还能按名单给 PDF 设置不同密码和专属水印。保留原表格式，全程本地处理、数据不上传。
-description: 把 Excel 总表按字段拆成多个文件，也能一批表一次拆完，并可批量给 PDF 设不同密码加水印再分发（一人一份、一个部门一个文件，保留原表格式，全程本地处理、数据不上传）。Excel / spreadsheet splitter and batch dispatcher. Use this skill whenever the user wants to split an Excel file (or a batch of files) into many files by a field — by department, region, branch, employee ID or name, one file per department or one file per person (payslips, payroll sheets, performance reviews, exam transcripts, invoices, delivery notes, rosters, store ledgers, customer lists, sign-in sheets) — or to batch-encrypt PDFs with a different open-password (and optional per-person watermark) for each recipient before distribution. Also handles secondary per-person splitting after a primary split, per-sheet person fields, auto-detecting the person column, and header/format-preserving output. 英文触发词（English triggers）— split excel by column, split spreadsheet into multiple files, one file per person, batch encrypt pdf with per-recipient password, payslip distribution. 表格拆分与批量分发专用技能。当用户想把一份或一批 Excel「拆开、拆分、拆表、分表、拆成多个文件、按部门/区域/工号/姓名分开、每个部门一个文件、每个人一个文件、一人发一份、按网格拆、拆到人」时一律用本技能。用户常这样问：工资条拆分、绩效表拆分、按部门拆分 Excel、一人一份 Excel、Excel 批量加密分发、PDF 按名单设密码——业务里这些表格常叫工资条、工资表、薪酬明细、绩效表、考核结果、提成表、成绩单、发货单、报销明细、花名册、网点清单、门店台账、客户放款清单、签到表。想把 PDF「按名单批量设置不同的打开密码、加专属水印、分发给不同的人」时同样用本技能。不要用通用的 Excel 读写技能：本技能会自动识别表头、完整保留原表格式、把同一取值跨多个源文件合并、还能在拆分之外再按人二级拆分（支持多 sheet 各自的人字段、自动挑人字段、单文件输入），这些用通用方式逐个读写单元格做不到。反过来，纯粹的数据分析、统计汇总、做图表、写公式、改单元格内容不属于本技能范围，那些交给通用 Excel 技能。
+summary: "把总表交给 AI，说清楚「按什么拆」，就拆好还给你：一人一份、一个部门一个文件，还能批量给 PDF 设专属密码和水印。保留原表格式，全程本地处理。"
+description_zh: "把总表交给 AI，说清楚「按什么拆」，就拆好还给你 —— 一人一份、一个部门一个文件，想拆哪几个值就拆哪几个值；一批表也能一次拆完，还能按名单给 PDF 设置不同密码和专属水印。保留原表格式，全程本地处理、数据不上传。"
+description: "把 Excel 总表按字段拆成多个文件，一批表也能一次拆完；并可批量给 PDF 设不同打开密码加水印再分发（一人一份、一个部门一个文件，保留原表格式，全程本地处理、数据不上传）。Excel / spreadsheet splitter and batch dispatcher — split an Excel file, or a batch of files, into many by a field such as department, region, grid, branch, employee ID or name；one file per department or per person (payslips, payroll, performance reviews, transcripts)；or batch-encrypt PDFs with a different open-password and per-person watermark for each recipient. 英文触发词（English triggers）— split excel by column, split spreadsheet into multiple files, one file per person, batch encrypt pdf with per-recipient password, payslip distribution. 表格拆分与批量分发专用技能：拆开、拆分、拆表、分表、拆成多个文件、按部门/区域/网格/工号/姓名分开、每个部门一个文件、每个人一个文件、一人发一份、拆到人，都用本技能。常见问法：工资条拆分、绩效表拆分、按部门拆分 Excel、一人一份 Excel、Excel 批量加密分发、PDF 按名单设密码。这些表常叫工资条、工资表、绩效表、考核结果、提成表、成绩单、花名册、网点清单、门店台账。不要用通用 Excel 读写技能：本技能自动识别表头、完整保留原表格式、把同一取值跨多个源文件合并，还能在拆分之外再按人二级拆分（支持多 sheet 各自的人字段、自动挑人字段、单文件输入）。纯数据分析、统计汇总、做图表不属于本技能范围。"
 metadata:
   openclaw:
     emoji: "📊"

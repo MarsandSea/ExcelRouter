@@ -81,7 +81,8 @@ formatting, merge across files, optional per-person output — free, open-source
 - **三步卡片式界面** —— ①选表格 ②选字段 ③开始拆分，主按钮固定在底部；不常用的设置收进
   「▸ 高级设置」默认折叠，界面单屏不用切标签；支持把文件 / 文件夹**直接拖进窗口**。
   *Three-step card UI — pick table → pick field → split; advanced options collapse by default; drag & drop supported.*
-- **拆分前先看结果（新）** —— 选定拆分字段后自动列出「将拆成哪几组」，可勾选只拆其中一部分；
+- **拆分前先看结果（新）** —— 选定拆分字段后自动列出将拆出哪几组，可勾选只拆其中一部分；
+  拆整个文件夹时会**说明这几组来自哪张样本表**，并可「🔍 扫描全部文件的分组」看全量、「📄 换样本表」换一张更有代表性的；
   分组异常多时（比如误选了工号列）主动警告，不再导图。
   *Preview split groups before running, with optional per-value checkboxes and a warning for suspicious many-group fields.*
 - **默认按原表拆分，按需跨文件合并** —— 默认每个源文件各自拆分、打包进同一个 ZIP；
@@ -94,6 +95,7 @@ formatting, merge across files, optional per-person output — free, open-source
   *Restrict splitting to specific values via checkboxes, remembered across runs.*
 - **二级拆分（按人分发）** —— 可选再按第二列细分（如 部门 → 姓名），一次产出汇总 + 到人双份结果。
   *Optional secondary split (e.g. Department → Person), producing both summary and per-person outputs.*
+- **两档速度，就在开始按钮旁（新）** —— **标准**完整保留格式；**极速**只输出数据、不保留格式与公式，快好几倍。以前这个开关藏在「高级设置」里，v2.9 提到了第 ③ 步主操作区。
 - **保留格式** —— 表头与数据行的字体、颜色、边框、数字格式、合并表头完整保留。
 - **智能识别表头** —— 表头不在第一行也能自动找到（前 15 行启发式扫描）。
 - **公式显示真实值** —— 读公式缓存值，并对「未计算的公式」提前预警。
@@ -171,7 +173,9 @@ formatting, merge across files, optional per-person output — free, open-source
 3. **③开始拆分** —— 输出位置不用改（自动放进「拆分结果」文件夹），点「▶ 开始拆分」，
    完成后显示结果摘要（几组 / 几个文件 / 多少行），并自动打开输出目录。
 
-不常用的设置（表头识别策略、只拆部分取值、取值归并、跳过值等）收在
+「拆分速度」（标准 / 极速）就放在第 ③ 步「开始拆分」上方——觉得慢先来这里切一下。
+
+其余不常用的设置（表头识别策略、只拆部分取值、取值归并、跳过值等）收在
 **「▸ 高级设置（一般用不到）」**里，默认折叠，一般流程用不到点开它。
 
 想试一下？仓库自带样本：
