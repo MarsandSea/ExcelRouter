@@ -8,7 +8,7 @@
 
 <br>
 
-[![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows-1E7F4B?style=for-the-badge)](../../releases)
+[![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows%20%7C%20%E9%BA%92%E9%BA%9F-1E7F4B?style=for-the-badge)](../../releases)
 
 **[📖 3 分钟上手指引](docs/使用指引.md)** · **[❓ 常见问题](docs/FAQ.md)** · [下载哪个文件？](#-直接下载使用无需安装-python--download)
 
@@ -16,7 +16,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux(%E9%BA%92%E9%BA%9F%2FUOS)-lightgrey)
 
 *Batch-split a whole folder of Excel files by any field (department / region / ID), keep original
 formatting, merge across files, optional per-person output — free, open-source, no coding required.*
@@ -29,7 +29,7 @@ formatting, merge across files, optional per-person output — free, open-source
 
 ## 📌 一句话介绍 / What is this
 
-**ExcelRouter 是一个 Windows 平台的开源 Excel 批量拆分工具**（MIT 协议，永久免费，无广告、
+**ExcelRouter 是一个开源 Excel 批量拆分工具**（Windows + 国产化 Linux：银河麒麟 V10 / 统信 UOS）（MIT 协议，永久免费，无广告、
 无注册、无功能限制）。它把**一个或一整批** Excel 表格，按你指定的**任意一个字段**
 （部门 / 区域 / 门店 / 网格 / 工号 / 班级……）的取值自动拆成多个文件，**完整保留原有的复杂表头
 与单元格格式**，可选再按第二个字段拆到每个人，最后按组打包成 ZIP 直接分发。
@@ -41,14 +41,17 @@ formatting, merge across files, optional per-person output — free, open-source
 - ❌ 不做**表头扁平化 / 多层表头降维**——本工具的定位是「原样保留」表头，不是改造表头
 - ❌ 不做**把多个表合并成一个总表**的通用合并（只在拆分时支持「同一取值跨文件合并」）
 - ❌ 不做数据透视、清洗、统计分析
-- ❌ **没有 Mac / Linux 版，也没有在线版**（在线版意味着要上传数据，与「数据不出本机」冲突）
+- ❌ **没有 Mac 版，也没有在线版**（在线版意味着要上传数据，与「数据不出本机」冲突）
+- ✅ **有信创版**：银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64（飞腾 / 鲲鹏）双架构，
+  免安装 tar.gz，解压即用（[怎么装](#-直接下载使用无需安装-python--download)）
 
-> *ExcelRouter is a free, open-source (MIT) **Windows desktop tool that splits one or a whole folder
-> of Excel files by the values of any column** — department, region, store, employee ID, class —
+> *ExcelRouter is a free, open-source (MIT) **desktop tool for Windows and Chinese domestic Linux (Kylin V10 / UOS)
+> that splits one or a whole folder of Excel files by the values of any column** — department, region, store, employee ID, class —
 > keeping the original (even multi-row, merged) headers and cell formatting intact. Optional second
 > level split (per person), automatic cross-file merge, ZIP packaging per group, plus a PDF secure
 > distribution mode (per-group password + watermark). Everything runs **100% locally — no upload,
-> no telemetry, works offline**. No macOS/Linux build, no web version; it does not flatten headers,
+> no telemetry, works offline**. Windows x64 plus Linux x86_64/aarch64; no macOS build and no web
+> version; it does not flatten headers,
 > merge workbooks into one, or do any analytics.*
 
 ---
@@ -133,12 +136,18 @@ formatting, merge across files, optional per-person output — free, open-source
 
 普通用户请直接下载打包好的程序：👉 **[前往 Releases 下载](../../releases)**
 
-每个版本提供两种产物，**优先选 ZIP**：
+每个版本提供四种产物。**Windows 优先选 ZIP；麒麟 / UOS 选对应架构的 tar.gz**：
 
-| 产物 | 说明 | 适用场景 |
+| 产物 | 平台 | 说明 |
 |---|---|---|
-| `ExcelRouter-vX.X.X-win64.zip` | 文件夹形式，解压后双击里面的 exe | **推荐**，启动更快，极少触发杀毒软件误报 |
-| `ExcelRouter-vX.X.X.exe` | 单文件版，下载即用无需解压 | 图方便，但个别杀毒软件可能误报（[why?](docs/FAQ.md#杀毒软件误报)） |
+| `ExcelRouter-vX.X.X-win64.zip` | Windows | **推荐**，文件夹形式，解压后双击里面的 exe，极少触发杀毒软件误报 |
+| `ExcelRouter-vX.X.X.exe` | Windows | 单文件版，下载即用无需解压；个别杀毒软件可能误报（[why?](docs/FAQ.md#杀毒软件误报)） |
+| `ExcelRouter-vX.X.X-linux-x86_64.tar.gz` | 麒麟 / UOS（兆芯、海光、Intel） | 解压后运行 `启动ExcelRouter.sh` |
+| `ExcelRouter-vX.X.X-linux-aarch64.tar.gz` | 麒麟 / UOS（飞腾、鲲鹏，含华为擎云笔记本） | 解压后运行 `启动ExcelRouter.sh` |
+
+> **不确定自己是哪个架构？** 终端里敲 `uname -m`：出 `x86_64` 选第三个，出 `aarch64` 选第四个。
+> 如果启动时报 `GLIBC_2.xx not found`，说明你的系统比打包机更旧——
+> 在你自己的机器上跑一遍 `build_linux.sh` 重新打一份即可（见 [FAQ](docs/FAQ.md)）。
 
 > 🤖 **在用 AI 助手（WorkBuddy / Claude / WPS 灵犀等）？** 也可以不装 exe：给助手装上
 > **[ExcelRouter Skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)**——同一套核心代码的
@@ -218,8 +227,10 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
 - **`.xls` 老格式支持吗？** —— 能拆、数据完整，但转换后**无法保留原格式**；格式重要就先用
   Excel 另存为 `.xlsx`。
 - **免费吗？公司内部能用吗？** —— 免费，MIT 协议，个人和商业使用都可以，保留版权声明即可。
-- **有 Mac 版 / 在线版吗？** —— 没有，只有 Windows 版。在线版意味着要把你的数据上传到别人
-  的服务器，与「数据不出本机」冲突，不做；Mac / Linux 待 Star 数 100+ 后评估提供。
+- **有麒麟 / 信创版吗？** —— 有。银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64 双架构，
+  下载对应的 `-linux-*.tar.gz`，解压后运行 `启动ExcelRouter.sh` 即可。
+- **有 Mac 版 / 在线版吗？** —— 没有。在线版意味着要把你的数据上传到别人的服务器，
+  与「数据不出本机」冲突，不做；Mac 待 Star 数 100+ 后评估提供。
 - **在用 AI 助手（WorkBuddy / Claude 等），可以不装 exe 吗？** —— 可以。有同一套内核的
   **ExcelRouter Skill** 版：装进你的 AI 助手后，对话里说一句「按部门拆分」「按 PDF 网格加密分发」
   就能完成，同样全程本机处理。见

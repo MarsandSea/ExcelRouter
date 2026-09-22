@@ -73,7 +73,7 @@ def main():
     ap.add_argument("--watermark-text", default="{grid} {date}", help="水印模板，支持 {grid} {date} 占位")
     ap.add_argument("--opacity", type=float, default=0.15, help="水印透明度 0~1")
     ap.add_argument("--angle", type=float, default=45, help="水印旋转角度")
-    ap.add_argument("--font", default="", help="中文字体 .ttf 路径（非 Windows 环境找不到系统字体时用）")
+    ap.add_argument("--font", default="", help="手动指定水印字体 .ttf/.otf/.ttc 路径（覆盖自动探测）")
     args = ap.parse_args()
 
     # ---- 起步：生成映射清单模板（唯一不需要已有文件的分支，所以排在所有存在性检查之前）----
@@ -164,8 +164,9 @@ def main():
         if not os.path.exists(args.font):
             emit_error(f"找不到字体文件：{args.font}")
             return
-        # 上游 _find_cjk_font() 只扫 Windows 系统字体目录，非 Windows 环境（或想指定字体时）
-        # 用 monkeypatch 覆盖，不改 vendor 代码——下次同步不会把这个补丁冲掉。
+        # v2.8.0 起上游 _find_cjk_font() 已经会扫 Linux 字体目录 + fc-match，
+        # 所以 --font 从「非 Windows 必填」降级成纯覆盖手段。仍用 monkeypatch 覆盖，
+        # 不改 vendor 代码——下次同步不会把这个补丁冲掉。
         pdf_dist._find_cjk_font = lambda: args.font
 
     config = build_config(

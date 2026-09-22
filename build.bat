@@ -18,6 +18,10 @@ REM KEY: "--add-data app.ico;." is mandatory too. "--icon app.ico"
 REM only stamps the exe FILE icon; the running window's title-bar/
 REM taskbar icon is set at runtime via Tk iconbitmap(), which needs
 REM app.ico bundled as data so gui/app.py can find it after packing.
+REM KEY: "--add-data app.png;." is the Linux counterpart of app.ico:
+REM X11 iconbitmap() only accepts XBM, so gui/app.py falls back to
+REM iconphoto(app.png). Kept in the Windows build too so that build.bat
+REM and build_linux.sh stay diffable line by line.
 REM KEY: "--collect-all tkinterdnd2" is mandatory since v2.7 (drag & drop).
 REM Without it the tkdnd2.x.x binary is missing and drag-in falls back
 REM to the silent no-dnd path.
@@ -51,6 +55,7 @@ pyinstaller --onedir --noconsole ^
   --collect-all tkinterdnd2 ^
   --add-data "config;config" ^
   --add-data "app.ico;." ^
+  --add-data "app.png;." ^
   main.py
 
 echo.
@@ -63,6 +68,7 @@ pyinstaller --onefile --noconsole ^
   --collect-all tkinterdnd2 ^
   --add-data "config;config" ^
   --add-data "app.ico;." ^
+  --add-data "app.png;." ^
   main.py
 
 echo.

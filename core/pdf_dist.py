@@ -14,6 +14,8 @@ import io
 import os
 import json
 import secrets
+import shutil
+import subprocess
 import time
 
 from openpyxl import Workbook, load_workbook
@@ -23,8 +25,43 @@ from core.utils import safe_filename, soft_clean
 
 MANIFEST_NAME = "分发清单.xlsx"
 
-# 水印字体候选（只收 .ttf——fpdf2 不支持 .ttc，msyh.ttc 之类直接跳过）
+# Windows 水印字体候选（保持 v2.7.2 原样，只在 Windows 分支用）
 _FONT_CANDIDATES = ["simhei.ttf", "Deng.ttf", "msyhbd.ttf", "simfang.ttf", "simkai.ttf"]
+
+# fpdf2 能加载的字体扩展名。/usr/share/fonts 下混着 .pcf.gz/.bdf/.pfb，
+# 返回它们会让 add_font 直接抛异常，必须先滤掉。
+# （注：fpdf2 2.8.x 起 .ttc/.otc 字体集合是支持的，旧注释说“不支持 .ttc”已过期。）
+_FONT_EXTS = (".ttf", ".otf", ".ttc", ".otc")
+
+# Linux（银河麒麟 V10 / 统信 UOS 等）水印字体候选，按优先级排列。
+# ★ 单体简中字面（*SC*.otf）必须排在 .ttc 合集前面：NotoSansCJK-Regular.ttc 的
+#   第 0 面通常是日文面，汉字能渲染但字形是日式变体（直/骨/今 肉眼可辨）。
+#   fpdf2 的 collection_font_number 能选 SC 面，但索引因构建而异，
+#   优先单体文件比猜索引稳。
+_LINUX_FONT_CANDIDATES = [
+    # ① 麒麟 / UOS 预装的方正字库
+    "FZHTK.TTF", "FZSSK.TTF", "FZKTK.TTF", "FZFSK.TTF",
+    # ② 文泉驿：中文桌面发行版几乎必装，且是「中文优先」字形
+    "wqy-zenhei.ttc", "wqy-microhei.ttc", "wqy-zenhei.ttf", "wqy-microhei.ttf",
+    # ③ Noto / 思源的单体简中面
+    "NotoSansCJKsc-Regular.otf", "NotoSansSC-Regular.otf",
+    "SourceHanSansSC-Regular.otf", "SourceHanSansCN-Regular.otf",
+    "NotoSerifCJKsc-Regular.otf",
+    # ④ 合集文件兜底
+    "NotoSansCJK-Regular.ttc", "SourceHanSansSC.ttc",
+    # ⑤ 老发行版的 AR PL
+    "uming.ttc", "ukai.ttc",
+]
+
+_LINUX_FONT_DIRS = [
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    os.path.expanduser("~/.local/share/fonts"),
+    os.path.expanduser("~/.fonts"),
+]
+
+# 用户指定水印字体的逃生口：信创机器的字体配置千奇百怪，自动探测不中时用它。
+_FONT_ENV = "ER_CJK_FONT"
 
 
 def _noop(*_args, **_kwargs):
@@ -188,13 +225,81 @@ def fill_random_passwords(mapping_path, grid_col, password_col="", out_path=None
     finally:
         wb.close()
 
+def _font_usable(path):
+    """fpdf2 到底能不能加载这个字体文件——让它自己回答，别靠扩展名猜。
+
+    requirements.txt 只钉了 fpdf2>=2.8.0，旧版对 .ttc 的支持不一定齐；
+    而且 /usr/share/fonts 下也可能躺着损坏的字体文件。这一关是
+    「优雅降级成 ???」和「分发跑到一半崩掉」的分界线。
+    """
+    try:
+        from fpdf import FPDF
+        probe = FPDF()
+        probe.add_font("probe", "", path)
+        return True
+    except Exception:
+        return False
+
+
 def _find_cjk_font():
-    """在 Windows 系统字体目录里找一款可用的中文 .ttf。找不到返回 None。"""
+    """找一款可用于水印的中文字体，找不到返回 None。
+
+    Windows：行为与 v2.7.2 完全一致（只扫系统 Fonts 目录里的那几个 .ttf）。
+    其余平台（麒麟 / UOS / 其它 Linux）：环境变量 → 已知候选名 → fc-match → None。
+
+    函数名、零参签名、str|None 返回值都是对外契约：下游 excelrouter-skill 的
+    er_pdf_dist.py 靠猴补丁替换它来实现 --font 覆盖，别改签名。
+    """
+    return _find_cjk_font_win() if os.name == "nt" else _find_cjk_font_posix()
+
+
+def _find_cjk_font_win():
+    """Windows 上的中文字体探测（与 v2.7.2 逐字一致）。"""
     fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
     for name in _FONT_CANDIDATES:
         p = os.path.join(fonts_dir, name)
         if os.path.exists(p):
             return p
+    return None
+
+
+def _find_cjk_font_posix():
+    """Linux/macOS 上的中文字体探测。"""
+    # ① 用户显式指定（FAQ 里会教这个环境变量）
+    env = os.environ.get(_FONT_ENV, "").strip()
+    if env and os.path.isfile(env) and _font_usable(env):
+        return env
+
+    # ② 建一次「小写文件名 → 全路径」索引，再按候选顺序查
+    index = {}
+    for root_dir in _LINUX_FONT_DIRS:
+        if not os.path.isdir(root_dir):
+            continue
+        n_walk = 0
+        for root, _dirs, files in os.walk(root_dir, followlinks=False):
+            n_walk += 1
+            if n_walk > 800:        # 字体目录不该有这么深，防病态目录卡住
+                break
+            for f in files:
+                if f.lower().endswith(_FONT_EXTS):
+                    index.setdefault(f.lower(), os.path.join(root, f))
+    for name in _LINUX_FONT_CANDIDATES:
+        p = index.get(name.lower())
+        if p and _font_usable(p):
+            return p
+
+    # ③ 问 fontconfig 要一款「中文 sans」——最通用的一条路
+    # timeout 不是装饰：刚开机、fontconfig 缓存是冷的时候，fc-match 能卡好几秒。
+    if shutil.which("fc-match"):
+        try:
+            r = subprocess.run(["fc-match", "-f", "%{file}", "sans-serif:lang=zh-cn"],
+                               capture_output=True, text=True, timeout=3)
+            p = (r.stdout or "").strip()
+            if (p and p.lower().endswith(_FONT_EXTS)
+                    and os.path.isfile(p) and _font_usable(p)):
+                return p
+        except (OSError, subprocess.SubprocessError):
+            pass
     return None
 
 
@@ -215,10 +320,15 @@ def _make_watermark_pdf(text, w_pt, h_pt, *, angle=45, opacity=0.15, font_path=N
     pdf.set_auto_page_break(False)
     pdf.add_page()
     if font_path:
-        pdf.add_font("wm", "", font_path)
-        pdf.set_font("wm", size=18)
-        draw_text = text
-    else:
+        # 守卫 add_font：一个坏字体文件不该在已经写出一部分网格之后，
+        # 把整轮分发打断——降级成 ??? 也比跑一半崩掉强。
+        try:
+            pdf.add_font("wm", "", font_path)
+            pdf.set_font("wm", size=18)
+            draw_text = text
+        except Exception:
+            font_path = None
+    if not font_path:
         pdf.set_font("Helvetica", size=18)
         draw_text = text.encode("ascii", "replace").decode("ascii")
     pdf.set_text_color(128, 128, 128)
@@ -345,8 +455,13 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
     font_path = None
     if watermark_on:
         font_path = _find_cjk_font()
-        if not font_path:
-            log_fn("⚠ 未找到中文字体（simhei.ttf 等），水印中的中文会显示为 '?'")
+        if font_path:
+            log_fn(f"🔤 水印字体：{font_path}")
+        else:
+            log_fn("⚠ 没找到可用的中文字体，水印里的中文会显示成 '?'。"
+                   "Windows：确认系统字体没被精简；"
+                   "Linux（麒麟/UOS）：sudo apt install -y fonts-wqy-zenhei（或 fonts-noto-cjk）；"
+                   "也可以设环境变量 ER_CJK_FONT 指向一个 .ttf/.otf/.ttc 文件")
 
     algorithm = _encrypt_algorithm(log_fn)
     os.makedirs(output_root, exist_ok=True)

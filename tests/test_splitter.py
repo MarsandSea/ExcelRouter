@@ -442,3 +442,29 @@ def test_to_person_cross_files_no_merge(tmp_path):
         amounts = [ws.cell(row=i, column=3).value for i in range(2, ws.max_row + 1)]
         wb.close()
         assert amounts == expect, (fname, amounts)
+
+
+def test_walk_skips_tmp_file_case_insensitively(tmp_path):
+    """残留的临时文件不论大小写都要跳过。
+
+    旧实现里扩展名判断用的是 f.lower()，而 __tmp__ 判断用的是原始 f —— 在区分
+    大小写的文件系统（Linux / 麒麟）上，`X__TMP__.XLSX` 会绕过过滤被当成数据表
+    重新吃进去，导致同一批数据被重复拆分。
+    """
+    inp = tmp_path / "in"
+    inp.mkdir()
+    out = tmp_path / "out"
+    _make_book(inp / "正常表.xlsx", [
+        ["001", "张三", "技术部", "北京", 100],
+        ["002", "李四", "销售部", "上海", 200],
+    ])
+    # 大写命名的残留临时文件：内容里的部门取值刻意与正常表不同，便于断言
+    _make_book(inp / "旧残留__TMP__.XLSX", [
+        ["901", "王五", "不该出现的部门", "广州", 300],
+    ])
+
+    run_split(_base_cfg(str(inp), str(out)), log_fn=lambda *_: None)
+
+    names = {p.name for p in out.rglob("*.xlsx")}
+    assert not any("不该出现的部门" in n for n in names), names
+    assert not (out / "不该出现的部门").exists()

@@ -8,8 +8,9 @@ import pytest
 from fpdf import FPDF
 from pypdf import PdfReader
 
+from core import pdf_dist
 from core.pdf_dist import (
-    list_mapping_columns, read_mapping, run_pdf_dist, MANIFEST_NAME,
+    list_mapping_columns, read_mapping, run_pdf_dist, MANIFEST_NAME, _find_cjk_font,
 )
 
 
@@ -244,3 +245,112 @@ def test_fill_random_passwords_reuse_existing_blank_col(tmp_path):
     rows, _ = read_mapping(out, "网格", "密码")
     pw = {r["grid"]: r["password"] for r in rows}
     assert len(pw) == 2 and all(p and len(p) == 8 for p in pw.values())   # 密码可读回
+
+
+# ---------- 中文字体探测（v2.8.0 麒麟适配）----------
+# 这一节补的是本文件开头注明的空白：中文水印此前在任何平台都没有测试覆盖。
+
+def test_find_cjk_font_windows_unchanged(tmp_path, monkeypatch):
+    """Windows 分支必须与 v2.7.2 逐字一致——候选顺序也不能变。"""
+    fonts = tmp_path / "Fonts"
+    fonts.mkdir()
+    (fonts / "simkai.ttf").write_bytes(b"x")
+    (fonts / "simhei.ttf").write_bytes(b"x")
+    monkeypatch.setenv("WINDIR", str(tmp_path))
+    # simhei 在候选列表里排在 simkai 前面；且 Windows 分支不做可加载性校验。
+    # 直接调 _find_cjk_font_win()，这样在 Linux CI 上也能跑（不用改全局 os.name）。
+    assert pdf_dist._find_cjk_font_win() == str(fonts / "simhei.ttf")
+
+
+def test_find_cjk_font_linux_prefers_cjk_candidates(tmp_path, monkeypatch):
+    """Linux 分支：命中候选名的才算数，随便一个 .ttf 不能冒充中文字体。"""
+    (tmp_path / "wqy-zenhei.ttc").write_bytes(b"x")
+    (tmp_path / "DejaVuSans.ttf").write_bytes(b"x")
+    monkeypatch.setattr(pdf_dist, "_LINUX_FONT_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(pdf_dist, "_font_usable", lambda p: True)
+    monkeypatch.setattr(pdf_dist.shutil, "which", lambda c: None)   # 屏蔽 fc-match
+    monkeypatch.delenv("ER_CJK_FONT", raising=False)
+    assert pdf_dist._find_cjk_font_posix() == str(tmp_path / "wqy-zenhei.ttc")
+
+    # 只剩 DejaVu 时应当放弃（返回 None），而不是拿一个无中文字形的字体去糊弄
+    (tmp_path / "wqy-zenhei.ttc").unlink()
+    assert pdf_dist._find_cjk_font_posix() is None
+
+
+def test_find_cjk_font_env_override(tmp_path, monkeypatch):
+    """ER_CJK_FONT 是信创机器上的逃生口，优先级最高；指向不存在的文件则被忽略。"""
+    real = tmp_path / "my.ttf"
+    real.write_bytes(b"x")
+    (tmp_path / "wqy-zenhei.ttc").write_bytes(b"x")
+    monkeypatch.setattr(pdf_dist, "_LINUX_FONT_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(pdf_dist, "_font_usable", lambda p: True)
+    monkeypatch.setattr(pdf_dist.shutil, "which", lambda c: None)
+
+    monkeypatch.setenv("ER_CJK_FONT", str(real))
+    assert pdf_dist._find_cjk_font_posix() == str(real)
+
+    monkeypatch.setenv("ER_CJK_FONT", str(tmp_path / "并不存在.ttf"))
+    assert pdf_dist._find_cjk_font_posix() == str(tmp_path / "wqy-zenhei.ttc")
+
+
+def test_find_cjk_font_rejects_unloadable(tmp_path, monkeypatch):
+    """★ 最关键的一条：名字对得上但文件是坏的，必须拒掉。
+
+    这是「优雅降级成 ???」和「分发跑到一半崩掉」的分界线——本用例用真实的
+    _font_usable（让 fpdf2 自己判断），不做桩。
+    """
+    (tmp_path / "wqy-zenhei.ttc").write_bytes(b"NOT A FONT")
+    monkeypatch.setattr(pdf_dist, "_LINUX_FONT_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(pdf_dist.shutil, "which", lambda c: None)
+    monkeypatch.delenv("ER_CJK_FONT", raising=False)
+    assert pdf_dist._find_cjk_font_posix() is None
+
+
+def test_watermark_survives_broken_font(workspace, monkeypatch):
+    """坏字体不能中断整轮分发：降级成 Helvetica 继续跑完，所有网格都要产出。"""
+    tmp_path, cfg = workspace
+    bad = tmp_path / "broken.ttf"
+    bad.write_bytes(b"NOT A FONT")
+    monkeypatch.setattr(pdf_dist, "_find_cjk_font", lambda: str(bad))
+    pdf_dist._wm_cache.clear()
+    logs = []
+    run_pdf_dist(cfg, log_fn=logs.append)
+    out = tmp_path / "out"
+    assert (out / "GridA" / "report.pdf").exists()
+    assert (out / "GridB" / "report.pdf").exists()
+
+
+@pytest.mark.skipif(_find_cjk_font() is None, reason="本机没有可用的中文字体")
+def test_watermark_cjk_end_to_end(tmp_path):
+    """中文网格名的水印必须真的嵌入中文字体，而不是退回 Helvetica 的 '???'。"""
+    src = tmp_path / "report.pdf"
+    _make_pdf(src)
+    mp = tmp_path / "map.xlsx"
+    _make_mapping(mp, [("研发一组", "001234", "张三")])
+    out = tmp_path / "out"
+    pdf_dist._wm_cache.clear()
+    logs = []
+    run_pdf_dist({
+        "pdf_input_paths": [str(src)],
+        "pdf_mapping_path": str(mp),
+        "pdf_grid_column": "GridName",
+        "pdf_password_column": "Pwd",
+        "pdf_receiver_column": "Receiver",
+        "pdf_watermark": True,
+        "pdf_watermark_text": "{grid} {date}",
+        "output_path": str(out),
+    }, log_fn=logs.append)
+
+    assert any("水印字体" in m for m in logs), logs
+    dst = out / "研发一组" / "report.pdf"
+    assert dst.exists()
+    reader = PdfReader(str(dst))
+    reader.decrypt("001234")
+    raw = reader.pages[0].get_contents().get_data()
+    # 退回 Helvetica 时中文会被 encode("ascii","replace") 打成 '?'
+    assert b"?" * 3 not in raw
+    # 中文字体是以 Type0 复合字体（子集化后）嵌进去的；退回 Helvetica 时
+    # 页面里只会有 /Type1 的内置字体，不会出现 /Type0。
+    fonts = reader.pages[0]["/Resources"]["/Font"]
+    subtypes = [f.get_object().get("/Subtype") for f in fonts.values()]
+    assert "/Type0" in subtypes, f"水印没有嵌入中文字体，说明退回了 Helvetica：{subtypes}"

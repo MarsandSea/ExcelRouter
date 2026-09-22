@@ -15,6 +15,8 @@
 2. 更新版本号（三处要一致，缺一会导致 exe 属性 / 标题栏 / 文档互相对不上）：
    - `gui/app.py` 的 `APP_VERSION` 常量（窗口标题、反馈按钮里都引用它）
    - `version.txt` 的 `filevers` / `prodvers` / `FileVersion` / `ProductVersion` 四个字段
+     （**仅 Windows 用**：`--version-file` 是 PE 版本资源。**不要为 Linux 另造版本文件**，
+     `build_linux.sh` 直接从 `gui/app.py` 的 `APP_VERSION` 解析，不引入第四处定义）
    - `CLAUDE.md` 开头「当前版本」那一行
 3. Commit、push 到 `main`。
 4. 打 tag 并推送，**这一步会自动触发 CI 发版**（`vX.X.X` 换成实际版本号，
@@ -23,21 +25,83 @@
    git tag vX.X.X
    git push origin vX.X.X
    ```
-5. 去仓库 **Actions** 页看 `Release` 工作流跑完（约 3-5 分钟），跑绿后
-   **Releases** 页会自动出现两个产物：
-   - `ExcelRouter-vX.X.X-win64.zip`（onedir，推荐分发）
-   - `ExcelRouter-vX.X.X.exe`（onefile，备选）
-6. 下载其中一个到本机，脱离开发环境（换个目录）双击冒烟测试：能正常打开、
-   识别列、跑通一次拆分。
+5. 去仓库 **Actions** 页看 `Release` 和 `Release (Linux)` 两个工作流跑完
+   （各约 3-8 分钟；它们**彼此独立**，Linux 挂了不会影响 Windows 发版）。
+   跑绿后 **Releases** 页会出现四个产物：
+   - `ExcelRouter-vX.X.X-win64.zip`（Windows onedir，推荐分发）
+   - `ExcelRouter-vX.X.X.exe`（Windows onefile，备选）
+   - `ExcelRouter-vX.X.X-linux-x86_64.tar.gz`（麒麟 / UOS，兆芯/海光/Intel）
+   - `ExcelRouter-vX.X.X-linux-aarch64.tar.gz`（麒麟 / UOS，飞腾/鲲鹏）
+6. 下载到本机，脱离开发环境（换个目录）冒烟测试：能正常打开、识别列、跑通一次拆分。
+   **麒麟产物必须在真机上冒烟**，重点看三件事：窗口能起来、界面中文不是方块、
+   PDF 水印里的中文不是 `???`（日志里应有一行「🔤 水印字体：...」）。
+   详细验收清单见 §1.7。
 7. **Release 说明里带上 AI 助手引导**（固定一句，别漏）：「在用 AI 助手
    （WorkBuddy / Claude / WPS 灵犀）？同内核 Skill 版见
    [excelrouter-skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)，
    WorkBuddy 可从 [SkillHub](https://skillhub.cn/skills/excelrouter) 一键安装。」
    —— 从桌面版用户里筛 AI 助手用户，属合规引流方向（见营销计划「客户端优先」铁律）。
 
-CI 配置见 `.github/workflows/release.yml`。它会先跑 `pytest -q` 拦住测试不过的版本，
-测试失败则整个发版流程停止，不会出坏的 Release。同一个流程还会**尽力而为**同步一份到
-Gitee（见下一节），Gitee 同步失败不影响本次 GitHub 发版。
+CI 配置见 `.github/workflows/release.yml`（Windows）与 `.github/workflows/release-linux.yml`
+（麒麟 / UOS）。两者都会先跑 `pytest -q` 拦住测试不过的版本。**刻意做成两个独立 workflow
+而不是一个 OS matrix**：release.yml 还兼着 Gitee 镜像与 Gitee Release 上传，改 matrix 要给
+五个 step 挂 `if:`；更重要的是**全新平台不该有能力阻断已验证的 Windows 发版**——
+独立 workflow 下 Linux 挂掉只是绿色 Release 旁边一个红勾。
+`softprops/action-gh-release` 是幂等的，谁先跑完谁建 Release，另一个追加附件；
+`generate_release_notes` 只留在 Windows 那条，避免重复生成发布说明。
+
+---
+
+## 1.7 麒麟 / 信创版发版补充（v2.8.0 起）
+
+### CI 与真机的分工
+
+CI 在 `almalinux:8` 容器里构建（glibc 2.28，与麒麟 V10 同代），并有一条
+**glibc 下限断言**：用 `objdump -T` 取产物所有 `GLIBC_2.x` 符号的最大值，
+高于 `GLIBC_2.28` 就直接 fail。这把「能不能在麒麟上跑」从一个期望变成了机器可校验的
+不变量——依赖 wheel 升级导致的回归会被自动抓住，**别把这一步去掉**。
+
+容器选型的两条硬约束（改之前先读）：
+
+- **不能用 manylinux 镜像**：它的 CPython 没编 `_tkinter`，customtkinter 根本 import 不了。
+- **不能比 glibc 2.28 更低**：`actions/checkout@v4` 跑在 Node 20 上，要求 glibc ≥ 2.28。
+  AlmaLinux 8 恰好踩在这条线上，同时也低于麒麟 V10 的 glibc——两个约束的唯一交集。
+- 容器里**不能用 `actions/setup-python`**（它下载的二进制是对着新 glibc 编的），
+  必须 `dnf install python3.12`。
+
+### 用户系统比 CI 产物更旧怎么办
+
+让用户在自己机器上打包：`./build_linux.sh`。脚本会做环境自检（Python ≥3.9、
+`tkinter`、中文字体）并用中文给出确切的补救命令，打完还会打印产物真实的 glibc 下限。
+FAQ 里「麒麟上启动报 GLIBC_2.xx not found 怎么办」已经写成用户能照做的步骤。
+
+### 真机验收清单（x86_64 与 aarch64 各跑一遍）
+
+开头先记录 `uname -m` 和 `getconf GNU_LIBC_VERSION`。
+
+- [ ] `tar -xzf` 后 `./启动ExcelRouter.sh`，窗口 5 秒内出现
+- [ ] 改用**图形归档器**解压再启动（验证启动脚本的 `chmod +x` 兜底）
+- [ ] 解压到**含空格和中文**的路径（`~/我的 工具/`）再启动
+- [ ] 标题栏与任务栏是应用图标，不是 Tk 默认羽毛
+- [ ] 界面中文无方框 / 豆腐块
+- [ ] 拖入 xlsx / 文件夹 / **文件名含空格和中文**的文件都能识别；
+      若拖拽不可用，提示语退到「粘贴路径」且**程序没崩**
+- [ ] 跑完自动打开输出文件夹（peony）；「📂 打开输出文件夹」按钮可用；
+      没有文件管理器时有**可见警告**而不是毫无反应
+- [ ] 用 **WPS for Linux** 打开某个源表再跑 →「文件正被打开」预警触发
+- [ ] PDF 模式：日志出现「🔤 水印字体：...」；**打开输出 PDF，水印中文不是 `???`**
+- [ ] PDF 模式：日志显示 **AES-256**（确认该架构上 `cryptography` wheel 装上了，
+      没有降级到 RC4-128）
+- [ ] 负向：`ER_CJK_FONT=/etc/hostname`（真实文件但不是字体）→ 不崩，正常降级
+- [ ] 负向：卸掉中文字体 → ⚠ 带 `apt install` 补救提示，PDF 仍生成，不崩
+- [ ] fcitx 中文输入法能在「输出目录」输入框里打中文（验启动脚本的 `XMODIFIERS`）
+- [ ] 把 tar 包拷到**另一台同架构麒麟**（最好是更旧的 SP）启动 ← 真正验 glibc 下限
+
+### 杀毒 / VirusTotal
+
+Linux 产物不需要走 §3 的 VirusTotal 例行检查——国内杀毒引擎的误报面集中在 Windows PE，
+tar.gz + ELF 不在那个雷区里。§2「为什么要两种打包形态」也只适用于 Windows：
+**Linux 侧只发 onedir**，理由见 CLAUDE.md 的 Linux 打包坑第 2 条（`/tmp` 常被挂 `noexec`）。
 
 ---
 
@@ -81,13 +145,13 @@ CI 不会自动维护，**改品牌文案或增删大功能时手动同步一次
 **Description**（350 字符内，中英各一句，兼顾国内外检索）：
 
 ```
-Windows 桌面工具：按任意字段（部门/区域/工号）批量拆分 Excel，保留复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另附 PDF 加密水印分发。免安装、MIT 开源、数据不出本机 · Split a whole folder of Excel files by any column on Windows — original formatting preserved, cross-file merge, per-person output, ZIP packaging, plus PDF password + watermark distribution. Free, MIT, 100% local.
+Windows / 麒麟信创桌面工具：按任意字段（部门/区域/工号）批量拆分 Excel，保留复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另附 PDF 加密水印分发。免安装、MIT 开源、数据不出本机 · Split a whole folder of Excel files by any column on Windows and Kylin Linux — original formatting preserved, cross-file merge, per-person output, ZIP packaging, plus PDF password + watermark distribution. Free, MIT, 100% local.
 ```
 
 **Topics**（只允许小写字母/数字/连字符，最多 20 个）：
 
 ```
-excel excel-splitter split-excel xlsx spreadsheet openpyxl pandas python windows desktop-app gui customtkinter office-automation batch-processing pdf-encryption watermark no-code chinese
+excel excel-splitter split-excel xlsx spreadsheet openpyxl pandas python windows linux kylin desktop-app gui customtkinter office-automation batch-processing pdf-encryption watermark chinese
 ```
 
 也可以用 gh CLI 一次性设置：
@@ -101,13 +165,13 @@ gh repo edit MarsandSea/excel-router --add-topic excel,excel-splitter,split-exce
 **仓库简介**：
 
 ```
-ExcelRouter · Excel 智能拆分工具：把一批 Excel 按部门/区域/工号等任意字段的取值批量拆成多个文件，保留原复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另支持 PDF 按网格加密 + 水印分发。Windows 免安装，MIT 开源免费，数据全程本机处理不上传。
+ExcelRouter · Excel 智能拆分工具：把一批 Excel 按部门/区域/工号等任意字段的取值批量拆成多个文件，保留原复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另支持 PDF 按网格加密 + 水印分发。Windows 与银河麒麟/UOS 信创系统均可用，免安装，MIT 开源免费，数据全程本机处理不上传。
 ```
 
 **标签**（Gitee 支持中文标签，国内搜索主要吃这些词）：
 
 ```
-Excel  Excel拆分  批量拆分  表格拆分  复杂表头  办公自动化  报表分发  开源免费  本地处理  Windows  Python  PDF加密
+Excel  Excel拆分  批量拆分  表格拆分  复杂表头  办公自动化  报表分发  开源免费  本地处理  Windows  麒麟  信创  Python  PDF加密
 ```
 
 顺手把 Gitee 的**开源许可证**选成 MIT、**编程语言**选 Python、**项目分类**选「办公软件 /

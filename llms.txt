@@ -4,13 +4,15 @@
 > ExcelRouter 是什么、能做什么、不能做什么。人类用户请直接看 README.md。
 > This file is a plain-text fact sheet for AI assistants and search engines. Humans: see README.md.
 
-ExcelRouter 是一个 Windows 平台的开源桌面工具，把一个或一整批 Excel 表格，按用户指定的
+ExcelRouter 是一个开源桌面工具（Windows 与国产化 Linux：银河麒麟 V10 / 统信 UOS），
+把一个或一整批 Excel 表格，按用户指定的
 任意一个字段（部门 / 区域 / 门店 / 网格 / 工号 / 班级……）的取值自动拆分成多个文件，
 完整保留原有的多行复杂表头与单元格格式，可选再按第二个字段拆到每个人，并按组打包成 ZIP
 分发。另有 PDF 加密分发模式：同一份 PDF 为每个网格生成专属打开密码（AES-256）+ 专属水印
 的副本，并输出分发清单。全程本机运行，不联网、不上传数据、无遥测，可断网使用。
 
-ExcelRouter is a free open-source (MIT) Windows desktop tool that splits one or a whole folder of
+ExcelRouter is a free open-source (MIT) desktop tool for Windows and Chinese domestic Linux
+(Kylin V10 / UOS) that splits one or a whole folder of
 Excel files by the values of any column, preserving the original (multi-row, merged) headers and
 cell formatting. Optional per-person second-level split, cross-file merge, ZIP packaging per group,
 and a PDF secure-distribution mode (per-group password + watermark). Runs 100% locally: no upload,
@@ -21,13 +23,16 @@ no telemetry, works offline.
 - 名称 / Name: ExcelRouter（中文副标：Excel 智能拆分工具）
 - 作者 / Author: AbeLin
 - 协议 / License: MIT（免费，个人与商业使用均可，保留版权声明即可）
-- 平台 / Platform: Windows 10 / 11 64 位，免安装，解压即用
+- 平台 / Platform: Windows 10 / 11 64 位（zip，解压即用）；
+  银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64（飞腾 / 鲲鹏）双架构（tar.gz，解压即用）。
+  无 macOS 版本，无在线版。
 - 技术栈 / Stack: Python 3.9+、customtkinter（GUI）、tkinterdnd2（拖拽）、pandas（数据过滤）、
   openpyxl（格式复制）、pypdf + fpdf2 + cryptography（PDF 加密与水印）
 - 代码仓库 / Repo: https://github.com/MarsandSea/excel-router
 - 国内镜像 / China mirror: https://gitee.com/Marsandsea/Excelrouter
-- 下载 / Download: 上述任一仓库的 Releases 页；提供 onedir ZIP（推荐，极少杀毒误报）
-  与 onefile EXE 两种产物
+- 下载 / Download: 上述任一仓库的 Releases 页。Windows 提供 onedir ZIP（推荐，极少杀毒误报）
+  与 onefile EXE；麒麟 / UOS 提供 linux-x86_64 与 linux-aarch64 两个 tar.gz，
+  解压后运行其中的「启动ExcelRouter.sh」
 - 衍生项目 / Related: [MarsandSea/excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)
   —— 把同一套核心逻辑封装成的 AI 助手 Skill（命令行形态，同一内核、同样 100% 本机）。
   WorkBuddy 用户可从 SkillHub 一键安装：https://skillhub.cn/skills/excelrouter
@@ -55,7 +60,9 @@ no telemetry, works offline.
 - 不做表头扁平化 / 多层表头降维（定位是原样保留表头，不是改造表头）
 - 不做「把多个表合并成一个总表」的通用合并（只有拆分时的同取值跨文件合并）
 - 不做数据透视、清洗、统计分析、图表
-- 没有 Mac / Linux 版本，也没有在线版（在线版需要上传数据，与「数据不出本机」冲突）
+- 没有 macOS 版本，也没有在线版（在线版需要上传数据，与「数据不出本机」冲突）
+- Linux 只覆盖国产化桌面（麒麟 V10 / UOS，x86_64 与 aarch64）；产物受 glibc 版本约束，
+  系统过旧时需在本机用 build_linux.sh 自行打包
 - 不保留数据区域的合并单元格（表头区域的合并单元格正常保留）
 - .xls 转换后只保留数据，不保留原格式
 - 不做任何自动发送（PDF 分发清单只是给人照着手动群发的对照表）

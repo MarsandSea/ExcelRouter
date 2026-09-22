@@ -22,12 +22,15 @@ import sys
 import json
 import queue
 import threading
-import subprocess
 import webbrowser
 from typing import Any
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+
+from gui.platform_compat import (
+    lock_owner_name, open_folder, parse_drop_paths, pick_ui_font, set_window_icon,
+)
 
 # 拖拽支持（v2.7）：tkinterdnd2 为可选依赖——打包环境缺它时静默退回无拖拽，
 # 不影响其余任何功能。CTk + TkinterDnD 的混编写法是社区通行方案（本地 spike 验证过）。
@@ -76,7 +79,7 @@ PDF_RECV_NONE = "（不需要）"
 # UI 泵用的「本轮没有此类消息」哨兵（不能用 None：扫描失败时 payload 可能为空）
 _MISSING = object()
 
-APP_VERSION = "2.7.2"
+APP_VERSION = "2.8.0"
 # 匿名反馈问卷地址（问卷 URL 确定后替换此处即可，一行改动 + 打 tag 发版）
 FEEDBACK_URL = "https://f.wps.cn/g/pBOAWUQc/"
 # 在线 FAQ（「❓ 常见问题」按钮）：链接 Gitee 镜像而非 GitHub——国内办公网络访问
@@ -101,17 +104,25 @@ CARD_BORDER    = ("gray82", "gray28")     # 步骤卡片 1px 淡边框
 ACCENT  = PRIMARY
 
 def _init_fonts():
-    """把 CTk 默认字体族设为微软雅黑 UI（Windows 中文渲染明显好于 tk 默认 Roboto 回退）。
+    """把 CTk 默认字体族设为一款中文字体（tk 默认 Roboto 回退的中文渲染很差）。
 
     CTkFont 未显式传 family 时取 ThemeManager.theme["CTkFont"]["family"]，这是
     唯一真正的全局默认入口（实测改 FontManager._default_font 无效）。主题 dict 是
-    set_default_color_theme 时载入的运行时副本，改它对已建/将建组件一致生效；
-    无此字体的系统由 tk 字体回退机制自然落到雅黑/宋体，不额外探测。
+    set_default_color_theme 时载入的运行时副本，改它对已建/将建组件一致生效。
+
+    ★ 调用时机：必须在 root 建立后（tkfont.families() 需要 root）、任何组件创建前
+      （组件的 CTkFont 在构造时读主题值，晚了改无效）。
+
+    候选顺序见 platform_compat._UI_FONT_PREFS：雅黑排第一，Windows 行为不变；
+    麒麟 / UOS 上落到 Noto Sans CJK SC、文泉驿或方正字库。一个都没有就不动主题，
+    交给 tk 自己的字体回退。**不要改 ["CTkFont"]["size"]** —— 页脚已有「大字号」
+    开关，动默认字号会静默重排每个老用户的窗口。
     """
     try:
         import tkinter.font as tkfont
-        if "Microsoft YaHei UI" in list(tkfont.families()):
-            ctk.ThemeManager.theme["CTkFont"]["family"] = "Microsoft YaHei UI"
+        fam = pick_ui_font(tkfont.families())
+        if fam:
+            ctk.ThemeManager.theme["CTkFont"]["family"] = fam
     except Exception:
         pass
 
@@ -191,9 +202,23 @@ class App(_RootBase):
         # 字体统一必须在任何组件创建前、root 建立后执行：
         # tkfont.families() 需要 root；而组件的 CTkFont 在构造时读主题值，晚了改无效。
         _init_fonts()
+        # 启动期（_build_ui 之前）产生的日志先攒着，_log_box 建好后统一排空
+        self._pending_logs = []
+        # _DND_OK = tkinterdnd2 这个 Python 包 import 成功；
+        # self._dnd_ok = 它的原生 tkdnd 库真的加载成功。两者必须分开：
+        # 麒麟等国产化 Linux 上 .so 的 glibc/libX11 ABI 常对不上，_require() 会抛
+        # RuntimeError，没有 try 包住时会直接把 __init__ 打穿、进程退出。
+        # 拖拽只是锦上添花，绝不能让它拦住整个程序启动。
+        self._dnd_ok = False
         if _DND_OK:
-            # 加载 tkdnd 二进制（守卫条件已保证 TkinterDnD 非 None）
-            self.TkdndVersion = TkinterDnD._require(self)  # type: ignore[union-attr]
+            try:
+                # 加载 tkdnd 二进制（守卫条件已保证 TkinterDnD 非 None）
+                self.TkdndVersion = TkinterDnD._require(self)  # type: ignore[union-attr]
+                self._dnd_ok = True
+            except Exception as e:
+                self.TkdndVersion = None
+                self._pending_logs.append(
+                    f"ℹ 拖拽功能不可用（{e}），不影响使用，请点「选文件 / 选文件夹」按钮。")
         # 窗口标题只放简名：完整品牌名+副标已经在正文首行显示一次，
         # 标题栏再写一遍会让人觉得“这句话重复了”。
         self.title(f"ExcelRouter v{APP_VERSION}")
@@ -251,9 +276,12 @@ class App(_RootBase):
         if self._first_run and not p:
             # 首启一句话引导（D3）：三步卡片本身就是向导，不再做独立新手页
             tip = "点「📄 选一个 Excel 文件」"
-            if _DND_OK:
+            if self._dnd_ok:
                 tip += "，或直接把文件 / 文件夹拖进窗口"
             self._set_in_status(f"第一次用？{tip}即可开始", C_MUTED)
+        for _m in self._pending_logs:      # 排空启动期攒下的日志（此时 _log_box 已就绪）
+            self._log(_m)
+        self._pending_logs = []
         self.after(100, self._pump_ui)
 
     def _init_geometry(self):
@@ -292,15 +320,14 @@ class App(_RootBase):
         Tk 窗口图标要靠 iconbitmap() 单独设置，否则标题栏/任务栏还是 Tk 默认
         羽毛图标——这就是“exe 图标换了，但程序里和最小化时的图标没跟着换”的
         原因。app.ico 需要被 --add-data 打包进去才能在冻结后找到（见 build.bat）。
+
+        Linux（X11）上 iconbitmap() 只认 XBM 位图，传 .ico 必抛 TclError，
+        所以还要用 app.png + iconphoto 兜底（同样需要 --add-data 打包进去）。
         """
-        for base in (_resource_dir(), _app_dir()):
-            ico = os.path.join(base, "app.ico")
-            if os.path.exists(ico):
-                try:
-                    self.iconbitmap(ico)
-                    return
-                except Exception:
-                    continue
+        bases = (_resource_dir(), _app_dir())
+        set_window_icon(self,
+                        [os.path.join(b, "app.ico") for b in bases],
+                        [os.path.join(b, "app.png") for b in bases])
 
     # ── UI 构建 ──────────────────────────────────────────
     def _build_ui(self):
@@ -481,7 +508,7 @@ class App(_RootBase):
     # ── 拖拽（v2.7，tkinterdnd2 可选依赖）────────────────────
     def _enable_drop(self, widget, handler):
         """给控件注册文件拖放；tkinterdnd2 缺失时静默跳过（不影响其余功能）。"""
-        if not _DND_OK:
+        if not self._dnd_ok:
             return
         try:
             widget.drop_target_register(DND_FILES)
@@ -491,13 +518,12 @@ class App(_RootBase):
 
     @staticmethod
     def _parse_drop_paths(data):
-        """解析 tkdnd 的拖放数据：Windows 下格式为 `{带空格的路径} 普通路径` 混合。"""
-        return [m.group(1) or m.group(2)
-                for m in re.finditer(r"\{([^}]*)\}|(\S+)", data or "")]
+        """解析 tkdnd 的拖放数据（Windows 原生路径 / X11 的 file:// URI 都能吃）。"""
+        return parse_drop_paths(data)
 
     def _idle_input_text(self):
         """①卡片未选输入时的提示语；支持拖拽时优先教拖拽（零学习成本的操作）。"""
-        if _DND_OK:
+        if self._dnd_ok:
             return "还没有选择文件（可点上方按钮，或直接把文件 / 文件夹拖进来）"
         return "还没有选择文件（也可以把路径粘贴到上面的输入框）"
 
@@ -1314,15 +1340,20 @@ class App(_RootBase):
 
     @staticmethod
     def _find_open_locks(path, cap=4):
-        """检测输入里正被 Excel/WPS 打开的文件（存在 ~$同名 锁文件）。
+        """检测输入里正被 Excel/WPS 打开的文件（存在同名锁文件）。
+
+        两种锁文件格式都认：Windows 的 `~$名字.xlsx`，和 Linux 版 WPS /
+        LibreOffice 的 `.~lock.名字.xlsx#`（见 platform_compat.lock_owner_name）——
+        只认前者的话，这条预警在麒麟上永远不会触发。
 
         返回原文件名列表（最多 cap 个）；目录扫描限前 2000 个目录，防止巨型目录卡界面。
         """
         hits = []
         if os.path.isfile(path):
-            if os.path.exists(os.path.join(os.path.dirname(path),
-                                           "~$" + os.path.basename(path))):
-                hits.append(os.path.basename(path))
+            d, base = os.path.dirname(path), os.path.basename(path)
+            if any(os.path.exists(os.path.join(d, cand))
+                   for cand in ("~$" + base, ".~lock." + base + "#")):
+                hits.append(base)
             return hits
         n_walk = 0
         for _root, _dirs, files in os.walk(path):
@@ -1330,7 +1361,7 @@ class App(_RootBase):
             if n_walk > 2000 or len(hits) >= cap:
                 break
             names = {f for f in files if f.lower().endswith(('.xlsx', '.xls'))}
-            locked = {f[2:] for f in names if f.startswith('~$')}
+            locked = {n for n in (lock_owner_name(f) for f in files) if n}
             for f in sorted(locked & names):
                 hits.append(f)
                 if len(hits) >= cap:
@@ -1729,11 +1760,16 @@ class App(_RootBase):
 
     def _open_output(self):
         path = self._last_output or self._output_var.get().strip()
-        if path and os.path.exists(path):
-            try:
-                subprocess.Popen(f'explorer "{os.path.normpath(path)}"')
-            except Exception:
-                pass
+        if not path:
+            return
+        if not os.path.exists(path):
+            self._run_status.configure(text=f"⚠ 这个目录不在了：{path}", text_color=C_WARN)
+            return
+        if not open_folder(path):
+            # 旧实现失败时悄无声息：用户点了按钮什么也没发生，比报错更让人困惑
+            self._run_status.configure(text=f"⚠ 打不开文件管理器，结果就在：{path}",
+                                       text_color=C_WARN)
+            self._log(f"⚠ 无法调起文件管理器，请手动打开：{path}")
 
     def _render_summary(self, output_path, is_pdf):
         """完成摘要（A4）：用 core 收尾的 [SUMMARY] 渲染多行结果概览。
@@ -1807,10 +1843,10 @@ class App(_RootBase):
             self._copylog_btn.grid()
             self._toggle_log(show=True)
         if cfg.get("auto_open_output") and output_path and os.path.exists(output_path):
-            try:
-                subprocess.Popen(f'explorer "{os.path.normpath(output_path)}"')
-            except Exception:
-                pass
+            # 只记日志、不改状态行：完成横幅已经显示了 📁 输出路径，
+            # 绿色横幅旁边再挂个黄警告是噪音。
+            if not open_folder(output_path):
+                self._log(f"ℹ 没能自动打开输出文件夹，结果在：{output_path}")
 
 
 def run():

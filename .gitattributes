@@ -1,0 +1,23 @@
+# 本机 git 是 core.autocrlf=true，没有这份声明的话，*.sh 检出到工作区会变成 CRLF。
+# 带 CR 的 shell 脚本在 Linux 上会报 `/bin/sh^M: bad interpreter`，
+# 麒麟版的启动脚本会直接双击无反应——所以下面这几类必须钉死 LF。
+*.sh        text eol=lf
+*.sh.in     text eol=lf
+*.yml       text eol=lf
+
+# 随 tar.gz 发给 Linux 用户的文件，别带 CR（.gitattributes 不支持行尾注释）
+packaging/* text eol=lf
+*.yaml      text eol=lf
+
+# .bat 保持字节原样：build.bat 现在是 LF 且工作正常，强行转 CRLF 是无谓的行为改变。
+# （它另有一条硬约束：必须纯 ASCII，见 build.bat 头部注释。）
+*.bat       -text
+
+# 二进制资源不要做任何行尾转换
+*.png       binary
+*.ico       binary
+*.jpg       binary
+*.xlsx      binary
+*.xls       binary
+*.pdf       binary
+*.zip       binary

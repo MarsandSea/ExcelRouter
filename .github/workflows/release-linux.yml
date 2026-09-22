@@ -1,0 +1,107 @@
+name: Release (Linux)
+
+# 麒麟 / UOS 版发布流水线（v2.8.0 起）。
+#
+# 为什么是独立 workflow 而不是给 release.yml 加 OS matrix：
+#   release.yml 不只是构建——它还镜像代码到 Gitee、建 Gitee release、用 curl.exe
+#   按特定参数顺序传附件（v2.5.1 踩过的坑）。改成 matrix 要给五个 step 挂 if:，
+#   还要解决「Gitee release 只能建一次、多个 job 都要往上传」。
+#   更重要的是：**全新平台绝不能有能力阻断已验证的 Windows 发版**。
+#   独立 workflow 下 Linux 挂掉 = 绿色 release 旁边一个红勾；
+#   matrix + fail-fast 下 = 根本没有 release。
+#   action-gh-release 是幂等的，谁先到谁建 release，另一个追加附件；
+#   generate_release_notes 只留在 Windows 那条，避免重复生成发布说明。
+#
+# ★ 采用前提：先在真机上用 build_linux.sh 产出过一个验证通过的 tar.gz。
+#   CI 的职责是复现那个包，不是探索。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false        # 一个架构挂了不拖累另一个
+      matrix:
+        include:
+          - { runner: ubuntu-22.04,     arch: x86_64  }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }   # 公开仓库的免费 ARM runner
+    runs-on: ${{ matrix.runner }}
+
+    # ★ 关键：跑在 almalinux:8 容器里，runner 自身的 glibc 就变得无关了。
+    #   麒麟 V10 的 glibc 是 2.28~2.31，而 ubuntu-22.04/24.04 runner 是 2.35/2.39——
+    #   直接在 runner 上打包，产物拿到麒麟上会报 "GLIBC_2.34 not found"。
+    #   AlmaLinux 8 = glibc 2.28，与麒麟 V10 同代（都是 RHEL8 血统），
+    #   同时是 actions/checkout@v4（Node 20 要 glibc >= 2.28）还能跑的最低容器。
+    #   manylinux 容器不行：它的 CPython 没编 _tkinter，customtkinter 根本 import 不了。
+    container:
+      image: almalinux:8
+
+    steps:
+      - name: 安装工具链
+        # 不能用 actions/setup-python：它下载的二进制是对着新 glibc 编的，
+        # 在 glibc 2.28 容器里跑不起来。必须用发行版自带的 python3.12。
+        # wqy-zenhei-fonts 是为了让中文水印用例真的跑起来，而不是 skip 掉。
+        run: |
+          dnf -y install python3.12 python3.12-devel python3.12-tkinter \
+                         tk tcl gcc binutils tar gzip which findutils \
+                         fontconfig wqy-zenhei-fonts
+
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖并自测
+        run: |
+          python3.12 -m pip install --upgrade pip
+          python3.12 -m pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+          python3.12 -m pytest -q
+          python3.12 -m py_compile main.py core/*.py gui/*.py
+
+      - name: 确认中文水印用例真的跑了（不是 skip）
+        # 容器里装了中文字体，这条用例就必须是 PASS。如果它 skip 了，
+        # 说明字体包没装上或 _find_cjk_font 探测挂了——那正是麒麟上最要命的回归。
+        run: |
+          python3.12 -c "from core.pdf_dist import _find_cjk_font; p=_find_cjk_font(); print('font:', p); assert p, '容器里没探测到中文字体'"
+          python3.12 -m pytest -q tests/test_pdf_dist.py -k cjk_end_to_end --no-header -rN
+
+      - name: 打包
+        run: |
+          chmod +x build_linux.sh
+          PYTHON=python3.12 ./build_linux.sh
+
+      - name: 断言 glibc 下限
+        # ★ 整条流水线最值钱的一步：把「能不能在麒麟上跑」从一个期望
+        #   变成机器可校验的不变量。依赖 wheel 升级导致的回归会被自动抓住。
+        run: |
+          FLOOR=$(objdump -T dist/*/ExcelRouter dist/*/_internal/*.so* 2>/dev/null \
+                  | grep -oE 'GLIBC_2\.[0-9]+' | sort -uV | tail -1)
+          echo "产物 glibc 下限 = $FLOOR （上限允许 GLIBC_2.28）"
+          if [ "$(printf '%s\nGLIBC_2.28\n' "$FLOOR" | sort -uV | tail -1)" != "GLIBC_2.28" ]; then
+            echo "❌ 下限高于 GLIBC_2.28，这个包在麒麟 V10 上起不来"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build-linux
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.tar.gz
+          # 发布说明交给 Windows 工作流生成，这里不重复生成
+          generate_release_notes: false

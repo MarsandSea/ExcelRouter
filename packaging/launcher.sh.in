@@ -1,0 +1,58 @@
+#!/bin/sh
+# ============================================================
+# ExcelRouter 启动脚本（银河麒麟 / 统信 UOS）
+# Copyright (c) 2026 AbeLin · MIT License
+#
+# 模板文件：@GLIBC@ 由 build_linux.sh 替换成打包机的 glibc 版本。
+# 双击运行，或在终端里 ./启动ExcelRouter.sh 都可以。
+# ============================================================
+DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$DIR" || exit 1
+
+# 1) 可执行位：用图形归档管理器（peony / 归档管理器）解压时经常会丢掉它
+[ -x "./ExcelRouter" ] || chmod +x "./ExcelRouter" 2>/dev/null
+
+# 2) 中文环境。麒麟默认就是 zh_CN.UTF-8，但从某些桌面启动器拉起时 LANG 是空的，
+#    空 LANG 会让 Tk 把中文渲染成方块，并让 Python 的文件名编码退化成 ascii。
+[ -z "${LANG:-}" ] && LANG=zh_CN.UTF-8 && export LANG
+: "${LC_ALL:=$LANG}"; export LC_ALL
+PYTHONIOENCODING=utf-8; export PYTHONIOENCODING
+
+# 3) 输入法。UKUI 用 fcitx/fcitx5；Tk 不走 GTK 的 im-module，只认 XMODIFIERS。
+#    从桌面启动器拉起时这个变量常常是空的，空了就在输入框里打不出中文。
+if [ -z "${XMODIFIERS:-}" ]; then
+  if command -v fcitx5 >/dev/null 2>&1 || command -v fcitx >/dev/null 2>&1; then
+    XMODIFIERS="@im=fcitx"; export XMODIFIERS
+  elif command -v ibus-daemon >/dev/null 2>&1; then
+    XMODIFIERS="@im=ibus"; export XMODIFIERS
+  fi
+fi
+
+# 4) Wayland。麒麟 V10 桌面默认 X11，个别新机型是 Wayland；Tk 没有原生 Wayland
+#    后端，必须走 XWayland，显式兜一下 DISPLAY 免得报 "couldn't connect to display"。
+[ -n "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && DISPLAY=:0 && export DISPLAY
+GDK_BACKEND=x11; export GDK_BACKEND   # 只影响被间接拉起的 GTK 组件（xdg-open 等）
+
+# 5) 国产 CPU（鲲鹏 / 飞腾 / 兆芯）上 OpenBLAS 开满线程往往更慢且更吃内存
+: "${OMP_NUM_THREADS:=4}";      export OMP_NUM_THREADS
+: "${OPENBLAS_NUM_THREADS:=4}"; export OPENBLAS_NUM_THREADS
+
+# 6) 起不来的时候给人话，而不是甩一行 GLIBC 天书。
+#    用 `if !` 而不是 exec —— exec 会把这个 shell 顶掉，下面的错误处理就永远到不了。
+if ! "./ExcelRouter" "$@"; then
+  echo ""
+  echo "  ExcelRouter 启动失败。最常见的两个原因："
+  echo ""
+  echo "   1) 系统 glibc 太旧"
+  echo "      本机 : $(getconf GNU_LIBC_VERSION 2>/dev/null || echo 未知)"
+  echo "      本包 : 在 glibc @GLIBC@ 上打包，不能跑在更低的版本上"
+  echo "      解决 : 在你自己这台机器上用 build_linux.sh 重新打一份"
+  echo ""
+  echo "   2) 缺图形库"
+  echo "      解决 : sudo apt install -y libx11-6 libxext6 libxrender1 libfontconfig1"
+  echo ""
+  echo "  仍然不行的话，把上面的报错整段发给作者（见 使用说明.txt）。"
+  echo ""
+  printf "  按回车关闭..."
+  read -r _ 2>/dev/null
+fi

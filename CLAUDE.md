@@ -6,12 +6,35 @@
 
 ## 项目是什么
 
-**ExcelRouter**：一个 Windows 桌面工具，把一批 Excel
+**ExcelRouter**：一个桌面工具（Windows + 国产化 Linux：银河麒麟 V10 / 统信 UOS），把一批 Excel
 表格，**按用户指定的任意一个字段的取值**拆分成多个文件（每个取值一个文件），可选再按第二个
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.7.2**，GitHub 仓库：`MarsandSea/excel-router`。
+当前版本 **v2.8.0**，GitHub 仓库：`MarsandSea/excel-router`。
+
+> **v2.8.0：麒麟（信创）适配（2026-09）**。公司配发的新机器有相当一批是移动信创版
+> 银河麒麟 V10，跑不了 win64 产物。**单一代码库、不开分支**，平台差异集中到新模块
+> `gui/platform_compat.py`（硬性规则：**该模块不得在模块级 import tkinter/customtkinter**，
+> 否则新单测就需要显示器，当前「pytest 可无头运行」的性质会丢）。六处改动：
+> ① **`TkinterDnD._require()` 补 try/except** —— 这是唯一的启动级崩溃点，tkdnd 原生库
+> ABI 对不上时旧代码会把 `App.__init__` 打穿、进程直接退出。现在拆成两个标志：
+> 模块级 `_DND_OK`（包 import 成功）与实例级 `self._dnd_ok`（原生库真的加载成功），
+> 三个消费点都改读后者。**别把这个 try 去掉。**
+> ② **`open_folder()`** 替掉两处 `subprocess.Popen(f'explorer "{p}"')` —— 裸字符串在
+> POSIX 上被当成单个可执行文件名，且失败被 `except: pass` 吞掉，表现为死按钮。
+> 新实现 Windows 也改成 list 形式，Linux 走 `xdg-open → gio → peony(UKUI) → ...` 回退链，
+> **返回 bool，调用方必须给可见提示**。
+> ③ **`_find_cjk_font()` 支持 Linux**：环境变量 `ER_CJK_FONT` → 扫字体目录按候选名匹配
+> → `fc-match`（带 timeout=3，冷缓存会卡）。新增 `_font_usable()` 让 fpdf2 自己回答能不能
+> 加载，不靠扩展名猜。顺手给 `_make_watermark_pdf` 的 `add_font` 加了守卫——**既有 bug**：
+> 一个坏字体文件会在已经写出一部分网格之后把整轮分发打断。
+> ④ 拖放载荷解析补 `file://` URI 解码（X11/XDND 发的是百分号编码 URI，旧正则解不开，
+> 麒麟上**每一次拖放都会被拒**）。⑤ UI 字体候选加 Noto CJK / 文泉驿 / 方正。
+> ⑥ 窗口图标补 `iconphoto(app.png)`（X11 的 `iconbitmap` 只认 XBM）。
+> 打包：新增 `build_linux.sh`（**在目标机器上跑**）+ `packaging/launcher.sh.in`，
+> 只产 onedir tar.gz。另修一个平台无关的真 bug：`core/splitter.py` 的 `__tmp__`
+> 过滤原来大小写敏感，`X__TMP__.XLSX` 会被当数据重新吃进去（回归用例已补）。
 
 > **v2.7.2：修「到人」拆分名实不符 bug（2026-09）**。现象：同人跨多个源文件（7/8/9 月表都有
 > 张三）时最终只有一张「张三_7月明细.xlsx」且里面装着全部月份的行——数据没丢，但文件名只带
@@ -124,9 +147,13 @@
 
 ## 运行环境
 
-- **目标平台：Windows**（打包出的 exe 给 Windows 用户）
-- Python 3.9+
+- **目标平台：Windows 10/11 64 位 + 国产化 Linux**（银河麒麟 V10 / 统信 UOS，
+  x86_64 与 aarch64 双架构）。**单一代码库**，平台差异收敛在 `gui/platform_compat.py`
+  和 `core/pdf_dist.py` 的字体探测里，不开分支。
+- Python 3.9+（麒麟 V10 SP1 常自带 3.7，打包机需要先升级；**目标机不需要装 Python**）
 - 依赖见 `requirements.txt`：customtkinter、openpyxl、pandas、xlrd、pypdf、fpdf2、cryptography
+- Linux 额外的系统依赖：`python3-tk`（打包机）、`fonts-wqy-zenhei` 或 `fonts-noto-cjk`
+  （否则 PDF 水印中文变 `?`）、`xdg-utils`（否则「打开输出文件夹」不可用）
 
 ---
 
@@ -145,9 +172,16 @@ excel-router/
 ├── ruff.toml                  # Ruff 静态检查配置（全仓库 lint；core/tests 存量风格已按文件豁免）
 ├── pyrightconfig.json         # Pyright 类型检查配置（检查范围：gui/ + main.py，core 存量未纳入）
 ├── .gitignore                 # 忽略 dist/build/用户配置等
-├── build.bat                  # 一键打包脚本：本地同时产出 onedir（推荐）+ onefile 两个产物
-├── app.ico                    # 程序图标（占位，用户可替换）
-├── version.txt                # Windows 版本信息（PyInstaller --version-file 用，随版本号同步更新）
+├── build.bat                  # Windows 一键打包：同时产出 onedir（推荐）+ onefile 两个产物
+├── build_linux.sh             # 麒麟/UOS 打包：★ 必须在目标机器上跑，只产 onedir tar.gz
+├── packaging/
+│   ├── launcher.sh.in         # Linux 启动脚本模板（@GLIBC@ 由 build_linux.sh 替换）
+│   └── README-Linux.txt       # 随 tar.gz 一起分发的「使用说明.txt」
+├── .gitattributes             # ★ 钉死 *.sh 为 LF：本机 autocrlf=true，CRLF 的 sh 在麒麟上直接起不来
+├── app.ico                    # 程序图标（Windows；占位，用户可替换）
+├── app.png                    # 程序图标（Linux/X11 用 iconphoto，拷自 docs/logo.png）
+├── version.txt                # ★ 仅 Windows 用（PyInstaller --version-file 是 PE 资源）。
+│                              #   不要为 Linux 另造版本文件，build_linux.sh 从 APP_VERSION 解析
 ├── config/
 │   └── default_config.json    # 默认配置（通用空配置，新字段见下「数据模型」）
 ├── user_config.json           # 用户保存的配置（运行时生成在程序目录，不入库）
@@ -158,7 +192,8 @@ excel-router/
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
-│   └── app.py                 # customtkinter 三步卡片式界面（Excel/PDF 双模式、打包路径适配、队列泵）
+│   ├── app.py                 # customtkinter 三步卡片式界面（Excel/PDF 双模式、打包路径适配、队列泵）
+│   └── platform_compat.py     # 平台兼容层（打开文件管理器/拖放解析/UI字体/窗口图标/锁文件）
 ├── examples/
 │   ├── make_sample.py         # 可复现样本生成器：5 个月份 × 55 名虚拟员工，3 行合并表头
 │   └── {1-5}月A分公司明细.xlsx # 生成的演示样本（跨文件合并 + 到人演示用）
@@ -167,9 +202,11 @@ excel-router/
 │   ├── RELEASING.md           # 维护者发版手册（CI 流程、误报处理、双产物说明）
 │   └── screenshot_*.jpg       # README 用截图
 ├── .github/
-│   ├── workflows/release.yml  # tag push v* 触发：测试→双 PyInstaller 构建→打包→发 Release
+│   ├── workflows/release.yml       # tag push v* 触发：测试→双 PyInstaller 构建→打包→发 Release
+│   ├── workflows/release-linux.yml # 同 tag 触发，独立 workflow：almalinux:8 容器 × 双架构
 │   └── ISSUE_TEMPLATE/        # Bug/Question 结构化表单，config.yml 禁用空白 issue
 └── tests/
+    ├── test_platform_compat.py # 平台兼容层单测（纯函数，无 Tk、可无头跑）
     ├── test_utils.py          # utils 单元测试
     ├── test_splitter.py       # splitter 集成测试（单文件/合并、到人双产出、格式保留）
     └── test_pdf_dist.py       # pdf_dist 集成测试（加密/水印/清单/容错/停止）
@@ -260,7 +297,16 @@ excel-router/
 - `read_mapping(xlsx_path, grid_col, password_col, receiver_col)` —— 返回 `[{"grid","password","receiver"}]`；
   **密码统一转字符串**（`_cell_str` 处理 openpyxl 把 001234 读成 1234/1234.0 的问题），
   空网格/空密码行跳过并警告，重复网格后者覆盖并警告
-- `_find_cjk_font()` —— 在 `C:\Windows\Fonts` 探测中文 .ttf（simhei/Deng 等；**跳过 .ttc**，fpdf2 不支持）
+- `_find_cjk_font()` —— 探测中文字体。Windows：扫 `%WINDIR%\Fonts` 里的 simhei/Deng 等
+  （行为与 v2.7.2 逐字一致）。Linux：`ER_CJK_FONT` 环境变量 → 扫 `/usr/share/fonts` 等目录
+  按 `_LINUX_FONT_CANDIDATES` 匹配 → `fc-match`（timeout=3）。
+  **注意：「fpdf2 不支持 .ttc」是过期说法** —— fpdf2 2.8.x 的 `add_font` 接受
+  `.ttf/.otf/.ttc/.otc`，麒麟自带中文字体恰恰多是 .ttc/.otf。但**单体简中面
+  （`*SC*.otf`）必须排在 .ttc 合集前面**：`NotoSansCJK-Regular.ttc` 的第 0 面通常是日文面，
+  汉字能渲染但字形是日式变体。函数名/零参签名/`str|None` 返回值是对外契约，下游 skill
+  靠猴补丁替换它实现 `--font`，别改签名
+- `_font_usable(path)` —— 让 fpdf2 自己回答能不能加载，不靠扩展名猜。这是「优雅降级成 `???`」
+  和「分发跑到一半崩掉」的分界线，**别删**
 - `_make_watermark_pdf(text, w, h, ...)` —— fpdf2 内存生成平铺斜排水印页，按（尺寸+文字）缓存
 - `_stamp_and_encrypt(reader, out_path, wm_text, password, algorithm)` —— 盖水印+设密码写盘。
   **writer 每个网格必须重建**：pypdf 的 merge_page 就地改页对象，复用会导致水印跨网格叠加；
@@ -426,9 +472,29 @@ PyInstaller 致命坑仍然成立、缺一不可：
 >    （Windows 分号 `;` 分隔，Linux/Mac 是冒号 `:`）。
 > 3. **`--collect-all tkinterdnd2` 必须有（v2.7 起）**：tkinterdnd2 自带 tkdnd 原生二进制，
 >    缺了打包后拖拽静默失效（不崩，但功能没了）。build.bat 与 CI 三处已加，别删。
+> 4. **`--add-data "app.png;."` 必须有（v2.8 起）**：X11 的 `iconbitmap()` 只认 XBM，
+>    Linux 窗口图标走 `iconphoto(app.png)`。Windows 侧也加了，为的是让 build.bat 和
+>    build_linux.sh 能逐行对照 diff。
 >
 > 代码已做路径适配：`gui/app.py` 用 `sys._MEIPASS` 读打包进去的默认配置，用户配置
 > `user_config.json` 存到 exe 所在目录。**不要把配置读取改回纯相对路径**，打包后会失效。
+
+麒麟 / UOS 打包用 `build_linux.sh`，对应有**四个 Linux 专属的坑**：
+
+> 1. **★ 必须在目标机器上打包**。PyInstaller 产物的 glibc 下限 == 打包机的 glibc，
+>    且**不向下兼容**。在 ubuntu-22.04（glibc 2.35）上打的包，拿到麒麟 V10（2.28~2.31）
+>    上会直接报 `GLIBC_2.34 not found`。有多台不同 SP 时，在**最旧**的那台上打。
+>    CI 里的等价做法是跑在 `almalinux:8` 容器（glibc 2.28，与麒麟 V10 同代）——
+>    **不能用 manylinux 容器**，它的 CPython 没编 `_tkinter`，customtkinter 根本 import 不了；
+>    也不能比 2.28 更低，`actions/checkout@v4`（Node 20）要求 glibc ≥ 2.28。
+> 2. **绝不产 `--onefile`**。onefile 每次启动都解包到 `/tmp/_MEIxxxx`，很多信创镜像把
+>    `/tmp` 挂成 `noexec` → 直接起不来。Linux 只发 onedir tar.gz。
+> 3. **`--icon` / `--version-file` / `--noconsole` 三个都要去掉**：前两个是 Windows PE
+>    专属（ELF 上无意义），第三个在 Linux 上是空操作，留着只会让人误以为它做了事。
+>    `--add-data` 分隔符也从 `;` 换成 `:`。
+> 4. **`.gitattributes` 钉死 `*.sh` 为 LF**。本机 git 是 `core.autocrlf=true`，没有这条
+>    声明的话启动脚本检出成 CRLF，在麒麟上报 `/bin/sh^M: bad interpreter`，
+>    表现为「双击没反应」——非常难查，别删那个文件。
 
 ### 3. 代码混淆
 
