@@ -1,6 +1,6 @@
 # 上游同步信息
 
-本目录（`vendor/core/`）是 [MarsandSea/excel-router](https://github.com/MarsandSea/excel-router)
+本目录（`vendor/core/`）是 [MarsandSea/ExcelRouter](https://github.com/MarsandSea/ExcelRouter)
 仓库 `core/` 目录的逐字副本，由 `.github/workflows/sync-upstream.yml` 自动维护。
 
 **不要手动修改 `vendor/core/` 下的任何文件** —— 下次自动同步会直接覆盖，改动会丢失。
@@ -8,7 +8,7 @@
 `scripts/` 下的 CLI 包装层里用 monkeypatch 打补丁（参考 `er_pdf_dist.py` 覆盖
 `_find_cjk_font` 的做法），不要碰 vendor 本身。
 
-- **上游仓库**：https://github.com/MarsandSea/excel-router
+- **上游仓库**：https://github.com/MarsandSea/ExcelRouter
 - **同步依据**：上游最新的 `v*` 发布 tag（不跟 main 分支的半成品，避免把没测试过的改动带进 skill）
 - **当前记录的 tag**：见同目录 `.upstream-tag`（单行纯文本，供同步 Action 做单调递增比较，不要手改）
 

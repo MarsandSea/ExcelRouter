@@ -163,7 +163,7 @@ python main.py
 
 ### GitHub 下载
 
-👉 **https://github.com/MarsandSea/excel-router/releases**
+👉 **https://github.com/MarsandSea/ExcelRouter/releases**
 
 > ⚠️ 个别杀毒软件可能误报——这是 PyInstaller 打包的通用现象，不是真有病毒。
 > 选 ZIP 版基本不触发。详见项目 FAQ。
@@ -202,5 +202,5 @@ python main.py
 **觉得有用的话，帮忙到仓库点个 ⭐ Star，让更多人搜得到它。**
 
 > 作者：AbeLin
-> 项目主页：https://github.com/MarsandSea/excel-router
+> 项目主页：https://github.com/MarsandSea/ExcelRouter
 > 国内镜像：https://gitee.com/Marsandsea/Excelrouter

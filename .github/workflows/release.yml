@@ -110,7 +110,7 @@ jobs:
             tag_name         = "v$ver"
             name             = "v$ver"
             target_commitish = "${{ github.sha }}"
-            body             = "同步自 GitHub Release，完整更新说明见: https://github.com/MarsandSea/excel-router/releases/tag/v$ver"
+            body             = "同步自 GitHub Release，完整更新说明见: https://github.com/MarsandSea/ExcelRouter/releases/tag/v$ver"
           }
           $resp = Invoke-RestMethod -Uri "https://gitee.com/api/v5/repos/Marsandsea/Excelrouter/releases" -Method Post -Body $body
           "release_id=$($resp.id)" >> $env:GITHUB_OUTPUT

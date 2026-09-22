@@ -209,7 +209,7 @@ AI 会确认哪列是密码、哪列是接收人，然后输出加密后的 PDF 
 Windows 一般会自动找到中文字体；如果没找到，可以指定一个中文字体文件（`.ttf` 格式）。
 
 **和 ExcelRouter 桌面版什么关系？**
-本仓是 [excel-router](https://github.com/MarsandSea/excel-router) 桌面工具核心能力的 AI 版移植——同一套引擎，但不用装软件、不用开界面，对 AI 说一句话就行。想要图形界面给同事用，去下载桌面版 exe。
+本仓是 [excel-router](https://github.com/MarsandSea/ExcelRouter) 桌面工具核心能力的 AI 版移植——同一套引擎，但不用装软件、不用开界面，对 AI 说一句话就行。想要图形界面给同事用，去下载桌面版 exe。
 
 ---
 
@@ -250,7 +250,7 @@ excelrouter-skill/
 ### 版本如何跟上游同步
 
 `skills/excelrouter/scripts/vendor/core/` 是
-[excel-router](https://github.com/MarsandSea/excel-router) 仓库 `core/` 目录的逐字副本，
+[excel-router](https://github.com/MarsandSea/ExcelRouter) 仓库 `core/` 目录的逐字副本，
 由 [`.github/workflows/sync-upstream.yml`](.github/workflows/sync-upstream.yml) 自动维护：
 
 - 每天定时检查上游最新的 `v*` 发布 tag，有新版本就拉取、跑测试、测试通过才提交并打同名 tag。
@@ -272,7 +272,7 @@ ruff check .
 
 ### 协议
 
-MIT License，与上游 [excel-router](https://github.com/MarsandSea/excel-router) 一致。
+MIT License，与上游 [excel-router](https://github.com/MarsandSea/ExcelRouter) 一致。
 `scripts/vendor/core/` 下每个文件保留原始版权头，请勿删除。
 
 </details>

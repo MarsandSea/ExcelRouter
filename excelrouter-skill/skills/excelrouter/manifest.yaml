@@ -20,7 +20,7 @@ description: >
   Excel 批量加密分发——一批表一次拆完，不同表里同一个人的行自动合并；
   PDF 按名单设密码——每份一个专属密码 + 可溯源水印，外泄能查到是谁。
   保留原表格式；一张表、一整批表都能拆。全程本地处理，数据不出本机、不上传。
-  与免费 Windows 桌面版同一内核：https://github.com/MarsandSea/excel-router
+  与免费 Windows 桌面版同一内核：https://github.com/MarsandSea/ExcelRouter
 category: productivity
 triggers:
   - "按部门拆表"
@@ -50,5 +50,5 @@ tags:
   - 数据处理
 author: AbeLin
 license: MIT
-homepage: https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill
+homepage: https://github.com/MarsandSea/ExcelRouter/tree/main/excelrouter-skill
 requirements: requirements.txt

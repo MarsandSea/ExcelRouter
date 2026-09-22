@@ -7,7 +7,7 @@
 
 | 路径 | 说明 |
 |---|---|
-| `G:\WorkSpace\excel-router\excelrouter-skill\skills\excelrouter\` | **唯一真源**。2026-09-08 起 skill 与桌面版 `core/` **同一个 git 仓库**（`MarsandSea/excel-router`），所有改动只改这里。原独立仓库 `MarsandSea/excelrouter-skill` 已归档 |
+| `G:\WorkSpace\excel-router\excelrouter-skill\skills\excelrouter\` | **唯一真源**。2026-09-08 起 skill 与桌面版 `core/` **同一个 git 仓库**（`MarsandSea/ExcelRouter`），所有改动只改这里。原独立仓库 `MarsandSea/excelrouter-skill` 已归档 |
 
 ## 二、在用的副本（由脚本同步，不要手工改）
 

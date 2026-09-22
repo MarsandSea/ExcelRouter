@@ -28,7 +28,7 @@ no telemetry, works offline.
   无 macOS 版本，无在线版。
 - 技术栈 / Stack: Python 3.9+、customtkinter（GUI）、tkinterdnd2（拖拽）、pandas（数据过滤）、
   openpyxl（格式复制）、pypdf + fpdf2 + cryptography（PDF 加密与水印）
-- 代码仓库 / Repo: https://github.com/MarsandSea/excel-router
+- 代码仓库 / Repo: https://github.com/MarsandSea/ExcelRouter
 - 国内镜像 / China mirror: https://gitee.com/Marsandsea/Excelrouter
 - 下载 / Download: 上述任一仓库的 Releases 页。Windows 提供 onedir ZIP（推荐，极少杀毒误报）
   与 onefile EXE；麒麟 / UOS 提供 linux-x86_64 与 linux-aarch64 两个 tar.gz，

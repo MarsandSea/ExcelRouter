@@ -34,7 +34,7 @@
 6. 下载到本机，脱离开发环境（换个目录）冒烟测试：能正常打开、识别列、跑通一次拆分。
 7. **Release 说明里带上 AI 助手引导**（固定一句，别漏）：「在用 AI 助手
    （WorkBuddy / Claude / WPS 灵犀）？同内核 Skill 版见
-   [excelrouter-skill](https://github.com/MarsandSea/excel-router/tree/main/excelrouter-skill)，
+   [excelrouter-skill](https://github.com/MarsandSea/ExcelRouter/tree/main/excelrouter-skill)，
    WorkBuddy 可从 [SkillHub](https://skillhub.cn/skills/excelrouter) 一键安装。」
    —— 从桌面版用户里筛 AI 助手用户，属合规引流方向（见营销计划「客户端优先」铁律）。
 
@@ -175,7 +175,7 @@ excel excel-splitter split-excel xlsx spreadsheet openpyxl pandas python windows
 也可以用 gh CLI 一次性设置：
 
 ```bash
-gh repo edit MarsandSea/excel-router --add-topic excel,excel-splitter,split-excel,xlsx,spreadsheet,openpyxl,pandas,python,windows,desktop-app,gui,customtkinter,office-automation,batch-processing,pdf-encryption,watermark,no-code,chinese
+gh repo edit MarsandSea/ExcelRouter --add-topic excel,excel-splitter,split-excel,xlsx,spreadsheet,openpyxl,pandas,python,windows,desktop-app,gui,customtkinter,office-automation,batch-processing,pdf-encryption,watermark,no-code,chinese
 ```
 
 ### Gitee（仓库 → 管理 → 基本信息）

@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📖 FAQ（常见问题，先看这里）
-    url: https://github.com/MarsandSea/excel-router/blob/main/docs/FAQ.md
+    url: https://github.com/MarsandSea/ExcelRouter/blob/main/docs/FAQ.md
     about: 杀毒软件误报、公式列空白、.xls 限制等常见问题都有解答

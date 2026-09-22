@@ -45,4 +45,4 @@ A: 用 ./启动ExcelRouter.sh 启动（不要直接运行 ExcelRouter 这个文�
 --------------------------------------------------------------------
 作者：AbeLin     开源协议：MIT     项目主页：
    https://gitee.com/Marsandsea/Excelrouter
-   https://github.com/MarsandSea/excel-router
+   https://github.com/MarsandSea/ExcelRouter

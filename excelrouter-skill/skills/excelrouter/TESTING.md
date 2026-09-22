@@ -28,7 +28,7 @@ pytest -q tests/
 | `_common.py` | Windows 上在导入 numpy **之前**自动把 OpenBLAS 线程数限制为 1（绕开内存分配崩溃）；用户自己设过该变量时不覆盖 |
 
 另有针对拆分算法与 PDF 分发内部逻辑的单元测试，见上游仓库
-<https://github.com/MarsandSea/excel-router> 的 `tests/`（桌面版与本 skill 共用同一套 `core/`）。
+<https://github.com/MarsandSea/ExcelRouter> 的 `tests/`（桌面版与本 skill 共用同一套 `core/`）。
 
 ## 依赖说明
 

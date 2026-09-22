@@ -22,7 +22,7 @@ import pathlib
 import subprocess
 import sys
 
-REPO = "MarsandSea/excel-router"
+REPO = "MarsandSea/ExcelRouter"
 BRANCH = "main"
 
 

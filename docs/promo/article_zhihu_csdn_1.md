@@ -125,7 +125,7 @@ Excel 自带的 Power Query 理论上能做，但：
 选 `.zip` 结尾的文件下载 → 解压 → 双击里面的 ExcelRouter.exe 即可。
 
 **GitHub 下载**：
-👉 https://github.com/MarsandSea/excel-router/releases
+👉 https://github.com/MarsandSea/ExcelRouter/releases
 
 > 个别杀毒软件可能误报（PyInstaller 打包的通用问题，不是病毒），优先下 ZIP 版基本不触发。
 > 详见项目 FAQ。
@@ -158,5 +158,5 @@ MIT 协议，个人和商业都可以，无任何限制。
 如果用着顺手，去仓库点个 ⭐ Star 就是最好的支持。
 
 > 作者：AbeLin
-> 项目主页：https://github.com/MarsandSea/excel-router
+> 项目主页：https://github.com/MarsandSea/ExcelRouter
 > 国内镜像：https://gitee.com/Marsandsea/Excelrouter
