@@ -48,3 +48,9 @@ excelrouter-skill-*.zip
 
 # 本地自攒的数据（SkillHub 下载曲线等，个人）
 stats/
+
+# 内部分析报告：docs/ 自 v2.9 起是 GitHub Pages 的发布目录，任何提交进 docs/ 的
+# HTML 都会立刻变成公开网页（含推广诊断、竞品分析、数据基线）。这些只给自己看，
+# 钉死在忽略列表里，避免一次 `git add -A` 就把内部策略发上公网。
+docs/excel-router-*.html
+docs/adversarial-review-*.md
