@@ -278,12 +278,25 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # 工作区确实变了 —— 先把「本次要发布」这件事定下来。回写 main 只是留痕，
+          # 它失败绝不能挡住发布。
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$VENDOR_DIR" "$TAG_FILE" "$UPSTREAM_MD" "$PLUGIN_JSON" "$MANIFEST_FILE" "$SKILL_MD" "$REQ_FILE" "$REQ_PDF_FILE" "$TESTS_DIR"
           git commit -m "chore(skill): 同步本仓 core 并发布 $TAG"
-          git push origin HEAD:${GITHUB_REF_NAME}
-          echo "changed=true" >> "$GITHUB_OUTPUT"
+          # ★ 目标分支写死 main，不能用 $GITHUB_REF_NAME。
+          # 本流水线是 tag 触发的，那个变量此刻等于 tag 名（如 v2.9.0），
+          # git 会把它当成已存在的 tag ref，直接
+          #   ! [rejected] HEAD -> v2.9.0 (already exists)
+          # 让整个 job exit 1 —— 后面的 SkillHub / ClawHub 两步**连跑都没跑**。
+          # 2026-09-23 的 v2.9.0 就是这么静默漏发的（Release 全绿、skill 没上架）。
+          # 同步产物属于代码，归宿只可能是 main。
+          if git push origin HEAD:refs/heads/main; then
+            echo "同步提交已回写 main"
+          else
+            echo "::warning::同步提交未能回写 main（main 可能已前进），本次发布照常继续；稍后手动跑一次 workflow_dispatch 补同步即可"
+          fi
 
       - name: Validate SKILL.md frontmatter
         # 发布前拦掉「静默降级」的元数据问题（2026-09-15 踩坑）：
