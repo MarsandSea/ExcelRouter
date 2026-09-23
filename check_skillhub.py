@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 check_skillhub.py —— 核实 ExcelRouter 在 SkillHub 上的真实发布状态与搜索排名。
 
@@ -22,9 +21,10 @@ import argparse
 import json
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 
 HOST = "https://api.skillhub.cn"   # 注意：主站 skillhub.cn/api/... 返回的是前端 HTML，不能用
 SLUG = "excelrouter"
@@ -32,13 +32,20 @@ DEFAULT_KEYWORDS = ["excel拆分", "表格拆分", "PDF加密分发"]
 TIMEOUT = 20
 
 
-def api(path: str, **params) -> dict:
-    """带破缓存的 GET。params 里塞 t=<时间戳> 是刻意为之，见模块 docstring。"""
+def api(endpoint: str, **params):
+    """带破缓存的 GET。params 里塞 t=<时间戳> 是刻意为之，见模块 docstring。
+
+    形参叫 endpoint 而不是 path：/file 端点的查询参数本身就叫 path，
+    叫 path 会和它撞成 "got multiple values for argument"。"""
     params["t"] = str(int(time.time()))
-    url = f"{HOST}{path}?{urllib.parse.urlencode(params)}"
+    url = f"{HOST}{endpoint}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        body = resp.read().decode("utf-8")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return body   # /file 端点返回的是文件原文，不是 JSON
 
 
 def fmt_ts(ms: int | None) -> str:
@@ -63,9 +70,29 @@ def show_status() -> str:
     print(f"  显示名     : {sk.get('displayName', '-')}")
     print(f"  下载 / 版本: {stats.get('downloads', '-')} / {stats.get('versions', '-')}")
     print(f"  安装 / 收藏: {stats.get('installs', '-')} / {stats.get('stars', '-')}")
-    print(f"  评论 / 认领: {stats.get('comments', '-')} / {sk.get('claim_state', '-')}")
-    ov = sk.get("overviewMd") or ""
-    print(f"  概览文案   : {'（空！）' if not ov else str(len(ov)) + ' 字符'}")
+    # 认领：claim_state 为 unclaimed 但 claimable=False 时，是「无需认领」而不是
+    # 「忘了认领」—— 技能本来就发在自己账号下，认领是给从 GitHub 自动抓取、
+    # 没有主人的技能用的。这条误报过一次，别再照着它去找认领入口。
+    claim = sk.get("claim_state", "-")
+    if claim == "unclaimed" and sk.get("claimable") is False:
+        claim = "无需认领（已在自己账号下）"
+    print(f"  评论 / 认领: {stats.get('comments', '-')} / {claim}")
+    print(f"  命名空间   : {(d.get('namespace') or {}).get('canonicalName', '-')}")
+
+    # ★ 详情页「概述」那一栏渲染的是**包里的 README.md**，不是 skill.overviewMd。
+    #   overviewMd 全站所有技能（含百万下载的）都是空的、发布流程也不写它 ——
+    #   盯着它只会得出「文案没上去」的错误结论。2026-09-23 实测确认：
+    #   本技能 README.md 404 时，详情页「概述」显示「无法加载文档 / Failed to fetch」。
+    try:
+        rm = api(f"/api/v1/skills/{SLUG}/file", path="README.md")
+        n = len(rm) if isinstance(rm, str) else len(json.dumps(rm))
+        print(f"  概述文档   : README.md 正常，{n} 字符")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print("  概述文档   : （README.md 不在包里！详情页「概述」会显示"
+                  "「无法加载文档」——它渲染的就是这个文件，不是 overviewMd）")
+        else:
+            print(f"  概述文档   : 查询失败 HTTP {e.code}")
     print(f"  分类       : {sk.get('category', '-')} / "
           f"{'、'.join(c.get('name', '') for c in (sk.get('subCategories') or [])) or '-'}")
 
