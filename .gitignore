@@ -57,3 +57,7 @@ docs/adversarial-review-*.md
 
 # make_icons.py 的效果对照图，看完即弃，不是构建产物
 icon-preview.png
+
+# 对内投放策略，绝不入库：推广总纲/内容排期/题库里有账号名、选题纪律、下载量基线，
+# 公开出去会直接毁掉软文的可信度。2026-09-23 被一次 git add -A 误提过，别再来一次。
+promo/
