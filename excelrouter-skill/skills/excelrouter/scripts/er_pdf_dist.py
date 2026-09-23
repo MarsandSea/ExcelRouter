@@ -110,18 +110,13 @@ def main():
             emit_error("--random-password 需要 --grid-col 指出哪一列是网格"
                        "（不确定列名就先跑 --list-columns 看表头）")
             return
-        # 【上游 bug 的包装层规避，不改 vendor】core.pdf_dist.fill_random_passwords 在
-        # password_col 传空串时，即便清单里本就有「密码」列，也会走到 `p_idx = len(header)`
-        # 分支，在表尾再追加一个同名「密码」列，产物出现两个密码列。上游 gui/app.py 正是
-        # 这样无参调用的（桌面版同样会中招）。这里在调用前先把默认值解析成真实列名，
-        # 让上游函数走「复用已有列」的分支。上游修好后本段可安全删除。
-        effective_pwd_col = args.password_col
-        if not effective_pwd_col:
-            if "密码" in list_mapping_columns(os.path.abspath(args.mapping)):
-                effective_pwd_col = "密码"
+        # 这里曾有一段包装层规避：上游 fill_random_passwords 在 password_col 传空串时
+        # 会在表尾追加重复的「密码」列。上游 v2.7.2 已修（留空时先复用既有「密码」列，
+        # 只填空白格），vendor 现在带的就是修好的版本，规避已删除 —— 留着会让人以为
+        # 上游还坏着，也多一次不必要的清单读取。
         try:
             out_path, count = fill_random_passwords(
-                os.path.abspath(args.mapping), args.grid_col, effective_pwd_col)
+                os.path.abspath(args.mapping), args.grid_col, args.password_col)
         except Exception as e:
             emit_error(f"生成随机密码失败：{e}")
             return

@@ -1,7 +1,8 @@
 # 上游同步信息
 
 本目录（`vendor/core/`）是 [MarsandSea/ExcelRouter](https://github.com/MarsandSea/ExcelRouter)
-仓库 `core/` 目录的逐字副本，由 `.github/workflows/sync-upstream.yml` 自动维护。
+仓库 `core/` 目录的逐字副本，由 `.github/workflows/publish-skill.yml` 在**发版打 tag 时**
+自动同步（skill 与桌面版已同仓，不再有跨仓拉取的 sync-upstream.yml）。
 
 **不要手动修改 `vendor/core/` 下的任何文件** —— 下次自动同步会直接覆盖，改动会丢失。
 如果发现 vendor 代码有 bug，应该去上游仓修，等下一次同步带过来；紧急情况下可以在

@@ -101,6 +101,40 @@ def test_inspect_directory_counts_files(two_books):
     assert obj["excel_count"] == 2
 
 
+def test_inspect_directory_values_are_flagged_as_sample(two_books):
+    """目录输入默认只读「样本表」，取值数字本身没错，错的是把抽样结论说成全量结论
+    —— 上游 v2.9.0 在 GUI 侧修的就是这个。这里 A.xlsx 只有北京/上海，
+    广州/深圳在 B.xlsx 里，样本口径必然看不全，所以必须自报 values_scope。"""
+    inp, _out = two_books
+    rc, obj, _ = _run("er_inspect.py", "--input", inp, "--column", "城市")
+    assert rc == 0
+    assert obj["values_scope"] == "sample"
+    assert obj["values_sample_file"] == "A.xlsx"      # 排序后固定是它，换次运行不该变
+    assert "抽样" in obj["values_warning"]
+    assert "广州" not in obj["values"]                # 正是抽样会漏掉的那个
+
+
+def test_inspect_all_files_unions_values_across_books(two_books):
+    """--all-files 读遍所有表取并集，并把口径标成 all、不再带警告。"""
+    inp, _out = two_books
+    rc, obj, _ = _run("er_inspect.py", "--input", inp, "--column", "城市", "--all-files")
+    assert rc == 0
+    assert obj["values_scope"] == "all"
+    assert obj["values_from_files"] == 2
+    assert set(obj["values"]) == {"北京", "上海", "广州", "深圳"}
+    assert "values_warning" not in obj
+
+
+def test_inspect_single_file_values_scope_is_single(tmp_path):
+    """单文件没有抽样问题，不该吓唬用户报 sample。"""
+    book = tmp_path / "one.xlsx"
+    _make_book(str(book), [["001", "张三", "销售部", "北京", 100]])
+    rc, obj, _ = _run("er_inspect.py", "--input", str(book), "--column", "城市")
+    assert rc == 0
+    assert obj["values_scope"] == "single"
+    assert "values_warning" not in obj
+
+
 def test_inspect_missing_input_reports_friendly_error(tmp_path):
     rc, obj, _ = _run("er_inspect.py", "--input", str(tmp_path / "not-exist.xlsx"))
     assert rc == 1
@@ -209,6 +243,30 @@ def test_pdf_dist_encrypts_and_writes_manifest(tmp_path):
     from pypdf import PdfReader
     reader = PdfReader(os.path.join(obj["output_path"], "GridA", "report.pdf"))
     assert reader.is_encrypted
+
+
+def test_pdf_dist_random_password_reuses_existing_blank_column(tmp_path):
+    """--random-password 不传 --password-col 时，清单里已有的空白「密码」列应被就地填满，
+    而不是在表尾再追加一个同名列（追加会让 read_mapping 命中原来那个空列 → 密码全漏读）。
+
+    上游 v2.7.2 修了这个（issue #1），包装层原本有一段规避、现已删除——
+    这个用例就是那段规避的替代品：vendor 一旦退回旧版本，这里会立刻红。
+    """
+    mp = tmp_path / "grid.xlsx"
+    _make_mapping(mp, [("GridA", None, "Zhang"), ("GridB", None, "Li")],
+                  headers=("网格", "密码", "接收人"))
+    rc, obj, stderr = _run("er_pdf_dist.py", "--mapping", str(mp),
+                           "--grid-col", "网格", "--random-password")
+    assert rc == 0, stderr
+    assert obj["generated"] == 2
+    out = obj["mapping_with_passwords"]
+    wb = openpyxl.load_workbook(out)
+    header = [c.value for c in wb.active[1]]
+    assert header.count("密码") == 1, f"密码列被重复追加了：{header}"
+    assert obj["password_col"] == "密码"
+    # 真的填进去了，而且是填在原来那一列
+    pwds = [r[header.index("密码")].value for r in wb.active.iter_rows(min_row=2)]
+    assert all(p for p in pwds), f"密码没填进既有列：{pwds}"
 
 
 def test_pdf_dist_missing_columns_reports_friendly_error(tmp_path):

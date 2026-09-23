@@ -12,9 +12,15 @@ MIT License
 用 --column 枚举取值时，会跨所有 sheet 搜索，并如实报告该字段出现在哪些 sheet。
 某字段不在第一个 sheet、而在第二个 sheet 时，不再误报「不在列名里」。
 
+★ 目录输入的取值口径（v2.9.0 起显式化）：默认只读**一个样本表**（排序后的第一个），
+快，但**拆分是对全部表生效的**，实际分组往往更多。返回 JSON 里的 `values_scope`
+会如实写明 sample / all / single，抽样时还会带一句 `values_warning`——
+把取值报给用户前先看这个字段，别把抽样结论说成全量结论。要全量就加 --all-files。
+
 用法：
   python er_inspect.py --input 表.xlsx
-  python er_inspect.py --input 一批表/ --column 部门
+  python er_inspect.py --input 一批表/ --column 部门              # 样本表口径，秒回
+  python er_inspect.py --input 一批表/ --column 部门 --all-files  # 读遍所有表取并集
   python er_inspect.py --input 表.xlsx --header-mode row --header-row 2
 
 输出：stdout 一行 JSON，字段见下方 emit() 调用处。
@@ -102,10 +108,40 @@ def _enum_values_all_sheets(file_path, column, config):
             os.remove(work_path)
 
 
+def _enum_values_many(files, column, config, heartbeat_every=20):
+    """读遍多个文件取某列取值的并集，返回 (values_sorted, sheets_with, failed)。
+
+    单个文件读失败**不中断**，记下文件名继续——一批表里混进一个坏文件/加密文件，
+    不该让整次取值预览失败（与 run_split 的容错口径一致）。
+    每 heartbeat_every 个文件往 stderr 打一行心跳：几百个表要读几十秒，
+    静默会被当成卡死。
+    """
+    values = set()
+    sheets_with = []
+    failed = []
+    total = len(files)
+    for i, f in enumerate(files, 1):
+        try:
+            vs, sw = _enum_values_all_sheets(f, column, config)
+        except Exception as e:
+            failed.append({"file": os.path.basename(f), "error": str(e)})
+            continue
+        values.update(vs)
+        for s in sw:
+            if s not in sheets_with:
+                sheets_with.append(s)
+        if i % heartbeat_every == 0 or i == total:
+            print(f"…已扫描 {i}/{total} 个表", file=sys.stderr, flush=True)
+    return sorted(values), sheets_with, failed
+
+
 def main():
     ap = argparse.ArgumentParser(description="看一个 Excel 文件/目录：表头行、字段名、某字段取值")
     ap.add_argument("--input", required=True, help="Excel 文件或目录路径")
     ap.add_argument("--column", default=None, help="要枚举取值的字段名（不填则只看列名）")
+    ap.add_argument("--all-files", action="store_true",
+                    help="目录输入时，--column 的取值读遍所有表取并集"
+                         "（默认只读一个样本表：快，但可能不全）")
     ap.add_argument("--output", default=None, help="计划用的输出目录（仅用于目录扫描时跳过其子树，可不填）")
     ap.add_argument("--header-mode", choices=["auto", "row", "keyword"], default="auto")
     ap.add_argument("--header-row", type=int, default=1, help="header-mode=row 时的 1 基行号")
@@ -126,7 +162,9 @@ def main():
     )
 
     is_dir = os.path.isdir(args.input)
-    files = _iter_input_files(args.input, args.output)
+    # 排序：os.walk 的顺序不保证稳定，而「样本表是哪一个」会直接影响用户看到的取值列表。
+    # 同一个目录两次跑必须给出同一个样本，否则「换个时间跑结果不一样」无从排查。
+    files = sorted(_iter_input_files(args.input, args.output))
 
     result = {
         "ok": True,
@@ -170,16 +208,24 @@ def main():
     ]
 
     if args.column:
-        # 跨所有 sheet 搜索该列，不再只盯第一个 sheet
+        multi = len(files) > 1
+        scan_all = bool(args.all_files) and multi
+        failed = []
         try:
-            values, sheets_with = _enum_values_all_sheets(template, args.column, config)
+            if scan_all:
+                values, sheets_with, failed = _enum_values_many(files, args.column, config)
+            else:
+                # 跨所有 sheet 搜索该列，不再只盯第一个 sheet
+                values, sheets_with = _enum_values_all_sheets(template, args.column, config)
         except Exception as e:
             emit_error(f"枚举「{args.column}」取值失败：{e}", excel_count=len(files))
             return
         if not sheets_with:
             all_cols = {s[0]: s[2] for s in sheets if s[1] != -1}
+            scope_hint = "任何一个表的任何一个 sheet" if scan_all else "样本表的任何一个 sheet"
             result["warning"] = (
-                f"字段「{args.column}」在任何一个 sheet 里都没找到。各 sheet 字段为：{all_cols}"
+                f"字段「{args.column}」在{scope_hint}里都没找到。样本表各 sheet 字段为：{all_cols}"
+                + ("" if scan_all else "；若这批表结构不一致，加 --all-files 再找一遍。")
             )
             emit(result)
             return
@@ -187,6 +233,28 @@ def main():
         result["column_sheets"] = sheets_with
         if len(sheets_with) < sum(1 for s in sheets if s[1] != -1):
             result["note"] = f"字段「{args.column}」仅出现在以下 sheet：{sheets_with}"
+
+        # ★ 取值口径必须显式写出来。数字本身没错，错的是把抽样结论说成全量结论
+        #   —— 上游 v2.9.0 在 GUI 侧修的就是这个（真实工单：401 个表，样本里 6 组、实际 29 组）。
+        if not multi:
+            result["values_scope"] = "single"
+        elif scan_all:
+            result["values_scope"] = "all"
+            result["values_from_files"] = len(files)
+            if failed:
+                result["values_failed_files"] = failed
+                result["values_warning"] = (
+                    f"有 {len(failed)} 个表没读成功，取值并集可能仍不完整，"
+                    f"详见 values_failed_files。"
+                )
+        else:
+            result["values_scope"] = "sample"
+            result["values_sample_file"] = os.path.basename(template)
+            result["values_warning"] = (
+                f"以上 {len(values)} 个取值只来自 {len(files)} 个表中的 1 个"
+                f"（样本：{os.path.basename(template)}）。拆分对全部表生效，实际分组很可能更多。"
+                f"报给用户时必须说明这是抽样结论；要全量口径就加 --all-files 重跑本命令。"
+            )
 
     emit(result)
 

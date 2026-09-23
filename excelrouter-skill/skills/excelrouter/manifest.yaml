@@ -10,7 +10,7 @@ name: excelrouter
 #   「中间命中」几乎不加分（连续子串存在但被品牌前缀顶到第 15 字以后 → 0 分）。
 # 所以品牌 ExcelRouter 退到末尾，把 excel拆分/表格拆分/PDF加密分发 放最前面。
 display_name: Excel拆分、表格拆分、PDF加密分发助手 — ExcelRouter
-version: "2.7.8"
+version: "2.9.0"
 slug: excelrouter
 description: >
   把总表交给 AI，说清楚「按什么拆」，就拆好还给你。常用场景：
@@ -20,7 +20,7 @@ description: >
   Excel 批量加密分发——一批表一次拆完，不同表里同一个人的行自动合并；
   PDF 按名单设密码——每份一个专属密码 + 可溯源水印，外泄能查到是谁。
   保留原表格式；一张表、一整批表都能拆。全程本地处理，数据不出本机、不上传。
-  与免费 Windows 桌面版同一内核：https://github.com/MarsandSea/ExcelRouter
+  与免费 Windows 桌面版同一内核，介绍与下载：https://marsandsea.github.io/ExcelRouter/
 category: productivity
 triggers:
   - "按部门拆表"
