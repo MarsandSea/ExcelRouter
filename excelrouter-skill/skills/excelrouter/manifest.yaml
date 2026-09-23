@@ -10,7 +10,7 @@ name: excelrouter
 #   「中间命中」几乎不加分（连续子串存在但被品牌前缀顶到第 15 字以后 → 0 分）。
 # 所以品牌 ExcelRouter 退到末尾，把 excel拆分/表格拆分/PDF加密分发 放最前面。
 display_name: Excel拆分、表格拆分、PDF加密分发助手 — ExcelRouter
-version: "2.9.1"
+version: "2.9.2"
 slug: excelrouter
 description: >
   把总表交给 AI，说清楚「按什么拆」，就拆好还给你。常用场景：
