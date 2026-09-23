@@ -25,7 +25,7 @@
   "operatingSystem": "Windows 10/11 64-bit, 银河麒麟 V10, 统信 UOS (x86_64 / aarch64)",
   "description": "把一个或一整批 Excel 表格按任意字段（部门、区域、工号、姓名等）的取值批量拆分成多个文件，完整保留原有复杂表头与单元格格式，可选再按人二级拆分，并按组打包 ZIP 分发。全程本机运行，不联网、不上传数据。另含 PDF 按网格加密分发模式。",
   "url": "https://marsandsea.github.io/ExcelRouter/",
-  "downloadUrl": "https://github.com/MarsandSea/ExcelRouter/releases/latest",
+  "downloadUrl": "https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip",
   "codeRepository": "https://github.com/MarsandSea/ExcelRouter",
   "license": "https://opensource.org/licenses/MIT",
   "isAccessibleForFree": true,
@@ -175,10 +175,12 @@
     <p class="brandline"><b>ExcelRouter</b> · Excel 智能拆分工具 · 免费开源（MIT）</p>
 
     <div class="cta">
-      <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">⬇ 下载（国内 · Gitee）</a>
-      <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter/releases/latest">GitHub Releases</a>
+      <a class="btn" href="https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip">⬇ 立即下载（Windows · 52MB）</a>
+      <a class="btn ghost" href="https://gitee.com/Marsandsea/Excelrouter/releases/latest">国内更快（Gitee）</a>
       <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter">查看源码 ⭐</a>
     </div>
+    <p class="trust">点上面的按钮直接开始下载，不用注册、不用装 Python；解压后双击
+      <code>ExcelRouter.exe</code> 就能用。</p>
     <p class="trust">🔒 <b>数据仅在本机处理</b>，不联网、不上传、无遥测 · 免安装免注册 · Windows + 银河麒麟 / 统信 UOS</p>
   </div>
 </header>
@@ -257,12 +259,20 @@
 
 <h2 id="download">下载</h2>
 
-<p><strong>普通用户不需要安装 Python</strong>，下载解压就能用。国内用户走 Gitee 更快。</p>
+<p><strong>普通用户不需要挑文件</strong>，点下面这个链接就开始下载，解压双击即可用：</p>
+
+<p><a class="btn" href="https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip">⬇ 下载 ExcelRouter（Windows 免安装版，约 52 MB）</a></p>
+
+<p>国内网络慢就走 <a href="https://gitee.com/Marsandsea/Excelrouter/releases/latest">Gitee 最新版</a>（免登录直下），在附件里选文件名带
+<code>win64.zip</code> 的那个，内容完全一样。下面是每个 Release 里的全部产物：</p>
 
 <table>
   <tr><th>产物</th><th>平台</th><th>说明</th></tr>
+  <tr><td><code>ExcelRouter-Windows.zip</code></td><td>Windows 10/11 64 位</td>
+      <td><strong>就是上面那个按钮</strong>。内容与当前版本的 <code>-win64.zip</code> 完全相同，
+          只是文件名固定不带版本号，外部链接因此长期有效</td></tr>
   <tr><td><code>ExcelRouter-vX.X.X-win64.zip</code></td><td>Windows 10/11 64 位</td>
-      <td><strong>优先选这个</strong>，解压后双击 <code>ExcelRouter.exe</code></td></tr>
+      <td>同上但带版本号，<strong>报问题时请说这个号</strong>；解压后双击 <code>ExcelRouter.exe</code></td></tr>
   <tr><td><code>ExcelRouter-vX.X.X.exe</code></td><td>Windows 10/11 64 位</td>
       <td>单文件版，下载即用；个别杀毒软件可能误报（见下方 FAQ）</td></tr>
   <tr><td><code>...-linux-x86_64.tar.gz</code><br><code>...-linux-aarch64.tar.gz</code></td>
@@ -274,13 +284,13 @@
           说明架构，我构建后挂到 Release 上。</td></tr>
 </table>
 
-<p><strong>信创机器怎么装</strong>：终端敲 <code>uname -m</code> 看架构，下对应的 tar.gz，
+<p><strong>信创机器怎么装</strong>：拿到 tar.gz 后，终端敲 <code>uname -m</code> 确认架构，
 解压后运行 <code>./启动ExcelRouter.sh</code>（不要直接运行 <code>ExcelRouter</code> 那个文件，
 启动脚本会设置中文环境与输入法变量）。</p>
 
 <div class="cta" style="justify-content:flex-start">
-  <a class="btn" href="https://gitee.com/Marsandsea/Excelrouter/releases">Gitee 下载（国内）</a>
-  <a class="btn ghost" href="https://github.com/MarsandSea/ExcelRouter/releases/latest">GitHub Releases</a>
+  <a class="btn" href="https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip">⬇ 立即下载（Windows）</a>
+  <a class="btn ghost" href="https://gitee.com/Marsandsea/Excelrouter/releases/latest">Gitee 最新版（国内更快）</a>
 </div>
 
 <h2 id="faq">常见问题</h2>

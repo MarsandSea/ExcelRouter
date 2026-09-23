@@ -8,7 +8,10 @@
 
 <br>
 
-[![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows%20%7C%20%E9%BA%92%E9%BA%9F-1E7F4B?style=for-the-badge)](../../releases)
+[![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows-1E7F4B?style=for-the-badge)](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
+
+点上面的按钮**直接开始下载**（Windows 免安装版，约 52 MB，不用注册、不用装 Python）。
+国内网络慢？走 **[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)**，在附件里选文件名带 `win64.zip` 的那个。
 
 **[📖 3 分钟上手指引](docs/使用指引.md)** · **[❓ 常见问题](docs/FAQ.md)** · [下载哪个文件？](#-直接下载使用无需安装-python--download)
 
@@ -42,8 +45,10 @@ formatting, merge across files, optional per-person output — free, open-source
 - ❌ 不做**把多个表合并成一个总表**的通用合并（只在拆分时支持「同一取值跨文件合并」）
 - ❌ 不做数据透视、清洗、统计分析
 - ❌ **没有 Mac 版，也没有在线版**（在线版意味着要上传数据，与「数据不出本机」冲突）
-- ✅ **有信创版**：银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64（飞腾 / 鲲鹏）双架构，
-  免安装 tar.gz，解压即用（[怎么装](#-直接下载使用无需安装-python--download)）
+- ✅ **支持信创环境**：银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64（飞腾 / 鲲鹏）双架构，
+  代码已完整适配并在真机验证过。但 Linux 产物**必须在目标机器上打包**才能保证 glibc 兼容，
+  所以不随每个版本自动发布——需要的话[提个 Issue](https://github.com/MarsandSea/ExcelRouter/issues/new) 说明架构，我构建好挂到 Release 上
+  （[详情](#-直接下载使用无需安装-python--download)）
 
 > *ExcelRouter is a free, open-source (MIT) **desktop tool for Windows and Chinese domestic Linux (Kylin V10 / UOS)
 > that splits one or a whole folder of Excel files by the values of any column** — department, region, store, employee ID, class —
@@ -69,8 +74,8 @@ formatting, merge across files, optional per-person output — free, open-source
 > 工作簿」「批量拆分 Excel 不写 VBA / 不用 Power Query」「拆完还要保留原来的复杂表头和格式」
 > 「按部门把表格分开发给不同的人」—— 那这个工具就是干这个的。
 
-**国内用户下载更快**：[Gitee 镜像仓库](https://gitee.com/Marsandsea/Excelrouter/releases)
-（与 GitHub 同步发版）· 国际用户：[GitHub Releases](../../releases)
+**国内用户下载更快**：[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)（与 GitHub 同步发版，免登录直下）·
+国际用户：[GitHub Releases](../../releases)
 
 ---
 
@@ -136,23 +141,27 @@ formatting, merge across files, optional per-person output — free, open-source
 
 ## 🚀 直接下载使用（无需安装 Python）/ Download
 
-普通用户请直接下载打包好的程序：👉 **[前往 Releases 下载](../../releases)**
+普通用户不用挑文件，点这一个链接就开始下载：
 
-每个版本提供四种产物。**Windows 优先选 ZIP；麒麟 / UOS 选对应架构的 tar.gz**：
+### 👉 [下载 ExcelRouter（Windows 免安装版，约 52 MB）](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
+
+下载得到 `ExcelRouter-Windows.zip`，解压到任意文件夹，双击里面的 `ExcelRouter.exe` 即可使用。
+**不需要安装 Python，不需要注册，不需要联网。**
+国内网络慢的话走 [Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)（免登录直下），在附件里选文件名带 `win64.zip` 的那个，内容完全一样。
+
+想自己挑产物的话，每个 Release 里还有这些：
 
 | 产物 | 平台 | 说明 |
 |---|---|---|
-| `ExcelRouter-vX.X.X-win64.zip` | Windows | **推荐**，文件夹形式，解压后双击里面的 exe，极少触发杀毒软件误报 |
+| `ExcelRouter-Windows.zip` | Windows | 就是上面那个按钮。内容与当前版本的 `-win64.zip` 完全相同，只是文件名固定不带版本号，外部链接因此长期有效 |
+| `ExcelRouter-vX.X.X-win64.zip` | Windows | 同上但带版本号，**报问题时请说这个号** |
 | `ExcelRouter-vX.X.X.exe` | Windows | 单文件版，下载即用无需解压；个别杀毒软件可能误报（[why?](docs/FAQ.md#杀毒软件误报)） |
-| `ExcelRouter-vX.X.X-linux-x86_64.tar.gz` | 麒麟 / UOS（兆芯、海光、Intel） | 解压后运行 `启动ExcelRouter.sh` |
-| `ExcelRouter-vX.X.X-linux-aarch64.tar.gz` | 麒麟 / UOS（飞腾、鲲鹏，含华为擎云笔记本） | 解压后运行 `启动ExcelRouter.sh` |
 
-> **不确定自己是哪个架构？** 终端里敲 `uname -m`：出 `x86_64` 选第三个，出 `aarch64` 选第四个。
->
-> **麒麟产物按需发布，版本号可能落后于 Windows** —— 每个版本都在真机上验收成本太高，
-> 所以只在核心逻辑有实质变化时才更新。想要某个版本的麒麟包可以提 Issue。
-> 如果启动时报 `GLIBC_2.xx not found`，说明你的系统比打包机更旧——
-> 在你自己的机器上跑一遍 `build_linux.sh` 重新打一份即可（见 [FAQ](docs/FAQ.md)）。
+> **麒麟 / 统信 UOS 怎么办？** 代码已完整适配（x86_64 与 aarch64 双架构，真机验证过），
+> 但 PyInstaller 产物的 glibc 下限等于打包机、且不向下兼容，**必须在目标机器上打包**，
+> 所以 Linux 包不随版本自动发布，Release 附件里现在没有 tar.gz。
+> 需要的话[提个 Issue](https://github.com/MarsandSea/ExcelRouter/issues/new) 说明架构（终端敲 `uname -m` 可以看到），我构建好挂上去；
+> 或者自己在那台机器上跑一遍 `build_linux.sh`，几分钟的事。
 
 > 🤖 **在用 AI 助手（WorkBuddy / Claude / WPS 灵犀等）？** 也可以不装 exe：给助手装上
 > **[ExcelRouter Skill](https://github.com/MarsandSea/ExcelRouter/tree/main/excelrouter-skill)**——同一套核心代码的

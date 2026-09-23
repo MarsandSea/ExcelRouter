@@ -85,11 +85,23 @@ jobs:
           $ver = "${{ steps.ver.outputs.version }}"
           Compress-Archive -Path "dist/ExcelRouter/*" -DestinationPath "dist/ExcelRouter-v$ver-win64.zip"
           Rename-Item "dist/ExcelRouter-onefile.exe" "ExcelRouter-v$ver.exe"
+          # 再复制一份「文件名不带版本号」的同内容 zip，专供站外投放（CSDN 文章、
+          # 落地页、微信转发）使用的**固定下载直链**：
+          #   https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip
+          # 实测该地址 302 到真实附件并带 Content-Disposition: attachment ——
+          # 浏览器不渲染任何仓库页面，点一下就开始下载，普通用户不需要看懂 GitHub。
+          # 有了它，发版后不必再去逐处改链接里的版本号（漏改一处用户就下到旧版）。
+          # ★ 文件名保持纯 ASCII：GitHub 会替换 release 附件名里的非 [A-Za-z0-9._-]
+          #   字符，中文名会让这个固定地址失效。
+          # ★ Gitee 侧没有等价的 latest/download 文件别名（实测 404），
+          #   它只有 /releases/latest 跳到最新版页面；Gitee 那条链接因此只能落到页面。
+          Copy-Item "dist/ExcelRouter-v$ver-win64.zip" "dist/ExcelRouter-Windows.zip"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/ExcelRouter-Windows.zip
             dist/ExcelRouter-v${{ steps.ver.outputs.version }}-win64.zip
             dist/ExcelRouter-v${{ steps.ver.outputs.version }}.exe
           generate_release_notes: true
@@ -134,6 +146,7 @@ jobs:
           $ver = "${{ steps.ver.outputs.version }}"
           $releaseId = "${{ steps.gitee_release.outputs.release_id }}"
           $files = @(
+            "dist/ExcelRouter-Windows.zip",
             "dist/ExcelRouter-v$ver-win64.zip",
             "dist/ExcelRouter-v$ver.exe"
           )
