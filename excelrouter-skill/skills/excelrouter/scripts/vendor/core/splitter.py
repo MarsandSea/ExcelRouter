@@ -894,8 +894,11 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
             if os.path.abspath(root).startswith(os.path.abspath(output_root)):
                 continue
             for f in files:
-                if (f.lower().endswith(('.xlsx', '.xls')) and not f.startswith('~$')
-                        and not f.endswith('__tmp__.xlsx')):   # 跳过旧版可能残留的临时文件
+                # 大小写统一用 lf 判断：区分大小写的文件系统（Linux）上，残留的
+                # `X__TMP__.XLSX` 会绕过原来那条大小写敏感的判断被当数据重新吃进去
+                lf = f.lower()
+                if (lf.endswith(('.xlsx', '.xls')) and not f.startswith('~$')
+                        and not lf.endswith('__tmp__.xlsx')):   # 跳过旧版可能残留的临时文件
                     fp = os.path.join(root, f)
                     tasks.append((fp, os.path.relpath(fp, input_path)))
 
