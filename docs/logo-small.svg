@@ -1,0 +1,19 @@
+<svg viewBox="0 0 256 256" width="256" height="256" xmlns="http://www.w3.org/2000/svg" role="img">
+  <!-- Copyright (c) 2026 AbeLin · MIT License -->
+  <title>ExcelRouter（小尺寸简化版）</title>
+  <desc>16/24px 专用：只保留「一个源表 → 两个文件」三个块，去掉纸面行线与分叉连线
+        —— 16px 下每个块至少要 3 像素、间距至少 2 像素，连线再怎么加粗也排不下。
+        几何参数的真源是仓库根目录的 make_icons.py，改这份 SVG 不会影响
+        app.ico / favicon.ico，要改请改脚本再重新生成。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#35A566"/>
+      <stop offset="0.55" stop-color="#1E7F4B"/>
+      <stop offset="1" stop-color="#12603A"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"/>
+  <rect x="36" y="56" width="76" height="144" rx="16" fill="#FFFFFF"/>
+  <rect x="144" y="56" width="80" height="56" rx="14" fill="#FFFFFF"/>
+  <rect x="144" y="144" width="80" height="56" rx="14" fill="#FFFFFF"/>
+</svg>

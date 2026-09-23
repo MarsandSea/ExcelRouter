@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo-er.png" alt="ExcelRouter Logo" width="120">
+<img src="assets/logo.png" alt="ExcelRouter Logo" width="120">
 
 # 📊 ExcelRouter · 表格拆分 & PDF 加密分发
 

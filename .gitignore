@@ -54,3 +54,6 @@ stats/
 # 钉死在忽略列表里，避免一次 `git add -A` 就把内部策略发上公网。
 docs/excel-router-*.html
 docs/adversarial-review-*.md
+
+# make_icons.py 的效果对照图，看完即弃，不是构建产物
+icon-preview.png
