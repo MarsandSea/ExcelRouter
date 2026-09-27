@@ -114,19 +114,37 @@ def test_encrypt_right_and_wrong_password(workspace):
     assert not (tmp / "out" / "GridC").exists()
 
 
+def _text_of(page):
+    """页面可见文本（去掉 NUL 后比对）。
+
+    水印是用**子集化的 Type0 复合中文字体**画的，pypdf 对它的 ToUnicode 还原
+    在不同字体上表现不一致：Windows 的 simhei.ttf 能还原成 "GridA"，而
+    AlmaLinux 上的 NotoSansCJK-Regular.ttc 还原出来是 UTF-16BE 的
+    "\x00G\x00r\x00i\x00d\x00A"。这是 pypdf 的文本抽取精度问题，
+    不是水印本身的问题——水印确实画上去了（test_watermark_cjk_end_to_end
+    直接查页面资源里的 Type0 字体，不依赖文本抽取）。
+
+    去掉 NUL 再比，让用例在 Windows 和麒麟/CI 上问的是同一个问题：
+    这一页到底有没有这个网格的水印。**对「没有水印」那半边尤其重要**——
+    文本被还原成乱码时，`"GridA" not in text` 会无条件通过，
+    等于把否定用例悄悄变成了永真断言。
+    """
+    return page.extract_text().replace("\x00", "")
+
+
 def test_watermark_on_and_off(workspace):
     tmp, cfg = workspace
     run_pdf_dist(cfg, log_fn=lambda m: None)
     r = PdfReader(tmp / "out" / "GridA" / "report.pdf")
     r.decrypt("001234")
     for page in r.pages:                       # 每页都有该网格的水印
-        assert "GridA" in page.extract_text()
+        assert "GridA" in _text_of(page)
 
     cfg2 = dict(cfg, pdf_watermark=False, output_path=str(tmp / "out2"))
     run_pdf_dist(cfg2, log_fn=lambda m: None)
     r = PdfReader(tmp / "out2" / "GridA" / "report.pdf")
     r.decrypt("001234")
-    assert "GridA" not in r.pages[0].extract_text()
+    assert "GridA" not in _text_of(r.pages[0])
 
 
 def test_manifest_content(workspace):
