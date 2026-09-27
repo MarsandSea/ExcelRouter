@@ -148,6 +148,12 @@ GitHub 始终是权威源，Gitee 只是下游镜像。如果发现 Gitee 侧长
 日志里看 `Mirror code + tag to Gitee` / `Create Gitee Release` / `Upload assets to
 Gitee Release` 这三步的报错信息，通常是 token 过期或权限不够。
 
+**Gitee release 的名称/正文是搜索门面**：百度搜 `excelrouter` 排第一的就是 Gitee 发行版页，
+摘要取自 release 正文和「最后提交信息」（即打 tag 那个 commit 的标题）。正文模板在
+`.github/gitee_release_body.md`（`{ver}` 占位），CI 与回填脚本 `update_gitee_releases.py` 共用；
+改模板后可用 `GITEE_TOKEN=... py update_gitee_releases.py --all` 重刷历史版本。
+发版 commit 的标题也尽量写成用户看得懂的一句话，别只写「版本号 x.y.z」。
+
 代码镜像用的是**强制推送**（`git push gitee HEAD:main --force`），因为 Gitee 那边定位
 是纯镜像、不接受人工直接改动；如果有人手动在 Gitee 上提交了内容，下次发版会被覆盖。
 

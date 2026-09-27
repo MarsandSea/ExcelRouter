@@ -117,12 +117,16 @@ jobs:
           GITEE_TOKEN: ${{ secrets.GITEE }}
         run: |
           $ver = "${{ steps.ver.outputs.version }}"
+          # 百度搜 excelrouter 排第一的是 Gitee 发行版页，摘要就取自这里的 name/body——
+          # 所以正文写成「产品介绍 + 下载指引」，而不是一句「同步自 GitHub」。
+          # 模板与 update_gitee_releases.py（回填历史 release）共用，改文案只改一处。
+          $notes = (Get-Content -Raw -Encoding utf8 ".github/gitee_release_body.md").Replace("{ver}", $ver)
           $body = @{
             access_token     = $env:GITEE_TOKEN
             tag_name         = "v$ver"
-            name             = "v$ver"
+            name             = "v$ver · Excel 智能拆分工具 Windows 免安装版"
             target_commitish = "${{ github.sha }}"
-            body             = "同步自 GitHub Release，完整更新说明见: https://github.com/MarsandSea/ExcelRouter/releases/tag/v$ver"
+            body             = $notes
           }
           $resp = Invoke-RestMethod -Uri "https://gitee.com/api/v5/repos/Marsandsea/Excelrouter/releases" -Method Post -Body $body
           "release_id=$($resp.id)" >> $env:GITHUB_OUTPUT
