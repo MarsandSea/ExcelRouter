@@ -22,14 +22,26 @@ name: Release (Linux)
 # 同事下载到手里出问题，比「麒麟版停在上一个版本」糟糕得多。
 # 所以节奏解耦：Windows 每个版本都发，麒麟版按需发。
 #
-# 用法：Actions 页 → Release (Linux) → Run workflow → 填要发布的 tag（如 v2.8.0）。
+# 用法（★ 两步，别一步到位）：
+#   第 1 步 —— Actions 页 → Release (Linux) → Run workflow → 填 tag，
+#              「发布到 Release 页」**留空**。跑完从该次运行的 Artifacts 里
+#              下载 tar.gz，拷到真机按 docs/RELEASING.md §1.7 的清单验收。
+#   第 2 步 —— 验收通过后，用同一个 tag 再跑一次，这次**勾上**「发布到 Release 页」。
+#
+# 为什么要分两步：publish 一旦跑过，包就挂在公开 Release 页上了，
+# 同事随时可能下载。未验收的包在那儿待着，比「麒麟版停在上一个版本」糟糕得多。
+# 默认不发布，就是让「忘了验收」的默认后果是「没发出去」而不是「发了个坏包」。
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要构建并发布的 tag（例如 v2.8.0）"
+        description: "要构建的 tag（例如 v2.8.0）"
         required: true
         type: string
+      publish:
+        description: "发布到 Release 页（首次跑请留空：先构建，真机验收过再勾）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -106,6 +118,9 @@ jobs:
 
   publish:
     needs: build-linux
+    # ★ 默认不发布。没勾这个框时本 job 整体跳过，产物只留在本次运行的
+    #   Artifacts 里（可下载、不公开），正好用来做真机验收。
+    if: inputs.publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
