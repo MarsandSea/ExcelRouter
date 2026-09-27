@@ -215,6 +215,10 @@ excel-router/
 ├── build_linux.sh             # 麒麟/UOS 打包：★ 必须在目标机器上跑，只产 onedir tar.gz
 ├── packaging/
 │   ├── launcher.sh.in         # Linux 启动脚本模板（@GLIBC@ 由 build_linux.sh 替换）
+│   ├── install-desktop.sh     # ★ 随包分发的「安装到开始菜单.sh」：运行时把真实路径
+│   │                          #   写进 ~/.local/share/applications/*.desktop。
+│   │                          #   不能在 tar 里放现成的 .desktop——Exec= 要绝对路径，
+│   │                          #   而解压到哪儿只有用户机器上才知道
 │   └── README-Linux.txt       # 随 tar.gz 一起分发的「使用说明.txt」
 ├── .gitattributes             # ★ 钉死 *.sh 为 LF：本机 autocrlf=true，CRLF 的 sh 在麒麟上直接起不来
 ├── app.ico                    # 程序图标（Windows；占位，用户可替换）

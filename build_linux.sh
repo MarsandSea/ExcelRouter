@@ -98,7 +98,10 @@ echo "[4/5] PyInstaller onedir ..."
 echo "[5/5] 生成启动脚本 + 打 tar.gz ..."
 # 把打包机的 glibc 版本写进启动脚本，启动失败时好给用户一句人话
 sed "s/@GLIBC@/${GLIBC}/g" packaging/launcher.sh.in > "dist/${APP}/启动ExcelRouter.sh"
-chmod +x "dist/${APP}/启动ExcelRouter.sh" "dist/${APP}/${APP}"
+# 一次性注册到开始菜单/桌面的脚本。不做成 tar 里现成的 .desktop：
+# Exec= 要绝对路径，而解压到哪儿只有用户机器上才知道。
+cp packaging/install-desktop.sh "dist/${APP}/安装到开始菜单.sh"
+chmod +x "dist/${APP}/启动ExcelRouter.sh" "dist/${APP}/安装到开始菜单.sh" "dist/${APP}/${APP}"
 cp packaging/README-Linux.txt "dist/${APP}/使用说明.txt"
 mv "dist/${APP}" "dist/${OUT}"
 tar -C dist -czf "dist/${OUT}.tar.gz" "${OUT}"
