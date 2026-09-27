@@ -69,10 +69,17 @@ jobs:
       - name: 安装工具链
         # 不能用 actions/setup-python：它下载的二进制是对着新 glibc 编的，
         # 在 glibc 2.28 容器里跑不起来。必须用发行版自带的 python3.12。
+        #
+        # ★ python3.12-pip 必须显式装：RHEL8 系把 pip 拆成了单独的包，
+        #   只装 python3.12 的话 `python3.12 -m pip` 报 "No module named pip"。
         run: |
           dnf -y install python3.12 python3.12-devel python3.12-tkinter \
+                         python3.12-pip python3.12-setuptools \
                          tk tcl gcc binutils tar gzip which findutils \
                          fontconfig
+          # 兜底：万一某个镜像源里没有 python3.12-pip，用标准库自带的 ensurepip
+          python3.12 -m pip --version || python3.12 -m ensurepip --upgrade
+          python3.12 -m pip --version
 
       - name: 安装中文字体
         # ★ 包名坑：`wqy-zenhei-fonts` 是 Debian/Ubuntu 的名字，AlmaLinux 的基础仓里
