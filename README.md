@@ -12,6 +12,7 @@
 
 点上面的按钮**直接开始下载**（Windows 免安装版，约 52 MB，不用注册、不用装 Python）。
 国内网络慢？走 **[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)**，在附件里选文件名带 `win64.zip` 的那个。
+国内镜像仓库：**[gitee.com/Marsandsea/Excelrouter](https://gitee.com/Marsandsea/Excelrouter)**（与 GitHub 同步，国内直连）
 
 **[📖 3 分钟上手指引](docs/使用指引.md)** · **[❓ 常见问题](docs/FAQ.md)** · [下载哪个文件？](#-直接下载使用无需安装-python--download)
 
