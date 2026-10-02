@@ -45,7 +45,9 @@ import warnings
 import datetime
 from copy import copy
 
-import pandas as pd
+# pandas 只在真正读表 / 转 xls 时才导入（函数内 import），不在模块顶层导入：
+# 某些嵌入式 Python（如企业客户端自带的解释器）加载 pandas 的 C 扩展会长时间卡住甚至挂死，
+# 顶层导入会让只想复用表头识别、格式复制等纯 openpyxl 函数的调用方也被拖死。
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
@@ -200,6 +202,7 @@ def normalize_to_xlsx(file_path, log_fn=None):
     fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
     os.close(fd)
     try:
+        import pandas as pd
         dfs = pd.read_excel(file_path, sheet_name=None, header=None, engine='xlrd')
         with pd.ExcelWriter(tmp_path, engine='openpyxl') as w:
             for sn, df in dfs.items():
@@ -326,6 +329,7 @@ def _safe_translate(formula, origin, dest):
 
 def _read_all_sheets(file_path, config, log_fn=None, nrows=None):
     """读入文件所有 sheet 为「值 DataFrame」字典（header=None）。返回 (df_dict, work_path, is_tmp)。"""
+    import pandas as pd
     work_path, is_tmp = normalize_to_xlsx(file_path, log_fn)
     engine = 'openpyxl'
     df_dict = pd.read_excel(work_path, sheet_name=None, header=None,
@@ -565,6 +569,7 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
             if heartbeat and (offset + 1) % batch == 0:
                 heartbeat(batch)
     else:
+        import pandas as pd
         for offset, (_, row_series) in enumerate(rows_df.iterrows()):
             out_row = start + offset
             for c_idx, val in enumerate(row_series, start=1):
@@ -639,6 +644,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
       按 split_column → person_column 拆，同一人跨文件合并到一个文件。
     · tick_fn(0..1) 报告本文件内部进度（读取→拆分各阶段），供界面进度条使用。
     """
+    import pandas as pd
     preserve_format = config.get('preserve_format', True)
     keep_formulas   = config.get('keep_formulas', False)
     split_column    = soft_clean(config.get('split_column', ''))
