@@ -66,11 +66,16 @@ numpy 底层的 OpenBLAS 在 Windows 上默认多线程，某些环境下会因�
 
 只有在你确实需要多线程时才自己指定，脚本用 `setdefault`，不会覆盖你的设置：
 ```bash
-OPENBLAS_NUM_THREADS=8 python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
+OPENBLAS_NUM_THREADS=8 python scripts/er_split.py --input 明细.xlsx --by 部门
 ```
 这是 numpy 的已知问题，不影响数据正确性。
 
-## `pip install -r requirements.txt` 报错，或者提示缺 pypdf/fpdf2/cryptography
+## 提示缺依赖、自动安装没成功，或者提示缺 pypdf/fpdf2/cryptography
+
+脚本首次运行会用**当前解释器**（`sys.executable -m pip`）自动安装依赖：依次试腾讯云、阿里云镜像和官方源（用户自己配过 pip 源则只用他的），总时长控制在 95 秒内——WorkBuddy 会强制结束超过 120 秒的命令。没装完会返回 `retry: true`，再跑一次即可接着装。
+仍失败（断网、内网、没有 pip）时，`error` 里会给出一条带解释器绝对路径的完整命令，照着手动跑即可——
+**别用裸 `pip`**，多个 Python 并存时它常装到别的环境里，装完照样报缺。
+受管环境不希望脚本自动装包，设环境变量 `ER_NO_AUTO_INSTALL=1`。
 
 Excel 拆分只需要 `pandas`/`openpyxl`/`xlrd` 这三个，PDF 加密分发才需要 `pypdf`/`fpdf2`。
 如果只做 Excel 拆分，PDF 相关依赖装不上可以先忽略。`cryptography` 缺失不会导致 PDF 分发
@@ -81,4 +86,4 @@ Excel 拆分只需要 `pandas`/`openpyxl`/`xlrd` 这三个，PDF 加密分发才
 水印生成用的字体是自动探测 Windows 系统字体目录（`simhei.ttf` 等）；非 Windows 环境、
 或者 Windows 上确实没装中文字体时探测不到，会在 stderr 警告并继续（水印仍会加，只是
 中文字符显示不出来）。这时用 `--font 字体文件.ttf` 指定一个含中文字形的 TTF 字体路径
-（注意 fpdf2 不支持 `.ttc` 格式的字体合集，必须是单独的 `.ttf`）。
+（`.ttf`/`.otf`/`.ttc` 都可以；fpdf2 2.8 起支持字体合集）。

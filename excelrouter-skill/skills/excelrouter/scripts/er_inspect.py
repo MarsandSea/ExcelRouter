@@ -28,18 +28,26 @@ MIT License
 
 import argparse
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import bootstrap, build_config, check_deps, emit, emit_error  # noqa: E402
+from _common import (  # noqa: E402
+    bootstrap, build_config, default_output_for, emit, emit_error, ensure_deps, sheet_headers,
+)
 
 bootstrap()
+ensure_deps()  # 必须排在 pandas / core 的 import 之前
 
 import pandas as pd  # noqa: E402
 from core.splitter import (  # noqa: E402
     normalize_to_xlsx, resolve_header_row, _find_col_index, _header_values,
 )
-from core.utils import apply_alias, is_skip_value, soft_clean  # noqa: E402
+from core.utils import apply_alias, is_skip_value  # noqa: E402
+
+# 与桌面版 _recommend_split / _recommend_person 同一份关键词，保证两边「默认选中」一致
+_SPLIT_KEYWORDS = ("部门", "网格", "区域", "分公司", "门店", "班组", "科室", "组织", "单位", "类别", "分类")
+_PERSON_KEYWORDS = ("姓名", "名字", "工号", "负责人", "经办")
 
 
 def _is_candidate_excel(name):
@@ -63,21 +71,55 @@ def _iter_input_files(input_path, output_root=None):
     return files
 
 
-def _detect_all_sheets(file_path, config):
-    """返回 [(sheet_name, header_row_1based, [columns]), ...]，覆盖文件里每一个 sheet。"""
+_detect_all_sheets = sheet_headers
+
+
+def _profile_columns(file_path, config):
+    """读一遍全表，算出每一列有几个不同取值（= 按它拆会拆成几组），并留下取值本身。
+    返回 {列名: set(取值)}，同名列跨 sheet 取并集（内核拆分时也是跨 sheet 生效）。
+
+    这就是桌面版②卡片「字段下拉 + 将拆成 N 组」的命令行等价物：AI 一次调用就能
+    给用户列出「按部门 5 组 / 按区域 3 组 / 按姓名 55 人」让他挑，不用再逐个字段去查。"""
+    alias = config.get("value_alias_map", {})
+    skip = config.get("skip_values", [])
     work_path, is_tmp = normalize_to_xlsx(file_path)
     try:
-        df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine="openpyxl", nrows=20)
-        out = []
-        for sheet_name, df in df_dict.items():
-            rows = df.values.tolist()
-            h = resolve_header_row(rows, config)
-            cols = [c for c in _header_values(df, h) if c] if (h != -1 and h <= len(df)) else []
-            out.append((sheet_name, h, cols))
-        return out
+        df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine="openpyxl")
+        prof = {}
+        for _sn, df in df_dict.items():
+            h = resolve_header_row(df.values[:20].tolist(), config)
+            if h == -1 or h > len(df):
+                continue
+            for ci, name in enumerate(_header_values(df, h)):
+                if not name:
+                    continue
+                vals = prof.setdefault(name, set())
+                for v in df.iloc[h:, ci]:
+                    nv = apply_alias(v, alias)
+                    if not is_skip_value(nv, skip):
+                        vals.add(nv)
+        return prof
     finally:
         if is_tmp and os.path.exists(work_path):
             os.remove(work_path)
+
+
+_NUM_RE = re.compile(r"^[-+]?[\d,]*\.?\d+%?$")
+
+
+def _numeric_like(vals):
+    """金额、比率这类数字列能「拆」但没人会按它拆，列进候选只会干扰用户挑选。"""
+    vals = [str(v) for v in vals]
+    return bool(vals) and sum(1 for v in vals if _NUM_RE.match(v)) >= 0.8 * len(vals)
+
+
+def _pick(cols, prof, keywords, lo=2):
+    """按关键词顺序挑第一个「真能拆出 ≥lo 组」的列；挑不到返回 None（不硬猜）。"""
+    for kw in keywords:
+        for c in cols:
+            if kw in c and len(prof.get(c, ())) >= lo:
+                return c
+    return None
 
 
 def _enum_values_all_sheets(file_path, column, config):
@@ -135,6 +177,52 @@ def _enum_values_many(files, column, config, heartbeat_every=20):
     return sorted(values), sheets_with, failed
 
 
+def _add_suggestion(result, template, files, config):
+    """一次调用给出「每个字段能拆几组 + 推荐按哪个拆 + 它的取值」，并配一句可直接
+    念给用户的话。读全表失败不致命：退回只给列名的旧行为。"""
+    try:
+        prof = _profile_columns(template, config)
+    except Exception as e:
+        result["profile_error"] = str(e)
+        return
+    cols = list(dict.fromkeys(c for s in result["sheets"] for c in s["columns"]))
+    counts = {c: len(prof.get(c, ())) for c in cols}
+    result["group_counts"] = counts
+
+    multi = len(files) > 1
+    sample_note = (f"（只看了样本表「{os.path.basename(template)}」，"
+                   f"全部 {len(files)} 个表的分组可能更多）") if multi else ""
+    split = _pick(cols, prof, _SPLIT_KEYWORDS)
+    person = _pick(cols, prof, _PERSON_KEYWORDS)
+    if split:
+        vals = sorted(prof[split])
+        result["suggestion"] = {
+            "split_column": split, "groups": len(vals), "values": vals[:50],
+            "values_truncated": len(vals) > 50,
+            "values_scope": "sample" if multi else "single",
+            "person_column": person,
+        }
+    elif person:
+        result["suggestion"] = {"split_column": None, "person_column": person}
+
+    # 可直接转述的一句话：推荐项 + 其余能拆的字段（按组数从少到多，取值只有 1 个的不算）
+    others = sorted((c for c in cols
+                     if c != split and counts[c] >= 2 and not _numeric_like(prof.get(c, ()))),
+                    key=lambda c: counts[c])
+    lines = []
+    if split:
+        preview = "、".join(str(v) for v in sorted(prof[split])[:8])
+        more = "…" if len(prof[split]) > 8 else ""
+        lines.append(f"推荐按「{split}」拆：{counts[split]} 组（{preview}{more}）{sample_note}")
+    if others:
+        lines.append("也可以按：" + "、".join(
+            f"{c}（{counts[c]} {'人' if c == person else '组'}）" for c in others[:8]))
+    if person and person != split:
+        lines.append(f"要一人一份，可以按「{person}」拆，或先按上面的字段拆、组内再按「{person}」拆到人")
+    if lines:
+        result["message"] = "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description="看一个 Excel 文件/目录：表头行、字段名、某字段取值")
     ap.add_argument("--input", required=True, help="Excel 文件或目录路径")
@@ -142,17 +230,21 @@ def main():
     ap.add_argument("--all-files", action="store_true",
                     help="目录输入时，--column 的取值读遍所有表取并集"
                          "（默认只读一个样本表：快，但可能不全）")
-    ap.add_argument("--output", default=None, help="计划用的输出目录（仅用于目录扫描时跳过其子树，可不填）")
+    ap.add_argument("--output", default=None,
+                    help="计划用的输出目录（仅用于目录扫描时跳过其子树）；不填 = 与 er_split 默认一致的「拆分结果」")
+    ap.add_argument("--columns-only", action="store_true",
+                    help="只看列名、不读全表（不出每列分组数和推荐）。超大表只想秒看字段时用")
     ap.add_argument("--header-mode", choices=["auto", "row", "keyword"], default="auto")
     ap.add_argument("--header-row", type=int, default=1, help="header-mode=row 时的 1 基行号")
     ap.add_argument("--grid-keys", default="", help="header-mode=keyword 时的第一类关键词，逗号分隔")
     ap.add_argument("--id-keys", default="", help="header-mode=keyword 时的第二类关键词，逗号分隔")
     args = ap.parse_args()
 
-    check_deps()
-
     if not os.path.exists(args.input):
         emit_error(f"找不到输入路径：{args.input}")
+    if not args.output:
+        # 和 er_split 的默认输出一致，否则上次拆出来的结果会被当成数据算进来
+        args.output = default_output_for(args.input)
 
     config = build_config(
         header_mode=args.header_mode,
@@ -206,6 +298,9 @@ def main():
     result["sheets"] = [
         {"name": s[0], "header_row": s[1], "columns": s[2]} for s in sheets
     ]
+
+    if not args.column and not args.columns_only:
+        _add_suggestion(result, template, files, config)
 
     if args.column:
         multi = len(files) > 1

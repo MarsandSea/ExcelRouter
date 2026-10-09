@@ -82,7 +82,7 @@ PDF_RECV_NONE = "（不需要）"
 # UI 泵用的「本轮没有此类消息」哨兵（不能用 None：扫描失败时 payload 可能为空）
 _MISSING = object()
 
-APP_VERSION = "2.9.2"
+APP_VERSION = "2.9.3"
 # 匿名反馈问卷地址（问卷 URL 确定后替换此处即可，一行改动 + 打 tag 发版）
 FEEDBACK_URL = "https://f.wps.cn/g/pBOAWUQc/"
 # 在线 FAQ（「❓ 常见问题」按钮）：链接 Gitee 镜像而非 GitHub——国内办公网络访问
@@ -1632,7 +1632,7 @@ class App(_RootBase):
                 if full == out or full.startswith(out + os.sep):
                     dirs.remove(d)    # 本次输出覆盖的子树，run_split 会跳过，不算
                     continue
-                if d == "拆分结果" or d.endswith("_拆分结果") or re.fullmatch(r"\d{8}结果", d):
+                if d == "拆分结果" or d.endswith("_拆分结果") or re.fullmatch(r"\d{8}结果(_\d+)?", d):
                     hits.append(os.path.join(root, d))
                     dirs.remove(d)    # 命中即整树算一个，不再往里翻
         return hits

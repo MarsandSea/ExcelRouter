@@ -81,7 +81,9 @@ def _find_header_col(ws, target):
                 return r, cand[0][1]
         else:
             for i, nm in enumerate(names):
-                if nm == target or (target and (target in nm or nm in target)):
+                # nm 必须非空：Python 里 "" in "姓名" 为 True，旧写法会在大标题行
+                # （除 A 列外全是空格）上命中，把真正的表头行当成一个叫「姓名」的人拆出去
+                if nm and (nm == target or (target and (target in nm or nm in target))):
                     return r, i + 1
     return None, None
 
@@ -109,10 +111,14 @@ def _copy_row(src_ws, src_r, dst_ws, dst_r, max_col):
 
 
 def _write_person_file(sheet_entries, out_path):
-    """把 {sheet_name: [(源工作簿, 源行号), ...]} 写成一个人的 xlsx。
+    """把 {sheet_name: [(源工作簿, 源行号, 表头行号), ...]} 写成一个人的 xlsx。
 
     同一个 sheet 名可能来自多个源工作簿（目录输入时，一个网格下会有多个源文件），
     这里按 sheet 名合并到同一张输出 sheet：表头取第一个来源的，数据行依次续写。
+
+    表头搬的是**第 1 行到列名行的整块**（大标题 + 分组表头 + 列名），与内核拆出的
+    分组文件一致。旧实现只搬「第一个非空行」——真实工资表第一行往往是大标题，
+    结果每个人的文件只有标题、没有列名。
     """
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     dst_wb = openpyxl.Workbook()
@@ -121,11 +127,8 @@ def _write_person_file(sheet_entries, out_path):
     for sn, entries in sheet_entries.items():
         if not entries:
             continue
-        first_wb = entries[0][0]
+        first_wb, _r, h_row = entries[0]
         src_ws = first_wb[sn]
-        h_row = _locate_header(src_ws)
-        if h_row is None:
-            continue
         title, base, n = sn, sn, 1
         while title in used_titles:
             n += 1
@@ -137,33 +140,25 @@ def _write_person_file(sheet_entries, out_path):
             w = src_ws.column_dimensions[get_column_letter(c)].width
             if w is not None:
                 dst_ws.column_dimensions[get_column_letter(c)].width = w
-        # 表头
-        _copy_row(src_ws, h_row, dst_ws, 1, src_ws.max_column)
+        # 表头块：第 1 行 ~ 列名行，行高一起带上
+        for r in range(1, h_row + 1):
+            _copy_row(src_ws, r, dst_ws, r, src_ws.max_column)
+            ht = src_ws.row_dimensions[r].height
+            if ht is not None:
+                dst_ws.row_dimensions[r].height = ht
         # 数据行（可能跨多个源工作簿）
-        dst_r = 2
-        for wb, src_r in entries:
+        dst_r = h_row + 1
+        for wb, src_r, _h in entries:
             ws = wb[sn]
             _copy_row(ws, src_r, dst_ws, dst_r, ws.max_column)
             dst_r += 1
-        # 合并单元格只搬表头行内的那部分：数据区合并单元格本来就不承诺保留
+        # 合并单元格只搬表头块内的：数据区合并单元格本来就不承诺保留
         # （见 README「诚实边界」），而且跨来源后源行号已不等于目标行号，
-        # 按源坐标 merge 会串到错误的行上——旧实现这里是有 bug 的。
+        # 按源坐标 merge 会串到错误的行上。表头块行号原样不变，坐标可直接沿用。
         for mc in src_ws.merged_cells.ranges:
-            if mc.min_row >= h_row and mc.max_row <= h_row:
-                dst_ws.merge_cells(
-                    start_row=mc.min_row - h_row + 1, start_column=mc.min_col,
-                    end_row=mc.max_row - h_row + 1, end_column=mc.max_col,
-                )
+            if mc.max_row <= h_row:
+                dst_ws.merge_cells(str(mc))
     dst_wb.save(out_path)
-
-
-def _locate_header(ws):
-    """返回第一个非空表头行号（1 基），找不到返回 None。"""
-    max_scan = min(ws.max_row, 20)
-    for r in range(1, max_scan + 1):
-        if any(soft_clean(ws.cell(r, c).value) != "" for c in range(1, ws.max_column + 1)):
-            return r
-    return None
 
 
 def _iter_grid_files(grid_dir):
@@ -233,7 +228,7 @@ def person_split(grid_dir, person_map, log_fn=None):
                         v = ws.cell(r, c_idx).value
                         if v is None or soft_clean(v) == "":
                             continue
-                        buckets.setdefault(str(v), {}).setdefault(sn, []).append((wb, r))
+                        buckets.setdefault(str(v), {}).setdefault(sn, []).append((wb, r, h_row))
             for person, sheets in buckets.items():
                 out_path = os.path.join(grid_root, "到人",
                                         f"{safe_filename(person)}_{grid_name}.xlsx")

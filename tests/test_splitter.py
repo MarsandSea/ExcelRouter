@@ -142,6 +142,19 @@ def test_single_file_input(two_books):
     assert not os.path.exists(os.path.join(res, "销售部.zip"))
 
 
+def test_rerun_same_minute_gets_fresh_dir(two_books):
+    """时间戳只到分钟：连跑两次（选错字段马上重跑）不能写进同一个目录、混在一起。"""
+    inp, out = two_books
+    one = os.path.join(inp, "A.xlsx")
+    first = run_split(_base_cfg(one, out), log_fn=lambda m: None)
+    before = sorted(os.listdir(first))
+    second = run_split(_base_cfg(one, out, split_column="城市"), log_fn=lambda m: None)
+    assert second != first
+    assert sorted(os.listdir(first)) == before          # 第一次的产出原样未被掺入
+    assert os.path.exists(os.path.join(second, "北京.xlsx"))
+    assert not os.path.exists(os.path.join(second, "销售部.xlsx"))
+
+
 # ---------- 格式保留 ----------
 
 def test_header_format_preserved(two_books):

@@ -32,9 +32,14 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import bootstrap, build_config, check_deps, emit, emit_error, eprint  # noqa: E402
+from _common import (  # noqa: E402
+    bootstrap, build_config, emit, emit_error, ensure_deps, eprint, list_outputs, open_folder,
+)
 
 bootstrap()
+# 整个脚本都是 PDF 流程（连 --make-template 也是它的第一步），一次把 PDF 依赖备齐；
+# 必须排在 core.pdf_dist 的 import 之前，否则缺包时是 ImportError 堆栈而不是人话
+ensure_deps(need_pdf=True)
 
 import core.pdf_dist as pdf_dist  # noqa: E402
 from core.pdf_dist import (  # noqa: E402
@@ -73,12 +78,13 @@ def main():
     ap.add_argument("--watermark-text", default="{grid} {date}", help="水印模板，支持 {grid} {date} 占位")
     ap.add_argument("--opacity", type=float, default=0.15, help="水印透明度 0~1")
     ap.add_argument("--angle", type=float, default=45, help="水印旋转角度")
+    ap.add_argument("--open", action="store_true",
+                     help="分发完在文件管理器里打开结果目录。AI 在用户本机运行时应总是加上")
     ap.add_argument("--font", default="", help="手动指定水印字体 .ttf/.otf/.ttc 路径（覆盖自动探测）")
     args = ap.parse_args()
 
     # ---- 起步：生成映射清单模板（唯一不需要已有文件的分支，所以排在所有存在性检查之前）----
     if args.make_template:
-        check_deps()
         target = os.path.abspath(args.make_template)
         parent = os.path.dirname(target)
         if parent and not os.path.isdir(parent):
@@ -105,7 +111,6 @@ def main():
 
     # ---- 可选：给空白网格补随机密码（写新文件，原清单不动）----
     if args.random_password:
-        check_deps()
         if not args.grid_col:
             emit_error("--random-password 需要 --grid-col 指出哪一列是网格"
                        "（不确定列名就先跑 --list-columns 看表头）")
@@ -133,7 +138,6 @@ def main():
         return
 
     if args.list_columns:
-        check_deps()
         try:
             cols = list_mapping_columns(args.mapping)
         except Exception as e:
@@ -141,8 +145,6 @@ def main():
             return
         emit({"ok": True, "columns": cols})
         return
-
-    check_deps(need_pdf=True)
 
     if not args.pdf:
         emit_error("缺少 --pdf（至少一个待分发的 PDF 文件），或改用 --list-columns 只看映射清单表头")
@@ -188,7 +190,17 @@ def main():
         return
 
     eprint(f"⚠ {MANIFEST_NAME} 含明文密码，请只发给需要核对密码的管理者，不要和加密 PDF 一起群发出去")
-    emit({"ok": True, "output_path": output_root, "manifest": os.path.join(output_root, MANIFEST_NAME)})
+    files = list_outputs(output_root, exts=("pdf",))
+    grids = len({os.path.dirname(f) for f in files})
+    opened = open_folder(output_root) if args.open else False
+    emit({"ok": True, "output_path": output_root,
+          "manifest": os.path.join(output_root, MANIFEST_NAME),
+          "files_total": len(files), "files": files[:10], "opened": opened,
+          "message": (f"已为 {grids} 个网格生成 {len(files)} 份加密 PDF（每个网格专属密码"
+                      f"{'+水印' if not args.no_watermark else ''}）。\n"
+                      f"结果在：{output_root}" + ("（已为你打开这个文件夹）" if opened else "") +
+                      f"\n⚠ 「{MANIFEST_NAME}」里是明文密码，只给核对密码的管理者，"
+                      f"不要和 PDF 一起发出去。")})
 
 
 if __name__ == "__main__":

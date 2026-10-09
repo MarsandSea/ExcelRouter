@@ -878,6 +878,12 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
 
     timestamp   = datetime.datetime.now().strftime('%m%d%H%M')
     output_path = os.path.join(output_root, f"{timestamp}结果")
+    # 时间戳只精确到分钟：一分钟内跑两次（选错字段马上重跑很常见）会把两次的产出
+    # 写进同一个目录、混在一起且无从分辨。已存在就加序号，绝不复用旧目录。
+    n = 2
+    while os.path.exists(output_path):
+        output_path = os.path.join(output_root, f"{timestamp}结果_{n}")
+        n += 1
     os.makedirs(output_path, exist_ok=True)
 
     log_file = os.path.join(output_path, "运行日志.txt")

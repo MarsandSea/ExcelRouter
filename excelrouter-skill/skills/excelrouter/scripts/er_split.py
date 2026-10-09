@@ -42,13 +42,20 @@ MIT License
 import argparse
 import json
 import os
+import re
+import shutil
 import signal
 import sys
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import bootstrap, build_config, check_deps, emit, emit_error, eprint  # noqa: E402
+from _common import (  # noqa: E402
+    bootstrap, build_config, default_output_for, emit, emit_error, ensure_deps, eprint,
+    list_outputs, match_column, open_folder, sheet_headers,
+)
 
 bootstrap()
+ensure_deps()  # 必须排在下面这些 import 之前：缺包时要给人话提示 / 自动装，而不是 ImportError 堆栈
 
 from core.splitter import run_split  # noqa: E402
 from _person_split import (  # noqa: E402  网格→人 二级拆分（scripts 包装层补强）
@@ -69,7 +76,12 @@ def main():
         epilog=__doc__,
     )
     ap.add_argument("--input", required=True, help="源 Excel 文件或目录")
-    ap.add_argument("--output", required=True, help="输出根目录（实际产出会在其下多一层时间戳子目录）")
+    ap.add_argument("--output", default="",
+                     help="输出根目录（实际产出会在其下多一层时间戳子目录）。不填 = 源表旁边的「拆分结果」，"
+                          "与桌面版默认一致")
+    ap.add_argument("--open", action="store_true",
+                     help="拆完在文件管理器里打开结果目录（桌面版跑完自动弹出结果的等价物）。"
+                          "AI 在用户本机运行时应总是加上")
     ap.add_argument("--by", dest="split_column", default=None, help="拆分字段（列名）")
     ap.add_argument("--values", default="", help="只拆这些取值，逗号分隔；留空 = 自动枚举全部取值")
     ap.add_argument("--to-person", dest="person_column", default=None, metavar="人字段",
@@ -78,7 +90,8 @@ def main():
                           "③ \"sheet名:人字段,sheet名:人字段\"（各 sheet 人字段不同）。"
                           "单文件输入也支持，由 scripts 包装层补做二级拆分")
     ap.add_argument("--person-filter", default="", help="到人只处理文件名命中这些关键词的表，逗号分隔；留空=全部")
-    ap.add_argument("--no-zip", action="store_true", help="批量拆分后不打包 ZIP")
+    ap.add_argument("--no-zip", action="store_true",
+                     help="不打包 ZIP（默认：每组一个 ZIP + 全部结果一个总包，方便直接转发）")
     ap.add_argument("--no-timestamp", action="store_true",
                      help="输出直接写到 --output，不再套一层 {MMDDHHMM}结果 时间戳子目录"
                           "（路径可预测，方便脚本接力/直接告诉用户文件在哪）")
@@ -96,10 +109,13 @@ def main():
                      help="拆分列中要忽略的取值，逗号分隔；不填则用默认（合计/小计/总计/平均/空）")
     ap.add_argument("--alias-json", default="", help='取值归并，如 \'{"东区":["东片区","东部"]}\'')
     ap.add_argument("--config", default=None, help="直接传一份完整 config JSON（专家逃生口，字段同桌面版 user_config.json）")
+    ap.add_argument("--include-old-results", action="store_true",
+                     help="输入文件夹里有以前的拆分结果目录时也照样拆（默认拦下来，免得旧结果被重复拆）")
     ap.add_argument("--dry-run", action="store_true", help="只解析配置并打印，不实际拆分、不写盘")
     args = ap.parse_args()
 
-    check_deps()
+    if not args.output:
+        args.output = default_output_for(args.input)
 
     person_map = None  # --config 专家模式下保持 None：包装层不介入，完全按用户配置走
 
@@ -166,9 +182,37 @@ def main():
         emit_error("拆分字段（split_column）为空，无法拆分")
         return
 
+    # ---- 开跑前先确认拆分字段真的存在 ----
+    # 不查的话内核会把每个 sheet 都当「找不到该列」跳过，最后「成功」产出 0 个文件——
+    # AI 拿到 ok:true 就会告诉用户「拆完了」。这是用户最难自己发现的一种失败。
+    resolved, also = _preflight_column(config)
+    if resolved is None:
+        return
+    warnings = []
+    if resolved != config["split_column"]:
+        eprint(f"「{config['split_column']}」按列名包含匹配到「{resolved}」")
+    if also:
+        warnings.append(f"「{config['split_column']}」同时能匹配 {also}，实际按「{resolved}」拆；"
+                        f"不对的话把 --by 写成完整列名")
+    if os.path.isdir(config["input_path"]) and not args.include_old_results:
+        stale = _find_stale_results(config["input_path"], config["output_path"])
+        if stale:
+            emit_error(
+                f"输入文件夹里有 {len(stale)} 个以前的拆分结果目录（如 {'、'.join(stale[:3])}），"
+                f"直接拆会把它们当成数据再拆一遍、行数翻倍。先问用户：删掉/移走它们，"
+                f"还是确实要一起拆（那就加 --include-old-results）。",
+                stale_dirs=stale)
+            return
+    lock_warn = _lock_file_warning(config["input_path"])
+    if lock_warn:
+        warnings.append(lock_warn)
+    for w in warnings:
+        eprint(f"⚠ {w}")
+
     if args.dry_run:
         eprint("dry-run：不写盘，仅打印解析后的配置")
-        emit({"ok": True, "dry_run": True, "config": config})
+        emit({"ok": True, "dry_run": True, "split_column_resolved": resolved,
+              "warnings": warnings, "config": config})
         return
 
     state = {"stopped": False}
@@ -187,11 +231,41 @@ def main():
             last_pct["v"] = pct
             eprint(f"[进度 {pct}%]")
 
+    summary = {}
+
+    def log_fn(msg):
+        # 内核收尾的 [SUMMARY] 行截下来放进结果 JSON：很多 Agent 只看 stdout，
+        # 让 AI 去 stderr 里翻这一行，等于大概率没人看
+        s = str(msg)
+        if s.startswith("[SUMMARY] "):
+            try:
+                summary.update(json.loads(s[len("[SUMMARY] "):]))
+            except ValueError:
+                pass
+        eprint(s)
+
+    out_root = config["output_path"]
+    existed = set(os.listdir(out_root)) if os.path.isdir(out_root) else set()
+
     try:
-        output_path = run_split(config, log_fn=eprint, progress_fn=progress_fn,
+        output_path = run_split(config, log_fn=log_fn, progress_fn=progress_fn,
                                  stop_flag=lambda: state["stopped"])
     except Exception as e:
         emit_error(f"拆分失败：{e}")
+        return
+
+    if os.path.basename(output_path) in existed:
+        # 旧内核时间戳只到分钟，一分钟内重跑会写进上一次的目录（新内核已改为加序号）
+        warnings.append(f"本次结果和一分钟内上一次的结果写进了同一个文件夹 {output_path}，"
+                        f"两次的文件混在一起；建议删掉这个文件夹再拆一次")
+        eprint(f"⚠ {warnings[-1]}")
+
+    if summary.get("groups") == 0 and not state["stopped"]:
+        hint = (f"「--values {','.join(config['selected_values'])}」里的取值在表中一个都没对上，"
+                f"先用 er_inspect.py --column {resolved} 看真实取值"
+                if config.get("selected_values") else
+                f"字段「{resolved}」下没有可拆的取值（可能全是空或合计行）")
+        emit_error(f"没有拆出任何文件：{hint}。", output_path=output_path, summary=summary)
         return
 
     # 包装层补做「到人」：必须作用在内核刚产出的真实目录（默认带时间戳）上，
@@ -208,11 +282,177 @@ def main():
     if args.no_timestamp:
         output_path = flatten_output(output_path, config["output_path"], log_fn=eprint)
 
+    bundle = None
+    if not args.no_zip:
+        _zip_group_folders(output_path, log_fn=eprint)
+        bundle = _make_bundle(output_path, resolved, log_fn=eprint)
+
+    files = list_outputs(output_path)
+    if bundle:  # 「拿去发」的那一个文件排第一，AI 先 present 它
+        files = [bundle] + [f for f in files if f != bundle]
+    opened = open_folder(output_path) if args.open else False
     emit({"ok": True, "output_path": output_path,
+          "split_column_resolved": resolved,
+          "summary": summary,
+          "bundle_zip": bundle,
+          "files_total": len(files),
+          "files": files[:10],
+          "message": _human_message(summary, resolved, files, output_path, opened,
+                                    state["stopped"], bundle),
+          "warnings": warnings,
+          "opened": opened,
           "person_split_by": ("wrapper" if need_wrapper_person
                               else ("vendor" if person_map else None)),
           "person_files": person_count if need_wrapper_person else None,
           "stopped": state["stopped"]})
+
+
+def _preflight_column(config):
+    """确认 split_column 在输入里存在。找到返回 (实际列名, 其余也命中的列)；
+    找不到直接 emit_error 并返回 (None, [])。目录输入先看样本表，样本里没有再逐个找
+    （只读表头，很快），一个都没有才报错——各表结构不一致时不能只凭样本就拒绝。"""
+    target = config["split_column"]
+    path = config["input_path"]
+    if os.path.isfile(path):
+        files = [path]
+    else:
+        out_abs = os.path.abspath(config["output_path"])
+        files = sorted(
+            os.path.join(r, n) for r, _d, ns in os.walk(path)
+            if not os.path.abspath(r).startswith(out_abs)
+            for n in ns
+            if n.lower().endswith((".xlsx", ".xls")) and not n.startswith("~$")
+            and not n.lower().endswith("__tmp__.xlsx"))
+        if not files:
+            emit_error(f"目录里没找到任何 .xlsx / .xls 文件：{path}")
+            return None, []
+    sample_cols = None
+    for f in files:
+        try:
+            sheets = sheet_headers(f, config)
+        except Exception:
+            continue  # 坏文件交给内核去跳过并记日志
+        cols = [c for _s, h, cs in sheets if h != -1 for c in cs]
+        if sample_cols is None:
+            sample_cols = {s: cs for s, h, cs in sheets if h != -1}
+        hit, also = match_column(list(dict.fromkeys(cols)), target)
+        if hit:
+            return hit, also
+    emit_error(
+        f"表里没有「{target}」这个字段，没有开始拆分。"
+        f"{'样本表' if len(files) > 1 else '这张表'}可选的字段：{sample_cols or '（没识别出表头）'}",
+        available_columns=sample_cols or {})
+    return None, []
+
+
+def _find_stale_results(input_dir, output_root):
+    """输入文件夹里不被本次输出目录覆盖的历史拆分结果目录（与桌面版
+    _find_stale_results 同一规则）。内核只跳过本次的 output_root 子树，
+    别处的旧结果会被当成数据重复拆。"""
+    out = os.path.normcase(os.path.abspath(output_root))
+    hits = []
+    for root, dirs, _ in os.walk(input_dir):
+        for d in list(dirs):
+            full = os.path.normcase(os.path.abspath(os.path.join(root, d)))
+            if full == out or full.startswith(out + os.sep):
+                dirs.remove(d)
+                continue
+            if d == "拆分结果" or d.endswith("_拆分结果") or re.fullmatch(r"\d{8}结果(_\d+)?", d):
+                hits.append(os.path.join(root, d))
+                dirs.remove(d)
+    return hits
+
+
+def _lock_file_warning(path):
+    """源表正被 Excel/WPS 打开时，同目录会有 ~$ 锁文件；读到的是上次保存的内容。"""
+    if os.path.isfile(path):
+        d, n = os.path.split(path)
+        # Excel 用 ~$ + 全名；Word 系的习惯是吃掉前两个字，两种都认
+        lock_names = ("~$" + n, "~$" + n[2:])
+        locked = [n] if any(os.path.exists(os.path.join(d, ln)) for ln in lock_names) else []
+    else:
+        locked = [n[2:] for _r, _d, ns in os.walk(path) for n in ns if n.startswith("~$")]
+    if locked:
+        return (f"{locked[:3]} 正被 Excel/WPS 打开着，拆的是它上次保存的内容；"
+                f"有没保存的修改请先保存再拆")
+    return ""
+
+
+def _zip_group_folders(output_path, log_fn=None):
+    """给还没有 ZIP 的分组文件夹补打包。内核只在**目录输入**时按组打 ZIP；单文件 + 到人
+    （包装层产出 {组}/到人/...）原来就只有散文件，要发给每组负责人还得用户自己压。"""
+    for name in sorted(os.listdir(output_path)):
+        folder = os.path.join(output_path, name)
+        if not os.path.isdir(folder) or os.path.exists(folder + ".zip"):
+            continue
+        if any(os.scandir(folder)):
+            try:
+                shutil.make_archive(folder, "zip", folder)
+                if log_fn:
+                    log_fn(f"  📦 {name}.zip")
+            except Exception as e:
+                if log_fn:
+                    log_fn(f"  ⚠ {name}.zip 打包失败：{e}")
+
+
+def _make_bundle(output_path, column, log_fn=None):
+    """把这次的全部结果打成**一个** ZIP，放在结果目录里、排在最前——用户最常见的下一步
+    就是「整包转给谁」。分组 ZIP 不重复放进去（内容和分组文件夹一样，只会让体积翻倍）；
+    文件名带上拆分字段，脱离对话单独转发时也看得懂是什么。失败返回 None，不影响拆分结果。"""
+    from core.utils import safe_filename
+    members = []
+    for root, _dirs, names in os.walk(output_path):
+        for n in names:
+            low = n.lower()
+            if low.endswith(".zip") or low.startswith("~$") or n == "运行日志.txt":
+                continue
+            members.append(os.path.join(root, n))
+    if not members:
+        return None
+    stamp = os.path.basename(output_path)[:8]
+    path = os.path.join(output_path, f"全部结果_按{safe_filename(column)}拆分_{stamp}.zip")
+    try:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(members):
+                zf.write(f, os.path.relpath(f, output_path))
+    except Exception as e:
+        if log_fn:
+            log_fn(f"⚠ 打总包失败：{e}（分组文件都在，不影响使用）")
+        return None
+    if log_fn:
+        log_fn(f"📦 已打成一个总包：{os.path.basename(path)}（{len(members)} 个文件）")
+    return path
+
+
+def _human_message(summary, column, files, output_path, opened, stopped, bundle=None):
+    """一句可以直接念给用户的话，AI 不用自己拼数字。"""
+    if not summary:
+        return f"已完成，结果在：{output_path}"
+    parts = [f"按「{column}」拆成 {summary.get('groups', 0)} 组，"
+             f"共 {summary.get('files', 0)} 个文件、{summary.get('rows', 0)} 行数据"]
+    if summary.get("zips"):
+        parts.append(f"每组已打包成 ZIP（{summary['zips']} 个），可以直接发")
+    person = sum(1 for f in files if os.path.basename(os.path.dirname(f)) == "到人")
+    if person:
+        parts.append(f"其中按人拆出 {person} 份")
+    msg = "；".join(parts) + "。"
+    if stopped:
+        msg = "⏹ 已按要求中途停止，下面是已完成的部分：" + msg
+    problems = []
+    if summary.get("skipped_sheets"):
+        problems.append(f"{summary['skipped_sheets']} 个 sheet 里没有这个字段，已跳过")
+    if summary.get("failed_files"):
+        problems.append(f"{summary['failed_files']} 个文件读取失败")
+    if summary.get("failed_saves"):
+        problems.append(f"{summary['failed_saves']} 个文件保存失败（可能被 Excel 占用）")
+    if problems:
+        msg += "⚠ " + "，".join(problems) + "，详情见日志。"
+    if bundle:
+        size = os.path.getsize(bundle) / 1024 / 1024
+        msg += (f"\n全部结果已打成一个压缩包，可以直接转发：{os.path.basename(bundle)}"
+                f"（{size:.1f} MB）")
+    msg += f"\n结果在：{output_path}" + ("（已为你打开这个文件夹）" if opened else "")
+    return msg
 
 
 if __name__ == "__main__":

@@ -11,8 +11,25 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.9.2**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+当前版本 **v2.9.3**，GitHub 仓库：`MarsandSea/ExcelRouter`。
 
+> **v2.9.3：技能「像软件一样省事」升级 + 内核输出目录防撞（2026-10）**。
+> 内核：`run_split` 的 `{MMDDHHMM}结果` 时间戳只到分钟，一分钟内重跑（选错字段马上重跑很常见）
+> 会把两次产出写进同一目录、混在一起。现在**已存在就加序号** `{MMDDHHMM}结果_2`，
+> GUI `_find_stale_results` 的正则同步认 `_\d+` 后缀（回归用例 `test_rerun_same_minute_gets_fresh_dir`）。
+> 技能（`excelrouter-skill/`）：目标是「两次调用、问一次」——`er_inspect` 默认读全表给出每列组数 +
+> 推荐字段 + 一句可转述的 `message`；`er_split` 的 `--output` 可省（同桌面版默认）、`--open` 弹出结果、
+> 结果 JSON 自带 `summary`/`files`/`message`/`warnings`；字段不存在或 `--values` 一个没对上**报错**
+> （旧版是 ok:true + 0 个文件）；目录输入里有历史结果目录时拦下；`ensure_deps()` 首次自动装依赖，
+> **必须排在 pandas/core import 之前**（旧 check_deps 排在 import 之后，缺包时人话提示根本走不到）。
+> 自动安装**国内镜像优先**（腾讯云 → 阿里云 → 官方源）且总时长 95 秒封顶：WorkBuddy 会 SIGTERM
+> 超过 120 秒的命令，实测直连 pypi.org 装 pandas 两分钟没装完被杀；没装完返回 `retry: true`。
+> 默认额外打一个**总包** `全部结果_按{字段}拆分_{时间}.zip`（不含分组 ZIP）+ 给缺 ZIP 的分组文件夹补打包。
+> 修 `_person_split.py` 两个真 bug（单文件按人拆、表头上方有大标题时触发——真实工资表几乎都是）：
+> ① `"" in "姓名"` 为 True，大标题行被当成表头，列名行被拆成一个叫「姓名」的人；
+> ② 每人文件只搬了大标题、丢了列名行。现在搬第 1 行～列名行整块（含合并单元格、行高），
+> 回归用例 `test_person_split_keeps_title_and_header_rows`。
+>
 > **v2.9.0：速度模式显性化 + 取值预览不再把抽样当全量（2026-09）**。
 > 两条都来自作者在真实工单批次（401 个文件 / 29 个分组）上的实际使用反馈。
 >
@@ -604,6 +621,10 @@ PyInstaller 致命坑仍然成立、缺一不可：
 
 ## 给 Claude Code 的协作提示
 
+- **测试拆分/分发的产出一律不得落在 `G:\WorkSpace` 下（含 `examples/` 旁边）**：技能和桌面版
+  默认把结果放在源表旁的「拆分结果」，拿 `examples/` 样本测时会直接写进仓库。测试一律显式
+  `--output` 指到仓库外的测试沙箱 `G:\tmp\excelrouter-sandbox\`（或会话 scratchpad），或先把样本复制过去再拆
+  （作者 2026-10-09 定的规矩；`.gitignore` 末尾另有一层兜底，但兜底不等于可以放）
 - 改动前先 `git status` / `git log` 看清当前状态
 - 大改动前先 commit，方便回滚（`git checkout` / `git revert`）
 - 修改核心逻辑后，至少做 `python -m py_compile` 语法检查

@@ -9,7 +9,7 @@ python scripts/er_inspect.py --input 明细.xlsx
 # 看到 columns 里有"部门"字段之后：
 python scripts/er_inspect.py --input 明细.xlsx --column 部门
 # 确认取值列表没有意外项之后：
-python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
+python scripts/er_split.py --input 明细.xlsx --by 部门
 ```
 
 ## 2. "这一整个文件夹的月度报表，每个人整理出一份自己的记录"
@@ -18,7 +18,7 @@ python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
 
 ```bash
 python scripts/er_inspect.py --input 月度报表/ --column 姓名
-python scripts/er_split.py --input 月度报表/ --output 拆分结果 \
+python scripts/er_split.py --input 月度报表/ \
     --by 部门 --to-person 姓名 --person-filter 明细,报表
 ```
 产出既有按部门的汇总，也有 `{部门}/到人/{姓名}.xlsx`（同一人跨文件按 sheet 合并）。
@@ -26,7 +26,7 @@ python scripts/er_split.py --input 月度报表/ --output 拆分结果 \
 ## 3. "只要东区和西区的数据，其它区域不用管"
 
 ```bash
-python scripts/er_split.py --input 一批表/ --output 拆分结果 --by 区域 --values 东区,西区
+python scripts/er_split.py --input 一批表/ --by 区域 --values 东区,西区
 ```
 
 ## 4. "同一个人在好几个文件里都有数据，希望合成一张总表"
@@ -34,14 +34,14 @@ python scripts/er_split.py --input 一批表/ --output 拆分结果 --by 区域 
 默认按原表分别拆分；要合并成一张扁平表用 `--merge`：
 
 ```bash
-python scripts/er_split.py --input 一批表/ --output 拆分结果 --by 区域 --merge
+python scripts/er_split.py --input 一批表/ --by 区域 --merge
 ```
 产出变成 `拆分结果/{时间戳}结果/{区域}.xlsx`（不再是文件夹套文件夹）。
 
 ## 5. "部门这一列有的写'销售部'有的写'销售部门'，是同一个部门"
 
 ```bash
-python scripts/er_split.py --input 一批表/ --output 拆分结果 --by 部门 \
+python scripts/er_split.py --input 一批表/ --by 部门 \
     --alias-json '{"销售部":["销售部门","销售组"]}'
 ```
 
@@ -51,7 +51,7 @@ python scripts/er_split.py --input 一批表/ --output 拆分结果 --by 部门 
 
 ```bash
 python scripts/er_inspect.py --input 明细.xlsx --header-mode row --header-row 3
-python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门 --header-mode row --header-row 3
+python scripts/er_split.py --input 明细.xlsx --by 部门 --header-mode row --header-row 3
 ```
 
 ## 7. "文件很大/几百列，跑起来太慢"
@@ -63,7 +63,7 @@ python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门
 
 ```bash
 # 只拆需要的一部分取值，剩下的下次再跑
-python scripts/er_split.py --input 大表.xlsx --output 拆分结果 --by 部门 --values 东区,西区
+python scripts/er_split.py --input 大表.xlsx --by 部门 --values 东区,西区
 ```
 
 跑的时候把 stderr 里的心跳/进度日志转给用户，别让界面静默几十秒被当成卡死。
@@ -71,7 +71,7 @@ python scripts/er_split.py --input 大表.xlsx --output 拆分结果 --by 部门
 ## 8. "接收人要能看到金额是怎么算出来的公式"
 
 ```bash
-python scripts/er_split.py --input 结算表.xlsx --output 拆分结果 --by 部门 --keep-formulas
+python scripts/er_split.py --input 结算表.xlsx --by 部门 --keep-formulas
 ```
 只有"同一行内"的公式（如 `=D2*E2`）能安全保留成活公式；跨行/汇总/跨表的公式会落成当前数值——
 这是为了不把一个会显示错误结果的公式发给对方。
@@ -79,7 +79,7 @@ python scripts/er_split.py --input 结算表.xlsx --output 拆分结果 --by 部
 ## 9. "先看看会拆出哪些文件，不要真的写盘"
 
 ```bash
-python scripts/er_split.py --input 明细.xlsx --output 拆分结果 --by 部门 --dry-run
+python scripts/er_split.py --input 明细.xlsx --by 部门 --dry-run
 ```
 
 ## 10. "按网格给一批 PDF 分别加密码"
@@ -109,7 +109,7 @@ python scripts/er_inspect.py --input 城区维表.xlsx --column 网格
 python scripts/er_inspect.py --input 城区维表.xlsx --column "看管 渠道管理员"   # 跨 sheet 搜索，不再误报
 
 # 一步：按网格拆 + 网格内按各自人字段拆到人
-python scripts/er_split.py --input 城区维表.xlsx --output 拆分结果 \
+python scripts/er_split.py --input 城区维表.xlsx \
     --by 网格 --to-person "结对子维表:1看管人,渠道维表:看管 渠道管理员" --no-zip
 # 产出：拆分结果/{网格}.xlsx（网格汇总）+ 拆分结果/{网格}/到人/{姓名}_{网格}.xlsx
 ```
@@ -117,7 +117,7 @@ python scripts/er_split.py --input 城区维表.xlsx --output 拆分结果 \
 嫌写映射麻烦，可让程序按关键词自动挑每个 sheet 的人字段：
 
 ```bash
-python scripts/er_split.py --input 城区维表.xlsx --output 拆分结果 --by 网格 --to-person auto
+python scripts/er_split.py --input 城区维表.xlsx --by 网格 --to-person auto
 ```
 
 > 内部实现：vendor 先把文件按网格拆好（格式完整保留），scripts 包装层（`_person_split.py`）

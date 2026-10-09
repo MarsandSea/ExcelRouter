@@ -5,12 +5,14 @@ excelrouter skill 的公共小工具：把 vendor/core 接到 sys.path、统一�
 Copyright (c) 2026 AbeLin
 MIT License
 
-约定（三个 er_*.py 脚本都遵守，Claude 靠这个约定解析结果）：
+约定（所有 er_*.py 脚本都遵守，Claude 靠这个约定解析结果）：
   - 日志/进度/警告一律写 stderr（人类可读，随便打印）
   - 最终结果只有一行 JSON，写 stdout（用 emit()），不要在这行前后混入别的 print
   - 失败退出码非 0，且 stdout 仍然是一行 JSON（含 "error" 字段），不是裸 Python traceback
 """
 
+import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -134,29 +136,194 @@ def eprint(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
-def check_deps(need_pdf=False):
-    """提前体检依赖，缺了给出人话提示而不是甩一截 ImportError 堆栈。"""
-    missing = []
-    for mod, pip_name in (("pandas", "pandas"), ("openpyxl", "openpyxl")):
+_SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 国内办公网络直连 pypi.org 很慢（实测下 pandas+numpy 两分钟没装完）。按顺序试，失败即换下一个。
+# 2026-10 公司网络实测索引响应：腾讯云 0.3s、阿里云 1.5s、清华 6s（pip 直接报 versions: none）、pypi.org 5.7s。
+_PIP_MIRRORS = (
+    "https://mirrors.cloud.tencent.com/pypi/simple",
+    "https://mirrors.aliyun.com/pypi/simple",
+)
+_PIP_MIRROR = _PIP_MIRRORS[0]  # 报错提示里给用户手动用的那个
+
+_EXCEL_DEPS = (("pandas", "pandas"), ("openpyxl", "openpyxl"), ("xlrd", "xlrd"))
+_PDF_DEPS = (("pypdf", "pypdf"), ("fpdf", "fpdf2"), ("cryptography", "cryptography"))
+
+
+def _missing(deps):
+    return [pip for mod, pip in deps if importlib.util.find_spec(mod) is None]
+
+
+# 宿主 Agent 会掐断跑太久的命令（WorkBuddy 实测 120 秒 SIGTERM）。自动安装必须在这之前
+# 自己收手并给出「再跑一次」的明确结论，否则 AI 只看到一个被杀掉的空结果。
+_INSTALL_BUDGET = 95
+
+
+def _pip_install(req_file):
+    """用**当前解释器**装依赖（不用裸 pip：多个 Python 并存时 pip 常装到别的环境里，
+    装完照样报缺——WorkBuddy 就自带一个独立的 Python）。
+
+    返回 "ok" / "timeout" / "fail"。
+
+    **国内镜像优先**：用户几乎都在国内，直连 pypi.org 下 pandas+numpy 实测两分钟都没装完、
+    被宿主杀掉；用户若自己配过 pip 源（pip.ini / PIP_INDEX_URL）就尊重他的配置。
+    两轮共用一个总时限，超时不算失败：已下载的包在 pip 缓存里，再跑一次会快很多。"""
+    import subprocess
+    import time
+    base = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+            "--no-warn-script-location", "--prefer-binary", "--timeout", "15", "--retries", "1",
+            "-q", "-r", req_file]
+    user_index = bool(os.environ.get("PIP_INDEX_URL")) or _has_pip_config()
+    rounds = [[]] if user_index else [["-i", m] for m in _PIP_MIRRORS] + [[]]
+    deadline = time.time() + _INSTALL_BUDGET
+    for extra in rounds:
+        left = deadline - time.time()
+        if left < 10:
+            return "timeout"
         try:
-            __import__(mod)
-        except ImportError:
-            missing.append(pip_name)
-    if missing:
-        emit_error(
-            f"缺少运行依赖：{', '.join(missing)}。请先在 skills/excelrouter/ 目录下运行："
-            f" pip install -r requirements.txt"
-        )
+            r = subprocess.run(base + extra, stdout=sys.stderr, stderr=sys.stderr, timeout=left)
+        except subprocess.TimeoutExpired:
+            return "timeout"
+        except OSError:
+            continue
+        if r.returncode == 0:
+            return "ok"
+    return "fail"
+
+
+def _has_pip_config():
+    """用户是否给 pip 配过源（有就别拿镜像覆盖他的选择，可能是公司内网源）。"""
+    import subprocess
+    try:
+        out = subprocess.run([sys.executable, "-m", "pip", "config", "list"],
+                             capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return False
+    return "index-url" in out
+
+
+def ensure_deps(need_pdf=False):
+    """缺依赖就自动装上（首次使用），装不上再报人话错误。
+
+    **必须在 import pandas / core.* 之前调用**——否则缺包时 Python 直接甩
+    ImportError 堆栈，这里的人话提示根本走不到（旧版 check_deps 就是这么失效的）。
+
+    为什么默认自动装：用户的诉求是「把表拆了」，不是「配环境」。首次使用卡在
+    pip 上是这个技能最大的流失点；装的只是 requirements*.txt 里声明的包。
+    不想自动装（内网、受管环境）就设环境变量 ER_NO_AUTO_INSTALL=1。
+    """
+    groups = [(_EXCEL_DEPS, "requirements.txt")]
     if need_pdf:
-        pdf_missing = []
-        for mod, pip_name in (("pypdf", "pypdf"), ("fpdf", "fpdf2")):
-            try:
-                __import__(mod)
-            except ImportError:
-                pdf_missing.append(pip_name)
-        if pdf_missing:
+        groups.append((_PDF_DEPS, "requirements-pdf.txt"))
+    for deps, req in groups:
+        missing = _missing(deps)
+        # cryptography 缺失只是加密降级（AES-256 → RC4-128），不值得为它阻塞
+        hard = [m for m in missing if m != "cryptography"]
+        if not missing:
+            continue
+        req_path = os.path.join(_SKILL_DIR, req)
+        auto = os.environ.get("ER_NO_AUTO_INSTALL") != "1"
+        if auto:
+            eprint(f"首次使用，正在自动安装依赖：{', '.join(missing)}（约 1 分钟，只装一次）…")
+            status = _pip_install(req_path)
+            importlib.invalidate_caches()  # 否则刚装好的包在本进程里仍然 find_spec 不到
+            if not [m for m in _missing(deps) if m != "cryptography"]:
+                eprint("✅ 依赖安装完成")
+                continue
+            if status == "timeout":
+                emit_error(
+                    "首次使用正在安装运行依赖，网络较慢还没装完（已下载的部分会保留）。"
+                    "直接再运行一次同一条命令即可接着装，通常第二次很快。",
+                    retry=True, installing=missing)
+        if hard:
             emit_error(
-                f"PDF 加密分发缺少依赖：{', '.join(pdf_missing)}。"
-                f" 请运行：pip install -r requirements.txt"
-                f"（cryptography 缺失不影响运行，只是加密强度会从 AES-256 降级到 RC4-128）"
-            )
+                f"缺少运行依赖：{', '.join(hard)}"
+                f"{'，自动安装没成功' if auto else '（ER_NO_AUTO_INSTALL=1，未自动安装）'}。请手动运行："
+                f' "{sys.executable}" -m pip install -r "{req_path}"'
+                f"（网络慢可在末尾加 -i {_PIP_MIRROR}）",
+                missing=hard)
+
+
+# 旧名字保留给外部调用方
+check_deps = ensure_deps
+
+
+def sheet_headers(file_path, config):
+    """返回 [(sheet_name, header_row_1based, [columns]), ...]，覆盖文件里每一个 sheet。
+    只读每个 sheet 前 20 行，快。调用前须已 ensure_deps()。"""
+    import pandas as pd
+    from core.splitter import _header_values, normalize_to_xlsx, resolve_header_row
+    work_path, is_tmp = normalize_to_xlsx(file_path)
+    try:
+        df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine="openpyxl", nrows=20)
+        out = []
+        for sheet_name, df in df_dict.items():
+            h = resolve_header_row(df.values.tolist(), config)
+            cols = [c for c in _header_values(df, h) if c] if (h != -1 and h <= len(df)) else []
+            out.append((sheet_name, h, cols))
+        return out
+    finally:
+        if is_tmp and os.path.exists(work_path):
+            os.remove(work_path)
+
+
+def match_column(columns, target):
+    """与内核 _find_col_index 同一规则（先精确、再包含），但把**所有**包含命中都报出来：
+    返回 (实际命中的列名或 None, 其余也命中的列名列表)。内核拿第一个包含命中就走，
+    「部门」同时撞上「所属部门」「部门编码」时用户却不知道按的是哪列。"""
+    from core.utils import soft_clean
+    t = soft_clean(target)
+    if not t:
+        return None, []
+    if t in columns:
+        return t, []
+    hits = [c for c in columns if c and (t in c or c in t)]
+    return (hits[0], hits[1:]) if hits else (None, [])
+
+
+def default_output_for(input_path, leaf="拆分结果"):
+    """输出目录默认值，与桌面版 _auto_output_for 同一规则：
+    文件 → 同目录/拆分结果；文件夹 → 文件夹里面/拆分结果（结果永远在数据旁边；
+    放在输入里是安全的，run_split 会整体跳过 output_root 子树）。"""
+    p = os.path.abspath(input_path)
+    base = p if os.path.isdir(p) else os.path.dirname(p)
+    return os.path.join(base, leaf)
+
+
+def open_folder(path):
+    """在用户的文件管理器里打开目录（桌面版「跑完自动弹出结果」的等价物）。
+    失败不抛异常，返回 bool——调用方据此告诉 AI 要不要自己把路径念给用户。"""
+    import subprocess
+    try:
+        if os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+            return True
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+            return True
+        for cmd in ("xdg-open", "gio", "peony", "caja", "nautilus", "dde-file-manager"):
+            exe = __import__("shutil").which(cmd)
+            if exe:
+                args = [exe, "open", path] if cmd == "gio" else [exe, path]
+                subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def list_outputs(root, exts=("zip", "xlsx", "pdf")):
+    """扫产出目录里的真实文件（绝对路径列表）：ZIP 排最前（批量时它就是
+    「拿去发」的交付单位），其余按路径排序。取前几个给 AI 直接 present_files。"""
+    found = []
+    for dirpath, _d, names in os.walk(root):
+        for fn in names:
+            low = fn.lower()
+            if low.startswith("~$") or low.endswith("__tmp__.xlsx"):
+                continue
+            ext = low.rsplit(".", 1)[-1] if "." in low else ""
+            if ext in exts:
+                found.append(os.path.join(dirpath, fn))
+    rank = {e: i for i, e in enumerate(exts)}
+    found.sort(key=lambda f: (rank.get(f.lower().rsplit(".", 1)[-1], 99), f))
+    return found
