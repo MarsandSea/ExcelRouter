@@ -92,9 +92,13 @@ Gitee 上用**固定文件名** `ExcelRouter-Linux-x86_64.tar.gz` / `ExcelRouter
 - ARM：`https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Linux-aarch64.tar.gz`
 
 前提是 Windows 流水线已在 Gitee 建好该 tag 的发行版；没建好这一步会**报红**（故意不吞错）。
-⚠ **Gitee 社区版附件总容量只有 1GB**（单文件 ≤100MB）。2026-10-10 实测已用约 800MB，
-加上 v2.9.3 的麒麟包约 910MB——**下一次发版前必须清理旧版本附件**，否则 release.yml 的
-Gitee 上传（`continue-on-error`）会静默失败。
+⚠ **Gitee 社区版附件总容量只有 1GB**（单文件 ≤100MB）。满了之后 release.yml 的
+Gitee 上传（`continue-on-error`）会**静默失败**。清理用 Actions 页的「清理 Gitee 旧附件」
+（`prune-gitee-attachments.yml`，只手动触发）：先默认 `dry_run=true` 跑一遍看清单，
+再取消勾选真删；只删附件，发行版页面、tag、源码包和 GitHub Releases 都不动。
+约定**保留最近 2 个版本**。2026-10-10 首次清理（v2.9.0 及更早 10 个附件）释放 486MB，
+用量从约 910MB 降到约 420MB；每版约 100MB（只 Windows）～215MB（含麒麟），
+大约每发两三个版本清一次。
 
 ### CI 与真机的分工
 
