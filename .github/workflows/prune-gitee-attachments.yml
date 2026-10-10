@@ -45,8 +45,8 @@ jobs:
 
           total=0; count=0
           while read -r rid tag; do
-            curl -sS --fail "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" \
-              | jq -r '.[] | "\(.id)\t\(.size // 0)\t\(.name)"' > files.txt </dev/null
+            curl -sS --fail "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" </dev/null \
+              | jq -r '.[] | "\(.id)\t\(.size // 0)\t\(.name)"' > files.txt
             while IFS=$'\t' read -r fid size name; do
               mb=$(( size / 1048576 ))
               if [ "$DRY_RUN" = "true" ]; then
