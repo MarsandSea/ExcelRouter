@@ -83,6 +83,19 @@ Windows 侧完全不受影响，照常每个 tag 自动发。
 
 发布后记得在 Release 说明里提一句「本版含/不含麒麟产物」，免得用户在附件列表里找不到。
 
+**Gitee 同步（v2.9.3 起）**：第 ③ 步勾选发布时，除 GitHub 外还会把两个包传到 **Gitee 同 tag 的发行版**
+（国内同事主要从这里下），并把 Gitee 发行版标题补上「银河麒麟 · 统信 UOS」、正文换成麒麟下载指引。
+Gitee 上用**固定文件名** `ExcelRouter-Linux-x86_64.tar.gz` / `ExcelRouter-Linux-aarch64.tar.gz`，
+于是有两条**永久最新版链接**，可以直接发群、做二维码，每次发版自动指向新包：
+
+- x86_64：`https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Linux-x86_64.tar.gz`
+- ARM：`https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Linux-aarch64.tar.gz`
+
+前提是 Windows 流水线已在 Gitee 建好该 tag 的发行版；没建好这一步会**报红**（故意不吞错）。
+⚠ **Gitee 社区版附件总容量只有 1GB**（单文件 ≤100MB）。2026-10-10 实测已用约 800MB，
+加上 v2.9.3 的麒麟包约 910MB——**下一次发版前必须清理旧版本附件**，否则 release.yml 的
+Gitee 上传（`continue-on-error`）会静默失败。
+
 ### CI 与真机的分工
 
 CI 在 `almalinux:8` 容器里构建（glibc 2.28，与麒麟 V10 同代），并有一条

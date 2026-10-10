@@ -157,3 +157,63 @@ jobs:
           files: artifacts/**/*.tar.gz
           # 发布说明交给 Windows 工作流生成，这里不重复生成
           generate_release_notes: false
+
+      - name: 同步到 Gitee 发行版
+        # 国内同事主要从 Gitee 下载（直连快、免登录），信创内网访问 GitHub 往往很慢——
+        # v2.9.3 之前这条流水线只传 GitHub，Gitee 上根本找不到麒麟包。
+        #
+        # 前提：Gitee 发行版由 Windows 流水线（release.yml）在打 tag 时建好。
+        # 本步只做三件事，全部幂等（同一个 tag 重跑不会重复上传）：
+        #   ① 上传还没有的 tar.gz；② 发行版标题补上「麒麟」（百度搜索摘要取自这里）；
+        #   ③ 正文里「麒麟版按需构建」那行换成真正的下载指引。
+        # 与 GitHub 那步不同，这里失败要红：静默失败就会回到「Gitee 上没有麒麟包」的老问题。
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE }}
+          TAG: ${{ inputs.tag }}
+          API: https://gitee.com/api/v5/repos/Marsandsea/Excelrouter
+        run: |
+          set -euo pipefail
+          [ -n "$GITEE_TOKEN" ] || { echo "::error::缺少 secrets.GITEE"; exit 1; }
+
+          rel=$(curl -sS --fail "$API/releases?access_token=$GITEE_TOKEN&per_page=20&direction=desc" \
+                | jq -c --arg t "$TAG" '[.[] | select(.tag_name == $t)][0] // empty')
+          [ -n "$rel" ] || { echo "::error::Gitee 上没有 $TAG 的发行版（应由 release.yml 先建好）"; exit 1; }
+          rid=$(jq -r .id <<<"$rel")
+
+          # ① 上传。Gitee 上用**固定文件名**（不带版本号）：
+          #    Gitee 支持 /releases/download/latest/<文件名> 永远指向最新发行版的同名附件，
+          #    固定名 = 一条可以发群、做二维码的永久下载链接，每次发版自动指向新包；
+          #    而且不像 GitHub 那样「版本名 + 固定名」各传一份——Gitee 社区版附件总容量
+          #    只有 1GB（2026-10 实测已用 ~800MB），重复上传吃不起。
+          #    access_token 必须排在 file 前面，原因见 release.yml 的同名步骤。
+          have=$(curl -sS --fail "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" \
+                 | jq -r '.[].name')
+          mkdir -p gitee
+          for f in artifacts/*/*.tar.gz; do
+            arch=$(basename "$f" | sed -E 's/.*-linux-([a-z0-9_]+)\.tar\.gz$/\1/')
+            name="ExcelRouter-Linux-${arch}.tar.gz"
+            if grep -qxF "$name" <<<"$have"; then
+              echo "已存在，跳过：$name"; continue
+            fi
+            cp "$f" "gitee/$name"
+            curl -sS --fail-with-body -F "access_token=$GITEE_TOKEN" -F "file=@gitee/$name" \
+              "$API/releases/$rid/attach_files" >/dev/null
+            echo "已上传：$name"
+          done
+
+          # ②③ 标题与正文（PATCH 要求 tag_name/name/body 三项都带）
+          name=$(jq -r .name <<<"$rel" | sed 's/Windows 免安装版$/Windows · 银河麒麟 · 统信 UOS 免安装版/')
+          latest="https://gitee.com/marsandsea/ExcelRouter/releases/download/latest"
+          linux_lines="- **银河麒麟 / 统信 UOS**：x86_64 台式机下载 \`ExcelRouter-Linux-x86_64.tar.gz\`，ARM 笔记本（如华为）下载 \`ExcelRouter-Linux-aarch64.tar.gz\`；解压后运行里面的「安装到开始菜单.sh」，之后从开始菜单打开。永久最新版链接（可直接发群）：[x86_64](${latest}/ExcelRouter-Linux-x86_64.tar.gz) · [ARM](${latest}/ExcelRouter-Linux-aarch64.tar.gz)"
+          body=$(jq -r .body <<<"$rel" | awk -v new="$linux_lines" '
+            /^- 银河麒麟 \/ 统信 UOS 版按需构建/ { print new; done=1; next } { print }
+            ')
+          if ! grep -qF "Linux-x86_64.tar.gz" <<<"$body"; then
+            body="$body"$'\n\n'"$linux_lines"
+          fi
+          curl -sS --fail-with-body -X PATCH "$API/releases/$rid" \
+            --data-urlencode "access_token=$GITEE_TOKEN" \
+            --data-urlencode "tag_name=$TAG" \
+            --data-urlencode "name=$name" \
+            --data-urlencode "body=$body" >/dev/null
+          echo "Gitee 发行版已更新：$name"
