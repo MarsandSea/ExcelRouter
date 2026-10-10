@@ -1,0 +1,65 @@
+# Copyright (c) 2026 AbeLin · MIT License
+#
+# 清理 Gitee 旧发行版附件（只删附件，不删发行版页面、不删 tag、不碰 GitHub）。
+#
+# 为什么需要：Gitee 社区版附件总容量只有 1GB，每个版本 Windows 双产物 ~100MB、
+# 加上信创双架构再 ~115MB，攒五六个版本就会顶满，届时新版本上传直接失败。
+# 旧版本的安装包 GitHub Releases 里都还在，Gitee 只保留最近几个版本作国内加速下载即可。
+#
+# 只手动触发：删附件不可撤销，默认 dry_run=true 只列出「会删什么」，确认后再跑一次真删。
+name: 清理 Gitee 旧附件
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "保留最近几个发行版的附件"
+        default: "2"
+        required: true
+      dry_run:
+        description: "只列出、不删除"
+        type: boolean
+        default: true
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 清理旧附件
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE }}
+          KEEP: ${{ inputs.keep }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          [ -n "$GITEE_TOKEN" ] || { echo "::error::缺少 secrets.GITEE"; exit 1; }
+          [[ "$KEEP" =~ ^[1-9][0-9]*$ ]] || { echo "::error::keep 必须是正整数"; exit 1; }
+          API=https://gitee.com/api/v5/repos/Marsandsea/Excelrouter
+
+          # 按创建时间倒序，前 KEEP 个保留，其余的附件全删
+          curl -sS --fail "$API/releases?access_token=$GITEE_TOKEN&per_page=100" \
+            | jq -r 'sort_by(.created_at) | reverse | .[] | "\(.id) \(.tag_name)"' > releases.txt
+          echo "发行版共 $(wc -l < releases.txt) 个，保留最近 $KEEP 个："
+          head -n "$KEEP" releases.txt | sed 's/^/  保留 /'
+
+          total=0; count=0
+          while read -r rid tag; do
+            curl -sS --fail "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" \
+              | jq -r '.[] | "\(.id)\t\(.size // 0)\t\(.name)"' > files.txt </dev/null
+            while IFS=$'\t' read -r fid size name; do
+              mb=$(( size / 1048576 ))
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "  [dry-run] $tag  $name  ${mb}MB"
+              else
+                curl -sS --fail-with-body -X DELETE \
+                  "$API/releases/$rid/attach_files/$fid?access_token=$GITEE_TOKEN" </dev/null >/dev/null
+                echo "  已删除 $tag  $name  ${mb}MB"
+              fi
+              total=$(( total + size )); count=$(( count + 1 ))
+            done < files.txt
+          done < <(tail -n +"$(( KEEP + 1 ))" releases.txt)
+
+          verb=$([ "$DRY_RUN" = "true" ] && echo "将释放" || echo "已释放")
+          echo "共 $count 个附件，$verb $(( total / 1048576 ))MB"
+          echo "### Gitee 附件清理：$count 个，$verb $(( total / 1048576 ))MB（dry_run=$DRY_RUN）" >> "$GITHUB_STEP_SUMMARY"
