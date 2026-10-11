@@ -44,6 +44,12 @@ back into one — free, open-source, no coding required.*
 谁交了空表、谁哪一列漏了哪几行，生成能直接发群的通报和逐人催办话术；**文件加密分发**——同一批 PDF /
 Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还能加专属水印。
 
+**v3.0 新增**：发下去让大家填的表，可以在填写列后面的括号里写要求，比如「走访日期（日期）」
+「走访结果（已走访/未走访）」「联系电话（手机号）」——对方在 Excel 里直接从下拉框选、填错格式当场被拦；
+收回来查收时还能查出「填写有误」，汇总时把五花八门的日期、电话写法统一。常做的设置可以存成「📋 方案」，
+下个月一键套用、发给同事也能用。源表里**隐藏的 sheet 不发、隐藏的列清空**，不会把藏起来的内容误发出去；
+拆分列空着的行不再悄悄丢掉，单独放进「请核对_无归属.xlsx」，完成时报一行行数对账。
+
 **它不做这些**（避免你下载后才发现不合用）：
 
 - ❌ 不做**表头扁平化 / 多层表头降维**——本工具的定位是「原样保留」表头，不是改造表头
@@ -64,6 +70,9 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
 > same-template workbooks (or the sheets of one workbook) into one, aligned by column name, with a
 > source column; when the sheets were sent out to be filled in, it can first report in seconds who
 > has not submitted, who returned an empty sheet and which rows of which required column are blank.
+> Since v3.0 the fill-in columns can carry rules (date, number, mobile, a dropdown list), checked
+> again when the forms come back; hidden sheets and columns are not sent out by default; settings can
+> be saved as a reusable recipe.
 > Everything runs **100% locally — no upload,
 > no telemetry, works offline**. Windows x64 plus Linux x86_64/aarch64; no macOS build and no web
 > version; it does not flatten headers,

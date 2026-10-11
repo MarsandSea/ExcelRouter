@@ -11,7 +11,34 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.10.1**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+当前版本 **v3.0.0**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+
+> **v3.0.0：拆分去掉 pandas、隐藏内容不外发、行数对账、填报规则、查收问题编码、方案（2026-10）**。
+> ① **拆分全程 openpyxl**：新模块 `core/xlio.py` 是拆分和汇总共用的读表层（表头识别搬到这里，splitter 再导出原名，
+> 现有调用不变；规矩同 collect：不导入 pandas、不用 shutil、不读环境变量、避开内部禁用字眼）。`process_file`
+> 每个文件只加载一次，按原始行号分桶；错误格当空、整数形式的小数转 int（`key_value`）；以「=」开头的文字定为文字
+> （`put`，公式注入修复）；ZIP 改用 zipfile。依赖和三处打包都去掉 pandas / numpy。守卫：`tests/golden/`（2.10.1 产物
+> 逐格快照）+ 假 pandas 子进程测试。**别再把 pandas 引回 core**。
+> ② **隐藏内容**（新键 `keep_hidden`，默认 False）：隐藏 sheet 不发；隐藏列**先分组再清空**（隐藏的拆分列照样能分组），
+> 产出里仍隐藏；隐藏行照发、日志提醒（多半是筛选）。来源统一用 `xlio.hidden_info`（列宽 < 0.5 也算隐藏）。
+> ③ **行数对账**：`源表行 = 拆出 + 合计等 + 没选的 + 没写分组`（[SUMMARY] 的 source_rows / routed / skip_rows /
+> not_selected / unassigned）。拆分列为空、又不像合计行的行写进输出根的「请核对_无归属.xlsx」（一个源 sheet 一页；
+> 不算组数、不进 ZIP / 下发清单 / 技能总包）。像合计行 = 前三个有内容的格子有 合计/小计/总计，或是最后一行且只有数字。
+> ④ 跨文件合并按**列名**对齐（对上的不到一半就放进 `{sheet}_2`，[SUMMARY] `unaligned`），文件夹合并时提示这批表
+> 有几种模板（`templates`）；拆分保留源表的下拉 / 数据验证（引用别处格子的下拉把选项直接写进去，其余引用格子的去掉）。
+> ⑤ 表头识别修正：日期列 + 底部稀疏「合计」行会让整张表被误判跳过——`data_hint` 改按两行中较宽的一行归一。
+> ⑥ **查收问题编码**：每人先记 `p["issues"]`（`ISSUE_STATUS` / `ISSUE_TEXT` / `ISSUE_NAG`，**编码只加不改**），状态和旧字段
+> blanks / changes / notes 由它推出（内部技能还在读旧字段）；写「回收结果.json」（[SUMMARY] `result`，技能 `people`）；
+> 回收记录.json 每轮按人记编码和个数，通报写「比上次：新交 / 改好了 / 还差」。通报快照在 `tests/golden/collect/`。
+> ⑦ **填报规则**：填写列括号里写要求（日期 / 数字 / 整数 / 手机号 / 电话 / `A/B` 选项 / 选填，`parse_fill_spec`；
+> 不写括号与 v2.10 完全一致）。下发加数据验证（**`showErrorMessage` 必须显式 True**，openpyxl 默认 False），选项超
+> 255 字不加下拉；查收新状态「填写有误」（`ST_INVALID`，排在有漏填之后），**通报 / 进度表 / json 都不回显填错的值**；
+> 汇总时 `_coerce` 把认得出的写法规整（只改汇总表，号码例子打码），认不出的标浅橙。查收判对错和汇总改写共用 `_coerce`，
+> 口径不会对不上。「漏填明细」改名「问题明细」。
+> ⑧ **方案**（`core/recipe.py`）：按模式白名单存设置，**路径和截止时间不存**；读方案按外来数据处理（类型以默认值为准、
+> 长度有上限、未知键忽略）。GUI 页脚「📋 方案」（默认存程序目录「我的方案」，最近 5 个记在 `recent_recipes`），
+> 套用后方案里的字段在表里找不到时**只提醒、不自动换成推荐列**；技能四个脚本 `--recipe` / `--save-recipe`。
+> ⑨ 技能：description 只写中文（约 200 字），ClawHub 发布时换成 `excelrouter-skill/clawhub/description_en.txt`。
 
 > **v2.10.1：保留格式的样式缓存 bug + 读不了的文件算交了 + 技能接入汇总 / 查收（2026-10-11）**。
 > ① **真 bug（拆分、汇总都中）**：旧 `_cached_copy` 用 `id(src.font)` 当缓存键，但 `cell.font` 每次访问都返回
@@ -268,8 +295,9 @@
   x86_64 与 aarch64 双架构）。**单一代码库**，平台差异收敛在 `gui/platform_compat.py`
   和 `core/pdf_dist.py` 的字体探测里，不开分支。
 - Python 3.9+（麒麟 V10 SP1 常自带 3.7，打包机需要先升级；**目标机不需要装 Python**）
-- 依赖见 `requirements.txt`：customtkinter、openpyxl、pandas、xlrd、pypdf、fpdf2、cryptography、
-  msoffcrypto-tool（v2.10，Office 加密；纯 Python，依赖 olefile）
+- 依赖见 `requirements.txt`：customtkinter、openpyxl、xlrd、pypdf、fpdf2、cryptography、
+  msoffcrypto-tool（v2.10，Office 加密；纯 Python，依赖 olefile）。v3.0 起**不再依赖 pandas / numpy**，
+  三处打包都 `--exclude-module` 掉它们（Pillow 不能排除，fpdf2 要用）
 - Linux 额外的系统依赖：`python3-tk`（打包机）、`fonts-wqy-zenhei` 或 `fonts-noto-cjk`
   （否则 PDF 水印中文变 `?`）、`xdg-utils`（否则「打开输出文件夹」不可用）
 
@@ -311,7 +339,9 @@ excel-router/
 │   ├── __init__.py
 │   ├── splitter.py            # 核心拆分逻辑（最重要的文件）
 │   ├── pdf_dist.py            # PDF 按网格加密分发（密码/水印/分发清单）
-│   ├── collect.py             # Excel 汇总 + 查收通报 + 下发标记（纯 openpyxl，不导入 pandas）
+│   ├── collect.py             # Excel 汇总 + 查收通报 + 下发标记 + 填报规则（纯 openpyxl，不导入 pandas）
+│   ├── xlio.py                # v3.0：拆分和汇总共用的读表层（表头识别、只读流式读、隐藏信息、写值、ZIP）
+│   ├── recipe.py              # v3.0：方案（存 / 读 / 套用 / 列检查），只用标准库
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
@@ -333,7 +363,13 @@ excel-router/
     ├── test_utils.py          # utils 单元测试
     ├── test_splitter.py       # splitter 集成测试（单文件/合并、到人双产出、格式保留）
     ├── test_pdf_dist.py       # pdf_dist 集成测试（加密/水印/清单/容错/停止）
-    └── test_collect.py        # collect 测试（各状态/认领/行号/多轮/总表分人/下发比对/汇总/拆分往返）
+    ├── test_collect.py        # collect 测试（各状态/认领/行号/多轮/总表分人/下发比对/汇总/拆分往返）
+    ├── test_collect_snapshot.py # 查收通报 / 催办 / 进度表全文快照 + 问题编码 + 多轮对比（v3.0）
+    ├── test_fill_rules.py     # 填报规则：解析、_coerce、下发验证、查收填写有误、汇总规整（v3.0）
+    ├── test_recipe.py         # 方案：往返、外来数据、列检查（v3.0）
+    ├── test_xlio.py           # 读表层单测 + 「清洁度」检查（v3.0）
+    ├── test_golden_split.py   # 拆分产物与 2.10.1 逐格比对（v3.0 去 pandas 的守卫）
+    └── golden/                # 快照样本生成器与期望值（expected/*.json、collect/*.json）
 ```
 
 ### 数据模型（config 关键字段）
@@ -354,6 +390,7 @@ excel-router/
 | `merge_across_files` | 汇总：同取值跨源文件是否合并到一个文件（到人始终按人合并） | `false`（2026-07-17 起，见下方说明） |
 | `exact_match` `preserve_format` `auto_open_output` | 同义保留 | |
 | `keep_formulas` | 保留公式（仅同行公式安全平移，需先开 `preserve_format`；见下方说明） | `false` |
+| `keep_hidden` | 隐藏的 sheet 和列也照样发出（默认：隐藏 sheet 不发、隐藏列清空且仍隐藏，v3.0） | `false` |
 | `ui_mode` | 界面模式：`excel`（拆分）/ `collect`（汇总）/ `pdf`（文件加密分发） | `excel` |
 | `pdf_input_paths` | 待分发的文件列表：PDF，v2.10 起也可以是 docx / xlsx / pptx | `[]` |
 | `pdf_mapping_path` | 「网格→密码」映射清单 xlsx 路径 | `""` |
@@ -371,6 +408,7 @@ excel-router/
 | `collect_expect` / `collect_required` | 应交名单 / 必须填的列（文字，`collect.split_names` 拆） | `""` |
 | `collect_by` | 总表按哪一列分人（仅输入是单个文件时生效） | `""` |
 | `collect_title` / `collect_due` / `collect_record` | 通报标题 / 截止时间 / 下发记录路径（空 = 自动找） | `""` |
+| `recent_recipes` / `recipe_tip_off` | 最近用过的方案路径（最多 5 个）/ 跑完后不再提示「存成方案」（v3.0） | `[]` / `false` |
 
 ### core/splitter.py 的关键函数
 
@@ -396,7 +434,7 @@ excel-router/
   **`[SUMMARY] {json}`**（mode/groups/files/rows/zips/skipped_sheets/failed_files/failed_saves/
   stopped/output）——GUI 菜单据渲染完成摘要；追加式输出不改返回值，skill 只是多打一行
 
-**架构要点：pandas 负责过滤数据（向量化 mask），openpyxl 负责复制格式。**
+**架构要点（v3.0 起）：全程 openpyxl。** 每个源文件 `xlio.open_book` 加载一次，逐行取分组键（`key_value` → 取值归并），按原始行号分桶；保留格式时逐格复制值 + 格式，快速模式只写值。
 
 **一次运行两套产出（v2.1）：**
 - **汇总**（始终）：按 `split_column` 拆。单文件 / `merge=True` → 扁平 `{主取值}.xlsx`（跨文件合并）；
@@ -409,17 +447,17 @@ excel-router/
 - 批量时对每个生成了文件夹的主取值打 `{主取值}.zip`。
 
 **跨文件合并（v2.0 核心，仍在）：** 输出按 key 在内存累积、统一保存；第一个产生某 key 的源文件
-定义表头/格式，后续文件**按列位置追加**（到人则按 sheet 名分别累积）。从根本上修掉 v1.0「同名输出互相覆盖」bug。
+定义表头/格式，后续文件**按列名对齐追加**（v3.0；列名完全一致时走按位置的快路径，到人则按 sheet 名分别累积）。从根本上修掉 v1.0「同名输出互相覆盖」bug。
 
 **数据行两种模式，由 `config['preserve_format']` 控制（默认 True）：**
 - **保留格式**：用 `wb_src` 逐行复制「值 + 完整格式」。按【原始行号】读取、加法式写入
-  （`rows_df.index` 即原始 0 基行号，`excel_row = src_idx + 1`），**绝不删行**。
-- **快速模式**：数据行只写值（来自 pandas），最快。
+  （`rows.index` 即原始 0 基行号，`excel_row = src_idx + 1`），**绝不删行**。
+- **快速模式**：数据行只写值（同样从 `ws_src` 按行号取），最快。
 
 表头格式（含合并单元格、列宽）两种模式都保留。`wb_src` 在 `process_file` 末尾统一 `close()`。
 
 **限制（已在 README/界面注明）：** ① `.xls` 转换后无法保留原格式；
-② 数据区合并单元格暂不保留；③ 跨文件合并按**列位置**追加，最适合「同一套模板的多个表」。
+② 数据区合并单元格暂不保留；③ 跨文件合并按**列名**对齐（v3.0），对上的不到一半的另起 `{sheet}_2`，最适合「同一套模板的多个表」。
 
 ### core/pdf_dist.py 的关键函数（文件加密分发；v2.10 起 Office 文件走 `_encrypt_office`，只加密）
 
@@ -468,7 +506,7 @@ excel-router/
   改名 / 贴进新表」兜底，宁可认不出也不认错）→ 分组列多数值（文件夹模式没指定时用下发记录的
   `split_column`）；没名单时用去掉「副本 / (2)」后缀的文件名
 - `analyze(files, res, expect, wanted, record, by, rows_mode)` —— 逐人判定，状态优先级
-  空表 > 有漏填 > 有改动 > 表头对不上 > 合格（一个人可同时有多个 flags）；同一人交了几次同一份表
+  空表 > 有漏填 > 填写有误 > 有改动 > 表头对不上 > 合格（一个人可同时有多个 flags）；同一人交了几次同一份表
   只查最新的；**别人交了一模一样的表照样算他交了**（只注明），同一人重复交的才去重
 - `notice_text` / `write_progress` —— 回收通报（可直接发群 + 逐人催办）/ 回收进度.xlsx
 - `merge_tables` / `check_collect` / `run_collect` —— **签名与 run_split 一致**，收尾打 `[SUMMARY]`
@@ -480,6 +518,12 @@ excel-router/
   桌面版一次做完；`labels` 把「来源」写成交表人，`people` 写进「汇总说明」
 - `prepare_issue` / `fingerprint_file` / `lock_keys` —— 下发标记与指纹；一个分组只有一个文件时
   才记指纹（文件夹不合并时一组多个文件，不比对改动）
+- **问题编码（v3.0）**：`ISSUE_STATUS` / `ISSUE_TEXT` / `ISSUE_NAG` 三张表；`_judge` 只产出 `p["issues"]`，`_derive`
+  推出状态和旧字段。**编码定下来只加不改**（回收结果.json、回收记录.json、技能 people 都按编码认）。
+  `result_data` 写回收结果.json，`_round_issues` / `_round_diff` 做多轮对比
+- **填报规则（v3.0）**：`parse_fill_spec` → `_validation`（下发）/ `_scan_sheet(rules=...)`（查收，只记行号和编码）/
+  `_fix_cell`（汇总规整）。下发记录的 `rules` 里的选项是**下发人写的规则，不是任何人填的内容**，
+  不违反「下发记录不存单元格内容」；查收只认下发记录里的规则，不读交回文件「填报说明」里的规则表（对方能改）
 
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
 
@@ -564,9 +608,9 @@ row3 工具条（「▸ 处理详情」日志折叠钮 | 「💬 反馈建议」
 ## ⚠️ 已知历史 Bug（重要，勿重蹈覆辙）
 
 早期版本（V33）有过一个**行号错位 Bug**：在删除行之后，用删除后的行号去索引 pandas
-镜像 DataFrame，导致公式列（如「到账金额」）取到错误的值。
+镜像 DataFrame（当时的写法），导致公式列（如「到账金额」）取到错误的值。
 
-**当前架构已规避**：本版本不做「先删行再回填」，而是 pandas 直接 `mask` 过滤出要保留的行，
+**当前架构已规避**：本版本不做「先删行再回填」，而是按原始行号分桶、加法式写入要保留的行，
 表头格式单独从缓存写入。如果未来要改回「删行」逻辑，**务必先按原始行号缓存镜像数据，
 删除后再按缓存顺序回填**，不要用删除后的行号索引。
 
@@ -579,7 +623,7 @@ v1.0 逐文件独立处理、每个输出文件都新建 Workbook 后 `save` 覆
 
 ## ⚠️ 公式列依赖缓存值（实测确认）
 
-本工具用 pandas 读公式列的**缓存计算结果**（不是重新计算）。实测结论：
+本工具读的是公式列的**缓存计算结果**（`data_only=True`，不是重新计算）。实测结论：
 
 - 真实 Excel/WPS 另存的文件 → 带缓存值 → 公式列**正常**显示真实数字 ✅
 - 程序(openpyxl)生成、或公式从未被 Excel 计算过的文件 → 无缓存值 → 公式列读成空白 ❌

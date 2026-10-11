@@ -220,13 +220,13 @@ Windows / 麒麟信创桌面工具：按任意字段（部门/区域/工号）�
 **Topics**（只允许小写字母/数字/连字符，最多 20 个）：
 
 ```
-excel excel-splitter split-excel xlsx spreadsheet openpyxl pandas python windows linux kylin desktop-app gui customtkinter office-automation batch-processing pdf-encryption watermark chinese
+excel excel-splitter split-excel xlsx spreadsheet openpyxl python windows linux kylin desktop-app gui customtkinter office-automation batch-processing pdf-encryption watermark chinese
 ```
 
 也可以用 gh CLI 一次性设置：
 
 ```bash
-gh repo edit MarsandSea/ExcelRouter --add-topic excel,excel-splitter,split-excel,xlsx,spreadsheet,openpyxl,pandas,python,windows,desktop-app,gui,customtkinter,office-automation,batch-processing,pdf-encryption,watermark,no-code,chinese
+gh repo edit MarsandSea/ExcelRouter --add-topic excel,excel-splitter,split-excel,xlsx,spreadsheet,openpyxl,python,windows,desktop-app,gui,customtkinter,office-automation,batch-processing,pdf-encryption,watermark,no-code,chinese
 ```
 
 ### Gitee（仓库 → 管理 → 基本信息）
