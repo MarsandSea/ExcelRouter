@@ -37,12 +37,12 @@ jobs:
           [ -n "$GITEE_TOKEN" ] || { echo "::error::缺少 secrets.GITEE"; exit 1; }
           API=https://gitee.com/api/v5/repos/Marsandsea/Excelrouter
 
-          curl -sS --fail "$API/releases?access_token=$GITEE_TOKEN&per_page=100" \
+          curl -sS --fail --retry 3 --retry-all-errors --retry-delay 5 "$API/releases?access_token=$GITEE_TOKEN&per_page=100" \
             | jq -r 'sort_by(.created_at) | reverse | .[] | "\(.id) \(.tag_name)"' > releases.txt
           total=0
           table="| 版本 | 附件占用 |"$'\n'"|---|---|"
           while read -r rid tag; do
-            bytes=$(curl -sS --fail "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" </dev/null \
+            bytes=$(curl -sS --fail --retry 3 --retry-all-errors --retry-delay 5 "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" </dev/null \
                     | jq '[.[].size // 0] | add // 0')
             total=$(( total + bytes ))
             if (( bytes > 0 )); then table+=$'\n'"| $tag | $(( bytes / 1048576 ))MB |"; fi
