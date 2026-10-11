@@ -191,12 +191,25 @@
 > 品牌名 **ExcelRouter 不改**（Router 本身双向：发出去是分发、收回来是汇总；改名要重来仓库链接、
 > SkillHub slug 和搜索收录），中文副标改为 **「Excel 智能拆分汇总工具」**；
 > 标语「一键按部门、网格、工号拆分并打包分发；收回来一键汇总，还能查出谁没交、谁漏填」
-> （一句话盖住两个方向，**不随模式切换**）；特性行「保留原格式 · 多表合并汇总 · 查收通报 · PDF 加密分发」；
+> （一句话盖住两个方向，**不随模式切换**）；特性行「保留原格式 · 多表合并汇总 · 查收通报 · 文件加密分发」
+> （同版 PDF 模式扩成「文件加密分发」后跟着改，见下）；
 > 英文 `ExcelRouter — split, distribute and merge Excel files, 100% offline`。
 > 同步处：界面品牌区、README 首屏、`version.txt` FileDescription、`llms.txt`、`docs/index.html`、
 > `docs/使用指引.md`、Linux 使用说明与 .desktop、release.yml / Gitee 发行版标题。
 > core 模块 docstring 里的旧副标是模块描述，不必跟改。**此为最新定稿。**
 > 内部版（MobileWork 专家）对应叫「敏感数据分发汇总工具」/「敏感数据分发汇总专家（ExcelRouter）」。
+>
+> **PDF 加密分发 → 文件加密分发（2026-10-11，v2.10）**：作者定的三条：① 也收 Word / Excel / PPT
+> （.docx / .xlsx / .pptx 及带宏的 m 版），**只加打开密码**（`msoffcrypto-tool`，ECMA-376 Agile AES-256，
+> 直接对文件字节加密、不经 openpyxl 重写，图表图片原样保留；**core 里延迟导入**，没装只跳过 Office 文件，
+> 下游技能不受影响）；**Word / Excel 不做水印、也不做打印页眉标记**——现在外流主要走即时通信，
+> 要水印的自己转 PDF；老格式 .doc / .xls、本身带密码的文件跳过并说明。② 加密、水印**各自可选**
+> （新键 `pdf_encrypt`，默认 True；两个都关时 core 报错、GUI 把最后一个勾回去）；只加水印时清单不要
+> 密码列、分发清单不写密码列、不提醒明文密码。③ 去掉「接收人列」下拉——它原来只抄进分发清单，
+> 用户看不懂；现在 `pdf_receiver_column` 留空时 core 按列名（接收人 / 收件人 / 联系人 / 负责人 / 姓名）
+> 自动认，水印文字支持 `{receiver}`（为空时用网格名）。对外改名「文件加密分发」，**内部名、模块名
+> `pdf_dist`、config 的 `pdf_*` 键全部不改**（ui_mode 已存进用户配置，键名是下游技能契约）。
+> 同版顺手修：③卡片的「拆分速度」只在拆分模式显示（原来在 PDF 模式也露着）。
 >
 > **新增 PDF 加密分发模式（2026-07-12，v2.5.1 后）**：界面顶部加了
 > `CTkSegmentedButton` 模式切换「Excel 拆分 / PDF 加密分发」。新模式把同一批 PDF
@@ -237,7 +250,8 @@
   x86_64 与 aarch64 双架构）。**单一代码库**，平台差异收敛在 `gui/platform_compat.py`
   和 `core/pdf_dist.py` 的字体探测里，不开分支。
 - Python 3.9+（麒麟 V10 SP1 常自带 3.7，打包机需要先升级；**目标机不需要装 Python**）
-- 依赖见 `requirements.txt`：customtkinter、openpyxl、pandas、xlrd、pypdf、fpdf2、cryptography
+- 依赖见 `requirements.txt`：customtkinter、openpyxl、pandas、xlrd、pypdf、fpdf2、cryptography、
+  msoffcrypto-tool（v2.10，Office 加密；纯 Python，依赖 olefile）
 - Linux 额外的系统依赖：`python3-tk`（打包机）、`fonts-wqy-zenhei` 或 `fonts-noto-cjk`
   （否则 PDF 水印中文变 `?`）、`xdg-utils`（否则「打开输出文件夹」不可用）
 
@@ -322,12 +336,13 @@ excel-router/
 | `merge_across_files` | 汇总：同取值跨源文件是否合并到一个文件（到人始终按人合并） | `false`（2026-07-17 起，见下方说明） |
 | `exact_match` `preserve_format` `auto_open_output` | 同义保留 | |
 | `keep_formulas` | 保留公式（仅同行公式安全平移，需先开 `preserve_format`；见下方说明） | `false` |
-| `ui_mode` | 界面模式：`excel`（拆分）/ `pdf`（加密分发） | `excel` |
-| `pdf_input_paths` | 待分发的 PDF 文件列表（可多个） | `[]` |
+| `ui_mode` | 界面模式：`excel`（拆分）/ `collect`（汇总）/ `pdf`（文件加密分发） | `excel` |
+| `pdf_input_paths` | 待分发的文件列表：PDF，v2.10 起也可以是 docx / xlsx / pptx | `[]` |
 | `pdf_mapping_path` | 「网格→密码」映射清单 xlsx 路径 | `""` |
-| `pdf_grid_column` / `pdf_password_column` / `pdf_receiver_column` | 映射清单里的网格/密码/接收人（选填）列名 | `""` |
-| `pdf_watermark` | 是否加网格专属水印 | `true` |
-| `pdf_watermark_text` | 水印模板，支持 `{grid}`（网格名）`{date}`（日期） | `"{grid} {date}"` |
+| `pdf_grid_column` / `pdf_password_column` / `pdf_receiver_column` | 映射清单里的网格/密码/接收人列名（接收人留空 = 按列名自动认；v2.10 起 GUI 不再给下拉） | `""` |
+| `pdf_encrypt` | 是否加打开密码（v2.10；和 `pdf_watermark` 至少开一个） | `true` |
+| `pdf_watermark` | 是否加网格专属水印（只对 PDF 生效） | `true` |
+| `pdf_watermark_text` | 水印模板，支持 `{grid}`（网格名）`{receiver}`（接收人，v2.10）`{date}`（日期） | `"{grid} {date}"` |
 | `pdf_watermark_opacity` / `pdf_watermark_angle` | 水印透明度 / 旋转角（无 GUI 入口，改配置文件生效） | `0.15` / `45` |
 | `window_geometry` | 上次关闭时的窗口大小位置；空 = 按屏幕高度自适应（v2.7） | `""` |
 | `ui_scale` | 界面缩放百分比（大字号=115），重启生效（v2.7） | `100` |
@@ -388,7 +403,7 @@ excel-router/
 **限制（已在 README/界面注明）：** ① `.xls` 转换后无法保留原格式；
 ② 数据区合并单元格暂不保留；③ 跨文件合并按**列位置**追加，最适合「同一套模板的多个表」。
 
-### core/pdf_dist.py 的关键函数（PDF 加密分发）
+### core/pdf_dist.py 的关键函数（文件加密分发；v2.10 起 Office 文件走 `_encrypt_office`，只加密）
 
 - `list_mapping_columns(xlsx_path)` —— 读映射清单第 1 行表头，供 GUI 三个列下拉（清单是用户
   专门维护的小表，表头固定第 1 行，不做启发式识别）
@@ -417,9 +432,13 @@ excel-router/
 - `run_pdf_dist(config, log_fn, progress_fn, stop_flag)` —— **签名与 run_split 完全一致**，
   GUI 队列泵零改动接入；AES-256 加密，cryptography 缺失时降级 RC4-128 + 警告；
   单网格失败记日志继续；源 PDF 自带密码的跳过不中断；收尾同样打 `[SUMMARY] {json}`
+  （v2.10 起多带 `encrypt` / `watermark`）。v2.10：输入按扩展名分流——PDF 走 `_stamp_and_encrypt`
+  （`password` 为空不加密、`wm_text` 为空不盖水印），Office 走 `_encrypt_office`（字节读一次跨网格复用）；
+  `read_mapping(..., need_password=False)` 给只加水印用；`guess_receiver_column` 自动认接收人列；
+  `write_manifest(..., with_password=False)` 不写密码列
 
-输出结构：`输出根/{网格}/{原文件名}.pdf` + `分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态）。
-**清单含明文密码**，完成日志里有「勿随文件发出」提醒——不要删这句。
+输出结构：`输出根/{网格}/{原文件名}` + `分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态；只加水印时没有密码列）。
+**清单含明文密码**，完成日志里有「勿随文件发出」提醒——不要删这句（只加水印时不打）。
 
 ### core/collect.py 的关键函数（v2.10，Excel 汇总）
 
@@ -446,7 +465,7 @@ excel-router/
 
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
 
-**Excel 汇总模式（v2.10）**：`MODE_LABELS` 三段，顺序「Excel 拆分 / Excel 汇总 / PDF 加密分发」；
+**Excel 汇总模式（v2.10）**：`MODE_LABELS` 三段，顺序「Excel 拆分 / Excel 汇总 / 文件加密分发」；
 `_collect_frame` 由 `_build_collect_steps` 搭（①文件夹 / 一个文件 ②「先查收，再汇总」开关 `_col_check_var`，
 打开后才露出应交名单、截止时间和折叠的「更多设置」+ 不编号的结果卡片：查收后是通报 + 复制通报 / 打开进度表 /
 汇总已交的表，汇总后是汇总说明 + 打开汇总表）。主按钮文案随开关变（`_start_text`）；
@@ -459,9 +478,10 @@ excel-router/
 **双模式（2026-07-12 起）**：`_build_header` 尾部的 `_mode_seg` 切换「Excel 拆分 / PDF 加密分发」，
 `self._mode`（"excel"/"pdf"）随 `ui_mode` 持久化。`_body` 里 `_excel_frame` / `_pdf_frame` 两个
 Frame 同格互斥显示（`_apply_mode` 用 grid/grid_remove 切换，同时改③卡片标题与主按钮文案）。
-PDF 模式步骤卡：`_build_pdf_step_input`（多选 PDF）+ `_build_pdf_step_map`（选映射清单 →
-子线程 `list_mapping_columns` → 泵消息 `("pdf_scan", ...)` → `_on_pdf_scan` 关键词预选三个列下拉；
-水印子卡片）。`_start` 开头按 `self._mode` 分派到 `_start_pdf`（自带校验链），
+PDF 模式步骤卡：`_build_pdf_step_input`（多选文件，`DIST_EXTS`）+ `_build_pdf_step_map`（选映射清单 →
+子线程 `list_mapping_columns` → 泵消息 `("pdf_scan", ...)` → `_on_pdf_scan` 关键词预选网格 / 密码两个列下拉；
+保护方式子卡片：「加打开密码」「加水印」两个勾选框，`_on_protect_toggle` 保证至少留一个，关掉加密时密码列下拉置灰）。
+`_start` 开头按 `self._mode` 分派到 `_start_pdf`（自带校验链），
 两模式共享 `_enter_running`（运行态 UI 准备）、③操作区、进度条、日志、`_on_done`。
 
 **布局**（self 的 grid 行）：row0 品牌区（品牌名+副标同行、标语、特性行，作者信息在页脚）→

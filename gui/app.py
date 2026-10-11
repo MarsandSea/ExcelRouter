@@ -79,10 +79,12 @@ SPEED_FAST = "极速（纯数据）"
 PDF_COL_PLACEHOLDER = "（选清单后自动识别）"
 # 顶部模式切换：内部模式名 ↔ 按钮文字（ui_mode 存的是内部名；字典顺序 = 按钮顺序）。
 # 「collect」对外叫「Excel 汇总」：默认是普通的合并汇总，查收（谁没交、谁漏填）是 ② 里的可选开关
-MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "pdf": "PDF 加密分发"}
+# 「pdf」对外叫「文件加密分发」（v2.10 起也收 Word / Excel / PPT，内部名不改，ui_mode 已存进用户配置）
+MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "pdf": "文件加密分发"}
 COL_IN_TIP = "把要合并的表放进一个文件夹再选它；选一个文件时，把它的各个 sheet 合成一张"
 EXPECT_TIP = "名字用顿号或逗号隔开，也可以点「从表格读」；留空时用下发记录，或文件夹里名为「应交名单」的表"
-PDF_RECV_NONE = "（不需要）"
+# 文件加密分发能收的文件（与 core.pdf_dist.SUPPORTED_EXTS 一致；GUI 不在启动时 import core）
+DIST_EXTS = (".pdf", ".docx", ".xlsx", ".pptx", ".docm", ".xlsm", ".pptm")
 
 # UI 泵用的「本轮没有此类消息」哨兵（不能用 None：扫描失败时 payload 可能为空）
 _MISSING = object()
@@ -163,13 +165,14 @@ FALLBACK_CONFIG = {
     "preserve_format": True,
     "keep_formulas": False,
     "auto_open_output": True,
-    # ── PDF 加密分发（v2.6）──
+    # ── 文件加密分发（v2.6 起 PDF，v2.10 起也收 Word/Excel/PPT；键名沿用 pdf_*）──
     "ui_mode": "excel",
     "pdf_input_paths": [],
     "pdf_mapping_path": "",
     "pdf_grid_column": "",
     "pdf_password_column": "",
     "pdf_receiver_column": "",
+    "pdf_encrypt": True,
     "pdf_watermark": True,
     "pdf_watermark_text": "{grid} {date}",
     "pdf_watermark_opacity": 0.15,
@@ -418,9 +421,9 @@ class App(_RootBase):
         ctk.CTkLabel(head, text="一键按部门、网格、工号拆分并打包分发；收回来一键汇总，还能查出谁没交、谁漏填",
                      font=ctk.CTkFont(size=12),
                      text_color=("gray30", "gray70")).pack(anchor="w", pady=(4, 0))
-        ctk.CTkLabel(head, text="保留原格式 · 多表合并汇总 · 查收通报 · PDF 加密分发",
+        ctk.CTkLabel(head, text="保留原格式 · 多表合并汇总 · 查收通报 · 文件加密分发",
                      font=ctk.CTkFont(size=11), text_color="gray").pack(anchor="w", pady=(1, 0))
-        # 功能模式切换：Excel 拆分（默认） / Excel 汇总（可选先查收） / PDF 按网格加密分发
+        # 功能模式切换：Excel 拆分（默认） / Excel 汇总（可选先查收） / 文件按网格加密分发
         self._mode_seg = ctk.CTkSegmentedButton(head, values=list(MODE_LABELS.values()),
                                                 command=self._on_mode_change,
                                                 selected_color=PRIMARY,
@@ -617,11 +620,13 @@ class App(_RootBase):
         self._after_pick()
 
     def _on_drop_pdfs(self, event):
-        """PDF 模式拖放：接受一批 PDF。"""
+        """文件加密分发模式拖放：接受一批 PDF / Word / Excel / PPT。"""
         paths = [p for p in self._parse_drop_paths(getattr(event, "data", ""))
-                 if p.lower().endswith(".pdf")]
+                 if p.lower().endswith(DIST_EXTS)]
         if not paths:
-            self._pdf_in_status.configure(text="⚠ 请拖入 PDF 文件", text_color=C_WARN)
+            self._pdf_in_status.configure(
+                text="⚠ 请拖入 PDF / Word / Excel / PPT 文件（.doc / .xls 老格式请先另存为新格式）",
+                text_color=C_WARN)
             return
         self._pdf_paths = [os.path.normpath(p) for p in paths]
         self._update_pdf_in_status()
@@ -1050,13 +1055,13 @@ class App(_RootBase):
         self._on_header_mode(self._header_seg.get())
         return f
 
-    # ── PDF 加密分发模式的步骤卡 ─────────────────────────
+    # ── 文件加密分发模式的步骤卡（内部名仍是 pdf，v2.10 起也收 Word/Excel/PPT）──
     def _build_pdf_step_input(self, parent):
-        card, _ = self._step_card(parent, 0, 1, "选择要分发的 PDF")
+        card, _ = self._step_card(parent, 0, 1, "选择要分发的文件")
 
         btns = ctk.CTkFrame(card, fg_color="transparent")
         btns.grid(row=1, column=0, padx=12, pady=(6, 2), sticky="w")
-        ctk.CTkButton(btns, text="📄 选 PDF 文件（可多选）", width=190,
+        ctk.CTkButton(btns, text="📄 选文件（PDF / Word / Excel / PPT，可多选）", width=300,
                       command=self._pick_pdfs).pack(side="left")
         _ghost_button(btns, text="清空", width=60,
                       command=self._clear_pdfs).pack(side="left", padx=(10, 0))
@@ -1068,7 +1073,7 @@ class App(_RootBase):
         self._update_pdf_in_status()
 
     def _build_pdf_step_map(self, parent):
-        card, _ = self._step_card(parent, 1, 2, "选择密码映射清单（Excel）")
+        card, _ = self._step_card(parent, 1, 2, "选择映射清单（Excel：网格 → 密码）")
 
         prow = ctk.CTkFrame(card, fg_color="transparent")
         prow.grid(row=1, column=0, padx=12, pady=(6, 2), sticky="ew")
@@ -1084,7 +1089,8 @@ class App(_RootBase):
         _ghost_button(prow, text="生成模板", width=90,
                       command=self._make_pdf_template).grid(row=0, column=2)
 
-        ctk.CTkLabel(card, text="清单里每行一个网格：网格名、专属密码，可选接收人；没有清单可点「生成模板」，没有密码列开始时可选自动生成随机密码",
+        ctk.CTkLabel(card, text="清单每行一个网格：网格名和专属密码（只加水印时不用密码）；"
+                                "有「接收人」列会自动抄进分发清单；没有密码列时开始前可自动生成",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED).grid(
             row=2, column=0, padx=12, pady=(2, 0), sticky="w")
 
@@ -1095,53 +1101,80 @@ class App(_RootBase):
         self._pdfgrid_menu = ctk.CTkOptionMenu(crow, variable=self._pdfgrid_var,
                                                values=[self._pdfgrid_var.get()], width=140)
         self._pdfgrid_menu.pack(side="left", padx=(6, 12))
-        ctk.CTkLabel(crow, text="密码列").pack(side="left")
+        self._pdfpwd_lbl = ctk.CTkLabel(crow, text="密码列")
+        self._pdfpwd_lbl.pack(side="left")
+        self._pdfpwd_lbl_color = self._pdfpwd_lbl.cget("text_color")
         self._pdfpwd_var = ctk.StringVar(value=self.cfg.get("pdf_password_column") or PDF_COL_PLACEHOLDER)
         self._pdfpwd_menu = ctk.CTkOptionMenu(crow, variable=self._pdfpwd_var,
                                               values=[self._pdfpwd_var.get()], width=140)
-        self._pdfpwd_menu.pack(side="left", padx=(6, 12))
-        ctk.CTkLabel(crow, text="接收人列").pack(side="left")
-        self._pdfrecv_var = ctk.StringVar(value=self.cfg.get("pdf_receiver_column") or PDF_RECV_NONE)
-        self._pdfrecv_menu = ctk.CTkOptionMenu(crow, variable=self._pdfrecv_var,
-                                               values=[self._pdfrecv_var.get()], width=140)
-        self._pdfrecv_menu.pack(side="left", padx=(6, 0))
+        self._pdfpwd_menu.pack(side="left", padx=(6, 0))
 
         self._pdf_map_status = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=11),
                                             text_color=C_MUTED, anchor="w")
         self._pdf_map_status.grid(row=4, column=0, padx=12, pady=(0, 6), sticky="w")
 
+        # 保护方式：加密、水印各自可选（v2.10，作者：有些人只要其中一个），至少留一个
         wm = ctk.CTkFrame(card)
         wm.grid(row=5, column=0, padx=12, pady=(2, 12), sticky="ew")
+        opts = ctk.CTkFrame(wm, fg_color="transparent")
+        opts.grid(row=0, column=0, padx=12, pady=(8, 4), sticky="w")
+        self._pdfenc_var = ctk.BooleanVar(value=self.cfg.get("pdf_encrypt", True))
+        ctk.CTkCheckBox(opts, text="加打开密码（每个网格一个）", variable=self._pdfenc_var,
+                        command=lambda: self._on_protect_toggle(self._pdfenc_var, self._pdfwm_var)
+                        ).pack(side="left")
         self._pdfwm_var = ctk.BooleanVar(value=self.cfg.get("pdf_watermark", True))
-        ctk.CTkCheckBox(wm, text="加网格专属水印（泄露可溯源）",
-                        variable=self._pdfwm_var,
-                        command=self._update_wm_state).grid(row=0, column=0, padx=12, pady=(8, 4), sticky="w")
+        ctk.CTkCheckBox(opts, text="加水印（仅 PDF，泄露可溯源）", variable=self._pdfwm_var,
+                        command=lambda: self._on_protect_toggle(self._pdfwm_var, self._pdfenc_var)
+                        ).pack(side="left", padx=(18, 0))
         wrow = ctk.CTkFrame(wm, fg_color="transparent")
         wrow.grid(row=1, column=0, padx=(38, 12), pady=(0, 8), sticky="w")
         ctk.CTkLabel(wrow, text="水印文字").pack(side="left")
         self._pdfwmtext_var = ctk.StringVar(value=self.cfg.get("pdf_watermark_text", "{grid} {date}"))
         self._pdfwmtext_entry = ctk.CTkEntry(wrow, textvariable=self._pdfwmtext_var, width=220)
         self._pdfwmtext_entry.pack(side="left", padx=(6, 8))
-        ctk.CTkLabel(wrow, text="{grid}＝网格名  {date}＝日期",
+        ctk.CTkLabel(wrow, text="{grid}＝网格名  {receiver}＝接收人  {date}＝日期",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED).pack(side="left")
+        if not (self._pdfenc_var.get() or self._pdfwm_var.get()):
+            self._pdfenc_var.set(True)    # 旧配置两项全关时兜底
+        self._update_wm_state()
+
+    def _on_protect_toggle(self, changed, other):
+        """加密 / 水印至少留一个：把最后一个勾掉时自动勾回，并说明原因。"""
+        if not changed.get() and not other.get():
+            changed.set(True)
+            self._pdf_map_status.configure(text="⚠ 加密和水印至少要选一个", text_color=C_WARN)
         self._update_wm_state()
 
     def _update_wm_state(self):
         self._pdfwmtext_entry.configure(state="normal" if self._pdfwm_var.get() else "disabled")
+        enc = "normal" if self._pdfenc_var.get() else "disabled"
+        self._pdfpwd_menu.configure(state=enc)
+        self._pdfpwd_lbl.configure(text_color=C_MUTED if enc == "disabled" else self._pdfpwd_lbl_color)
+        self._update_pdf_in_status()
 
     def _update_pdf_in_status(self):
         n = len(self._pdf_paths)
         if not n:
-            self._pdf_in_status.configure(text="还没有选择 PDF；每个网格都会拿到全部所选文件（各自密码+水印）",
-                                          text_color=C_MUTED)
+            self._pdf_in_status.configure(
+                text="还没有选择文件；每个网格都会拿到全部所选文件。PDF 可加密和加水印，Word / Excel / PPT 只加密",
+                text_color=C_MUTED)
             return
         names = [os.path.basename(p) for p in self._pdf_paths]
         shown = "、".join(names[:3]) + ("…" if n > 3 else "")
-        self._pdf_in_status.configure(text=f"✓ 已选 {n} 个：{shown}", text_color=C_OK)
-        self._update_pdf_preview()   # PDF 个数变化会改变「N 网格 × M PDF」预览
+        n_off = sum(not p.lower().endswith(".pdf") for p in self._pdf_paths)
+        enc = getattr(self, "_pdfenc_var", None)     # ①卡片先于②卡片搭，启动时还没有
+        if n_off and enc is not None and not enc.get():
+            self._pdf_in_status.configure(
+                text=f"✓ 已选 {n} 个：{shown}　⚠ 其中 {n_off} 个 Word / Excel / PPT 只能加密，"
+                     "只加水印时会跳过（要水印请先转成 PDF）", text_color=C_WARN)
+        else:
+            self._pdf_in_status.configure(text=f"✓ 已选 {n} 个：{shown}", text_color=C_OK)
+        self._update_pdf_preview()   # 文件个数变化会改变「N 网格 × M 文件」预览
 
     def _pick_pdfs(self):
-        paths = filedialog.askopenfilenames(filetypes=[("PDF 文件", "*.pdf")])
+        pats = " ".join("*" + e for e in DIST_EXTS)
+        paths = filedialog.askopenfilenames(filetypes=[("PDF / Word / Excel / PPT", pats),
+                                                       ("PDF 文件", "*.pdf")])
         if paths:
             self._pdf_paths = [os.path.normpath(p) for p in paths]
             self._update_pdf_in_status()
@@ -1152,7 +1185,7 @@ class App(_RootBase):
         self._update_pdf_in_status()
 
     def _suggest_pdf_output(self):
-        """PDF 模式的默认输出：第一个 PDF 所在目录下「分发结果」。规则同 _suggest_output。"""
+        """文件加密分发的默认输出：第一个文件所在目录下「分发结果」。规则同 _suggest_output。"""
         cur = self._output_var.get().strip()
         if cur and cur != self._out_auto:
             return
@@ -1190,7 +1223,7 @@ class App(_RootBase):
             try:
                 from core.pdf_dist import list_mapping_columns
                 cols = list_mapping_columns(p)
-                # 顺带数网格行数（分发预览「N 个网格 × M 个 PDF」用）；清单是小表，直接全读
+                # 顺带数网格行数（分发预览「N 个网格 × M 个文件」用）；清单是小表，直接全读
                 from openpyxl import load_workbook
                 wb = load_workbook(p, read_only=True)
                 try:
@@ -1219,21 +1252,17 @@ class App(_RootBase):
         self._pdfpwd_menu.configure(values=cols)
         if self._pdfpwd_var.get() not in cols:
             self._pdfpwd_var.set(self._recommend_col(cols, ("密码", "口令", "pwd", "密")) or cols[-1])
-        recv_values = [PDF_RECV_NONE] + cols
-        self._pdfrecv_menu.configure(values=recv_values)
-        # 「（不需要）」是未选状态的占位，也参与推荐；用户真不需要可再手动选回去
-        if self._pdfrecv_var.get() not in cols:
-            self._pdfrecv_var.set(self._recommend_col(cols, ("接收", "姓名", "负责人", "联系")) or PDF_RECV_NONE)
+        # 接收人列不再让用户选（v2.10）：它只抄进分发清单 / 水印 {receiver}，core 按列名自动认
         self._update_pdf_preview()
 
     def _update_pdf_preview(self):
-        """分发预览（C3）：选完清单和 PDF 后，直接告诉用户将产出多少个加密副本。"""
+        """分发预览（C3）：选完清单和文件后，直接告诉用户将产出多少份副本。"""
         g, m, cols_n = self._pdf_grid_rows, len(self._pdf_paths), self._pdf_n_cols
         if not cols_n or not g:
             return
-        extra = f"；{g} 个网格 × {m} 个 PDF = {g * m} 个加密副本" if m else ""
+        extra = f"；{g} 个网格 × {m} 个文件 = {g * m} 份副本" if m else ""
         self._pdf_map_status.configure(
-            text=f"✓ 识别到 {cols_n} 列 / {g} 个网格{extra}，确认三个下拉选的对不对",
+            text=f"✓ 识别到 {cols_n} 列 / {g} 个网格{extra}，确认下拉选的列对不对",
             text_color=C_OK)
 
     def _make_pdf_template(self):
@@ -1678,12 +1707,14 @@ class App(_RootBase):
         简单起见运行中也允许切界面，但开始按钮在运行中本来就是禁用态。"""
         for fr in (self._excel_frame, self._pdf_frame, self._collect_frame):
             fr.grid_remove()
-        # Excel 汇总的结果固定放在输入旁的「汇总结果」，也没有速度可选：这两行收起来
-        for w in (self._out_row, self._speed_row, self._speed_hint):
-            if self._mode == "collect":
-                w.grid_remove()
-            else:
+        # Excel 汇总的结果固定放在输入旁的「汇总结果」：收起保存位置；拆分速度只有拆分模式有意义
+        for w, show in ((self._out_row, self._mode != "collect"),
+                        (self._speed_row, self._mode == "excel"),
+                        (self._speed_hint, self._mode == "excel")):
+            if show:
                 w.grid()
+            else:
+                w.grid_remove()
         if self._mode == "collect":
             self._collect_frame.grid()
             check = self._col_check_var.get()
@@ -1700,7 +1731,7 @@ class App(_RootBase):
             if not self._running:
                 self._start_btn.configure(text="🔐 开始分发")
                 self._run_status.configure(
-                    text="完成 ① ② 后点「开始分发」；每个网格生成专属密码+水印的副本，并输出分发清单",
+                    text="完成 ① ② 后点「开始分发」；每个网格生成一份带专属密码 / 水印的副本，并输出分发清单",
                     text_color=C_MUTED)
         else:
             self._excel_frame.grid()
@@ -2167,7 +2198,6 @@ class App(_RootBase):
         pcol = "" if self._pcol_var.get() == COL_PLACEHOLDER else self._pcol_var.get()
         alias, _ = self._parse_alias()
 
-        recv = self._pdfrecv_var.get()
         return {
             "input_path":  self._input_var.get().strip(),
             "output_path": self._output_var.get().strip(),
@@ -2176,7 +2206,8 @@ class App(_RootBase):
             "pdf_mapping_path": self._pdf_map_var.get().strip(),
             "pdf_grid_column": "" if self._pdfgrid_var.get() == PDF_COL_PLACEHOLDER else self._pdfgrid_var.get(),
             "pdf_password_column": "" if self._pdfpwd_var.get() == PDF_COL_PLACEHOLDER else self._pdfpwd_var.get(),
-            "pdf_receiver_column": "" if recv in (PDF_RECV_NONE, PDF_COL_PLACEHOLDER) else recv,
+            "pdf_receiver_column": "",            # v2.10 起由 core 按列名自动认
+            "pdf_encrypt": self._pdfenc_var.get(),
             "pdf_watermark": self._pdfwm_var.get(),
             "pdf_watermark_text": self._pdfwmtext_var.get().strip() or "{grid} {date}",
             "pdf_watermark_opacity": self.cfg.get("pdf_watermark_opacity", 0.15),
@@ -2342,19 +2373,24 @@ class App(_RootBase):
     def _start_pdf(self):
         cfg = self._collect_config()
         if not cfg["pdf_input_paths"]:
-            messagebox.showwarning("先选择 PDF", "请先在第 ① 步选择要分发的 PDF 文件。")
+            messagebox.showwarning("先选择文件", "请先在第 ① 步选择要分发的文件。")
             return
         missing = [p for p in cfg["pdf_input_paths"] if not os.path.exists(p)]
         if missing:
-            messagebox.showwarning("PDF 不存在", "以下文件找不到了，请重新选择：\n" + "\n".join(missing[:3]))
+            messagebox.showwarning("文件不存在", "以下文件找不到了，请重新选择：\n" + "\n".join(missing[:3]))
+            return
+        if not cfg["pdf_encrypt"] and not any(p.lower().endswith(".pdf") for p in cfg["pdf_input_paths"]):
+            messagebox.showwarning("没有能加水印的文件",
+                                   "只加水印时只能处理 PDF；Word / Excel / PPT 只能加密。\n"
+                                   "请勾上「加打开密码」，或先把文件转成 PDF。")
             return
         if not cfg["pdf_mapping_path"] or not os.path.exists(cfg["pdf_mapping_path"]):
-            messagebox.showwarning("先选择映射清单", "请在第 ② 步选择「网格 → 密码」的 Excel 映射清单。")
+            messagebox.showwarning("先选择映射清单", "请在第 ② 步选择列出各网格的 Excel 映射清单。")
             return
         if not cfg["pdf_grid_column"]:
             messagebox.showwarning("先选择网格列", "请在第 ② 步选好「网格列」。\n如果下拉框没有内容，重新选一次映射清单。")
             return
-        if not cfg["pdf_password_column"]:
+        if cfg["pdf_encrypt"] and not cfg["pdf_password_column"]:
             # 没选密码列 → 提供自动生成随机密码（C2），另存新清单不改动原文件
             if not messagebox.askyesno("自动生成密码？",
                                        "没有选择密码列。要我为每个网格自动生成随机密码，\n"
@@ -2598,9 +2634,10 @@ class App(_RootBase):
                     t += f"，{s['grids_fail']} 个失败（详见处理详情）"
                     has_warn = True
                 if s.get("files"):
-                    t += f"，共 {s['files']} 个加密副本"
+                    t += f"，共 {s['files']} 份副本"
                 lines.append(t)
-                lines.append("🔒 分发清单含明文密码，只留给自己用，勿随文件一起发出去")
+                if s.get("encrypt", True):
+                    lines.append("🔒 分发清单含明文密码，只留给自己用，勿随文件一起发出去")
         else:
             if s.get("groups") is not None:
                 t = f"📊 拆出 {s['groups']} 个分组 · {s.get('files', '?')} 个文件 · {s.get('rows', '?')} 行"

@@ -153,6 +153,8 @@ FAQ 里「麒麟上启动报 GLIBC_2.xx not found 怎么办」已经写成用户
 - [ ] PDF 模式：日志出现「🔤 水印字体：...」；**打开输出 PDF，水印中文不是 `???`**
 - [ ] PDF 模式：日志显示 **AES-256**（确认该架构上 `cryptography` wheel 装上了，
       没有降级到 RC4-128）
+- [ ] 文件加密分发：选一个 xlsx 一起分发 → 输出的 xlsx 用 **WPS for Linux** 打开要求输密码，
+      输对能打开、内容和原表一样（验 msoffcrypto-tool 打进了包）
 - [ ] 负向：`ER_CJK_FONT=/etc/hostname`（真实文件但不是字体）→ 不崩，正常降级
 - [ ] 负向：卸掉中文字体 → ⚠ 带 `apt install` 补救提示，PDF 仍生成，不崩
 - [ ] fcitx 中文输入法能在「输出目录」输入框里打中文（验启动脚本的 `XMODIFIERS`）
@@ -285,6 +287,11 @@ onefile 版仍然提供，图个方便，但风险自担并在文档里提前说
 > 杀毒启发式的敏感面。它是 Python 生态最主流的加密库（官方签名 wheel、PyInstaller
 > 内置 hook），预期风险可控，但**引入后的第一个版本要重点做本节的 VirusTotal 检查**，
 > 对比上一版检出数是否明显上升；若国内主流引擎出现新误报，按第 4 步申诉处理。
+
+> **文件加密分发引入 msoffcrypto-tool 后（2026-10，v2.10）**：它和依赖 olefile 都是纯 Python
+> （MIT / BSD，合计不到 1 MB），加密走已经打进包的 cryptography，不新增原生二进制面；
+> 但「会给 Office 文件加密的程序」是勒索软件启发式会看的特征之一，v2.10.0 发版时按本节
+> 做一次 VirusTotal 对比检查。
 
 > **拖拽功能引入 tkinterdnd2 后（2026-09，v2.7）**：tkinterdnd2 自带 tkdnd 原生 dll
 > （PyInstaller 由 `--collect-all tkinterdnd2` 收进产物），又增加一块原生二进制面。

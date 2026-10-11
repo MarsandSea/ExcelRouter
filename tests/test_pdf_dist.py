@@ -265,6 +265,124 @@ def test_fill_random_passwords_reuse_existing_blank_col(tmp_path):
     assert len(pw) == 2 and all(p and len(p) == 8 for p in pw.values())   # 密码可读回
 
 
+# ---------- 文件加密分发：Office 加密、加密/水印各自可选、接收人（v2.10）----------
+
+def _make_xlsx(path):
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "SECRET-CELL"
+    wb.save(path)
+
+
+def _open_office(path, password):
+    import io
+    import msoffcrypto
+    with open(path, "rb") as f:
+        of = msoffcrypto.OfficeFile(f)
+        assert of.is_encrypted()
+        of.load_key(password=password)
+        buf = io.BytesIO()
+        of.decrypt(buf)
+    return buf
+
+
+def test_office_files_get_open_password(workspace):
+    """docx/xlsx 只加密：对的密码能打开、内容不变；错的密码打不开。PDF 照常加密 + 水印。"""
+    pytest.importorskip("msoffcrypto")
+    tmp, cfg = workspace
+    x = tmp / "名单.xlsx"
+    _make_xlsx(x)
+    logs = []
+    cfg = dict(cfg, pdf_input_paths=cfg["pdf_input_paths"] + [str(x)])
+    assert run_pdf_dist(cfg, log_fn=logs.append)
+    enc = tmp / "out" / "GridA" / "名单.xlsx"
+    wb = openpyxl.load_workbook(_open_office(enc, "001234"))
+    assert wb.active["A1"].value == "SECRET-CELL"
+    import zipfile
+    from msoffcrypto.exceptions import InvalidKeyError
+    with pytest.raises(InvalidKeyError):
+        _open_office(enc, "wrong")
+    with pytest.raises(zipfile.BadZipFile):
+        openpyxl.load_workbook(enc)               # 不输密码就打不开
+    assert any("水印只加在 PDF 上" in m for m in logs)
+    r = PdfReader(tmp / "out" / "GridA" / "report.pdf")
+    assert r.decrypt("001234") != 0 and "GridA" in _text_of(r.pages[0])
+    names = {row[1] for row in _read_manifest(tmp / "out")}
+    assert any(n.endswith("名单.xlsx") for n in names)
+
+
+def test_watermark_only_needs_no_password(tmp_path):
+    """只加水印：清单不要密码列；PDF 不加密；Office 文件跳过并说明；清单不写密码列。"""
+    src = tmp_path / "report.pdf"
+    _make_pdf(src)
+    x = tmp_path / "表.xlsx"
+    _make_xlsx(x)
+    mp = tmp_path / "map.xlsx"
+    _make_mapping(mp, [("GridA", "Zhang")], headers=("GridName", "接收人"))
+    logs = []
+    out = run_pdf_dist({
+        "pdf_input_paths": [str(src), str(x)], "pdf_mapping_path": str(mp),
+        "pdf_grid_column": "GridName", "pdf_encrypt": False, "pdf_watermark": True,
+        "pdf_watermark_text": "{receiver} {date}", "output_path": str(tmp_path / "out"),
+    }, log_fn=logs.append)
+    assert out
+    r = PdfReader(tmp_path / "out" / "GridA" / "report.pdf")
+    assert not r.is_encrypted
+    assert "Zhang" in _text_of(r.pages[0])        # {receiver} 印上了接收人
+    assert not (tmp_path / "out" / "GridA" / "表.xlsx").exists()
+    assert any("不能加水印" in m for m in logs)
+    assert not any("明文密码" in m for m in logs)
+    wb = openpyxl.load_workbook(tmp_path / "out" / MANIFEST_NAME)
+    assert [c.value for c in wb.active[1]] == ["网格", "文件名", "接收人", "页数", "状态"]
+    assert wb.active["C2"].value == "Zhang"       # 接收人列自动认出
+
+
+def test_encrypt_only_and_neither(workspace):
+    tmp, cfg = workspace
+    run_pdf_dist(dict(cfg, pdf_watermark=False), log_fn=lambda m: None)
+    r = PdfReader(tmp / "out" / "GridA" / "report.pdf")
+    assert r.decrypt("001234") != 0 and "GridA" not in _text_of(r.pages[0])
+    logs = []
+    assert run_pdf_dist(dict(cfg, pdf_watermark=False, pdf_encrypt=False),
+                        log_fn=logs.append) is None
+    assert any("至少要选一个" in m for m in logs)
+
+
+def test_receiver_column_guessed_when_not_given(workspace):
+    tmp, cfg = workspace
+    mp = tmp / "map2.xlsx"
+    _make_mapping(mp, [("GridA", "001234", "Zhang")], headers=("GridName", "Pwd", "联系人"))
+    logs = []
+    run_pdf_dist(dict(cfg, pdf_mapping_path=str(mp), pdf_receiver_column=""), log_fn=logs.append)
+    assert any("自动认出「联系人」" in m for m in logs)
+    assert _read_manifest(tmp / "out")[0][3] == "Zhang"
+
+
+def test_old_office_and_locked_office_skipped(tmp_path):
+    """老格式 .xls 和本身带密码的 xlsx 跳过并说明，不中断其它文件。"""
+    pytest.importorskip("msoffcrypto")
+    from msoffcrypto.format.ooxml import OOXMLFile
+    ok = tmp_path / "ok.xlsx"
+    _make_xlsx(ok)
+    locked = tmp_path / "locked.xlsx"
+    with open(ok, "rb") as f, open(locked, "wb") as g:
+        OOXMLFile(f).encrypt("x", g)
+    old = tmp_path / "old.xls"
+    old.write_bytes(b"\xd0\xcf\x11\xe0")
+    mp = tmp_path / "map.xlsx"
+    _make_mapping(mp, [("G1", "111", "")])
+    logs = []
+    out = run_pdf_dist({
+        "pdf_input_paths": [str(ok), str(locked), str(old)], "pdf_mapping_path": str(mp),
+        "pdf_grid_column": "GridName", "pdf_password_column": "Pwd",
+        "output_path": str(tmp_path / "out"),
+    }, log_fn=logs.append)
+    assert out
+    assert (tmp_path / "out" / "G1" / "ok.xlsx").exists()
+    assert any("locked.xlsx" in m and "本身带密码" in m for m in logs)
+    assert any("old.xls" in m and "老格式" in m for m in logs)
+    assert not any("水印字体" in m for m in logs)    # 只有 Office 文件，不找字体
+
+
 # ---------- 中文字体探测（v2.8.0 麒麟适配）----------
 # 这一节补的是本文件开头注明的空白：中文水印此前在任何平台都没有测试覆盖。
 

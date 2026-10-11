@@ -6,3 +6,4 @@ xlrd>=2.0.1
 pypdf>=6.0.0
 fpdf2>=2.8.0
 cryptography>=42.0.0
+msoffcrypto-tool>=5.0.0

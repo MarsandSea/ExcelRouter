@@ -108,7 +108,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PDF_DEPS='pypdf|fpdf2|cryptography'
+          # msoffcrypto-tool：v2.10 起给 Word/Excel/PPT 加打开密码，core 里延迟导入，没装只跳过 Office 文件
+          PDF_DEPS='pypdf|fpdf2|cryptography|msoffcrypto-tool'
           {
             echo "# excelrouter skill 运行依赖 —— 只做 Excel 拆分时，只需要下面这 3 个"
             echo "# PDF 加密分发才需要的 pypdf / fpdf2 / cryptography 已拆到 requirements-pdf.txt，"
@@ -137,8 +138,8 @@ jobs:
             exit 1
           fi
           n="$(grep -ciE "^(${PDF_DEPS})" "$REQ_PDF_FILE" || true)"
-          if [ "${n:-0}" -lt 3 ]; then
-            echo "::error::requirements-pdf.txt 只有 $n 个依赖，期望 3 个（上游可能改了包名）"
+          if [ "${n:-0}" -lt 4 ]; then
+            echo "::error::requirements-pdf.txt 只有 $n 个依赖，期望 4 个（上游可能改了包名）"
             exit 1
           fi
 

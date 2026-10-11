@@ -1,13 +1,17 @@
 """
-Excel 智能拆分工具 - PDF 按网格加密分发
+Excel 智能拆分工具 - 文件按网格加密分发（模块名沿用 pdf_dist，是对外契约）
 Copyright (c) 2026 AbeLin
 MIT License
 
-把同一批 PDF 按「网格 → 密码」映射清单，为每个网格生成一份
-带专属打开密码 + 专属水印（可溯源）的副本，并输出分发清单。
+把同一批文件按「网格 → 密码」映射清单，为每个网格生成一份副本，并输出分发清单：
+- PDF：专属打开密码 + 专属水印（可溯源），两者可各自关掉；
+- Word / Excel / PPT（docx / xlsx / pptx 等新格式）：只加打开密码。Office 没有
+  靠得住的水印（Excel 根本没有水印功能），要水印的请先转成 PDF——v2.10 作者定的。
 
 依赖：pypdf（读写/加密）、fpdf2（生成水印页）、cryptography（AES-256 后端，
-缺失时降级 RC4-128 并警告）。openpyxl 读映射表、写分发清单。
+缺失时降级 RC4-128 并警告）、msoffcrypto-tool（Office 加密，**延迟导入**：
+没装时只跳过 Office 文件，PDF 照常——下游技能不一定装了它）。
+openpyxl 读映射表、写分发清单。
 """
 
 import io
@@ -17,6 +21,7 @@ import secrets
 import shutil
 import subprocess
 import time
+import zipfile
 
 from openpyxl import Workbook, load_workbook
 from pypdf import PdfReader, PdfWriter
@@ -24,6 +29,14 @@ from pypdf import PdfReader, PdfWriter
 from core.utils import safe_filename, soft_clean
 
 MANIFEST_NAME = "分发清单.xlsx"
+
+# Office 新格式（OOXML，本质是 zip）才能加打开密码；老格式要先另存
+OFFICE_EXTS = (".docx", ".docm", ".xlsx", ".xlsm", ".pptx", ".pptm")
+OLD_OFFICE_EXTS = (".doc", ".xls", ".ppt", ".et", ".wps", ".dps")
+SUPPORTED_EXTS = (".pdf",) + OFFICE_EXTS
+
+# 清单里没指定接收人列时，按这些列名自动认（只抄进分发清单、可用于水印 {receiver}）
+_RECEIVER_HINTS = ("接收人", "收件人", "联系人", "负责人", "姓名")
 
 # Windows 水印字体候选（保持 v2.7.2 原样，只在 Windows 分支用）
 _FONT_CANDIDATES = ["simhei.ttf", "Deng.ttf", "msyhbd.ttf", "simfang.ttf", "simkai.ttf"]
@@ -99,12 +112,24 @@ def _cell_str(v):
     return soft_clean(v)
 
 
-def read_mapping(xlsx_path, grid_col, password_col, receiver_col=""):
+def guess_receiver_column(header, exclude=()):
+    """在清单表头里认接收人列（接收人 / 联系人 / 姓名…），认不出返回空串。"""
+    for hint in _RECEIVER_HINTS:
+        for h in header:
+            if h and h not in exclude and hint in h:
+                return h
+    return ""
+
+
+def read_mapping(xlsx_path, grid_col, password_col, receiver_col="", need_password=True):
     """读「网格 → 密码（→ 接收人）」映射。
 
     返回 (rows, warnings)：rows 为 [{"grid", "password", "receiver"}]，
     warnings 为需要记进日志的问题（空网格/空密码行跳过、重复网格覆盖）。
+    need_password=False（只加水印）时不要求密码列，密码一律为空串。
     """
+    if not need_password:
+        password_col = ""
     wb = load_workbook(xlsx_path, read_only=True, data_only=True)
     try:
         ws = wb.worksheets[0]
@@ -119,13 +144,16 @@ def read_mapping(xlsx_path, grid_col, password_col, receiver_col=""):
                                   (receiver_col, "receiver")):
                     if name and name in header:
                         idx[col] = header.index(name)
-                if "grid" not in idx or "password" not in idx:
-                    missing = [n for n, c in ((grid_col, "grid"), (password_col, "password"))
-                               if c not in idx]
+                need = [(grid_col, "grid")] + ([(password_col, "password")] if need_password else [])
+                missing = [n or ("密码列" if c == "password" else "网格列")
+                           for n, c in need if c not in idx]
+                if missing:
                     raise ValueError(f"映射清单里找不到列：{'、'.join(missing)}")
                 continue
             grid = _cell_str(row[idx["grid"]] if idx["grid"] < len(row) else None)
-            pwd = _cell_str(row[idx["password"]] if idx["password"] < len(row) else None)
+            pwd = ""
+            if "password" in idx:
+                pwd = _cell_str(row[idx["password"]] if idx["password"] < len(row) else None)
             recv = ""
             if "receiver" in idx and idx["receiver"] < len(row):
                 recv = _cell_str(row[idx["receiver"]])
@@ -134,7 +162,7 @@ def read_mapping(xlsx_path, grid_col, password_col, receiver_col=""):
             if not grid:
                 warnings.append(f"第 {r} 行网格为空，已跳过")
                 continue
-            if not pwd:
+            if need_password and not pwd:
                 warnings.append(f"第 {r} 行「{grid}」密码为空，已跳过")
                 continue
             if grid in seen:
@@ -179,7 +207,8 @@ def write_mapping_template(path):
 
     note = wb.create_sheet("填写说明")
     for line in [
-        "每行一个网格：网格名必填，密码为该网格的专属打开密码，接收人选填（仅方便照着清单群发）。",
+        "每行一个网格：网格名必填，密码为该网格的专属打开密码（只加水印时可不填），"
+        "接收人选填（抄进分发清单方便照着发；水印文字里写 {receiver} 可印上接收人）。",
         "密码建议 8 位以上，不要用 123456、手机号这类容易猜到的密码。",
         "示例行（第 2、3 行）使用前请删除。",
         "没有密码思路？可以不选密码列，工具会在开始前询问是否自动生成随机密码。",
@@ -373,6 +402,7 @@ def _encrypt_algorithm(log_fn):
 def _stamp_and_encrypt(reader, out_path, wm_text, password, algorithm,
                        *, opacity=0.15, angle=45, font_path=None):
     """把 reader 的所有页盖上水印、设打开密码，写到 out_path。返回页数。
+    wm_text 为空不盖水印，password 为空不加密（两者至少有一个，由上层保证）。
 
     writer 每个网格都要新建：pypdf 的 merge_page 会就地修改页对象，
     复用会导致水印跨网格叠加。append(reader) 会把页深拷贝进 writer，
@@ -390,34 +420,66 @@ def _stamp_and_encrypt(reader, out_path, wm_text, password, algorithm,
                                            opacity=opacity, font_path=font_path)
                 wm_readers[k] = PdfReader(io.BytesIO(data))
             page.merge_page(wm_readers[k].pages[0])
-    writer.encrypt(user_password=password, algorithm=algorithm)
+    if password:
+        writer.encrypt(user_password=password, algorithm=algorithm)
     with open(out_path, "wb") as f:
         writer.write(f)
     return len(writer.pages)
 
 
-def write_manifest(entries, out_path):
+def _office_encryptor():
+    """返回 msoffcrypto 的 OOXMLFile 类；没装返回 None（只跳过 Office 文件）。"""
+    try:
+        from msoffcrypto.format.ooxml import OOXMLFile
+        return OOXMLFile
+    except ImportError:
+        return None
+
+
+def _encrypt_office(ooxml_cls, data, out_path, password):
+    """给 docx/xlsx/pptx 加打开密码（ECMA-376 Agile，AES-256），写到 out_path。
+
+    直接对文件字节加密，不经 openpyxl 重写——原文件里的图表、图片、宏都原样保留。
+    """
+    with open(out_path, "wb") as f:
+        ooxml_cls(io.BytesIO(data)).encrypt(password, f)
+
+
+def write_manifest(entries, out_path, with_password=True):
     """写分发清单：网格 | 文件名 | 密码 | 接收人 | 页数 | 状态。
 
     密码列强制文本格式，防止 Excel 把 001234 显示成 1234。
     清单含明文密码——只给分发人自己用，别随文件一起发出去。
+    with_password=False（只加水印）时不写密码列。
     """
     wb = Workbook()
     ws = wb.active
     ws.title = "分发清单"
-    ws.append(["网格", "文件名", "密码", "接收人", "页数", "状态"])
+    cols = ["网格", "文件名", "密码", "接收人", "页数", "状态"]
+    widths = [18, 40, 16, 14, 8, 24]
+    if not with_password:
+        del cols[2], widths[2]
+    ws.append(cols)
     for e in entries:
-        ws.append([e["grid"], e.get("file", ""), e["password"],
-                   e.get("receiver", ""), e.get("pages", ""), e.get("status", "")])
-        ws.cell(row=ws.max_row, column=3).number_format = "@"
-    widths = {"A": 18, "B": 40, "C": 16, "D": 14, "E": 8, "F": 24}
-    for col, w in widths.items():
-        ws.column_dimensions[col].width = w
+        vals = [e["grid"], e.get("file", ""), e.get("password", ""),
+                e.get("receiver", ""), e.get("pages", ""), e.get("status", "")]
+        if not with_password:
+            del vals[2]
+        ws.append(vals)
+        if with_password:
+            ws.cell(row=ws.max_row, column=3).number_format = "@"
+    for i, w in enumerate(widths):
+        ws.column_dimensions["ABCDEF"[i]].width = w
     wb.save(out_path)
 
 
 def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
-    """PDF 加密分发主流程。签名与 run_split 一致，GUI 队列泵直接复用。
+    """文件加密分发主流程。签名与 run_split 一致，GUI 队列泵直接复用。
+
+    config 键沿用 pdf_* 前缀（对外契约）：pdf_input_paths 里可以混放 PDF 和
+    docx/xlsx/pptx；pdf_encrypt（默认 True）/ pdf_watermark（默认 True）各自可关，
+    但至少开一个。水印只加在 PDF 上；Office 文件只加密，只加水印时跳过并说明。
+    pdf_receiver_column 留空时按列名自动认接收人列；水印文字支持 {receiver}。
 
     单个网格/文件失败不中断整体，记日志继续（项目错误处理约定）。
     返回输出根目录；一个都没成功时返回 None。
@@ -426,39 +488,103 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
     progress_fn = progress_fn or _noop
     stop_flag = stop_flag or (lambda: False)
 
-    pdf_paths = [p for p in config.get("pdf_input_paths", []) if p]
+    in_paths = [p for p in config.get("pdf_input_paths", []) if p]
     mapping_path = config.get("pdf_mapping_path", "")
     output_root = config.get("output_path", "")
-    if not pdf_paths:
-        log_fn("❌ 没有选择要分发的 PDF 文件")
+    encrypt_on = config.get("pdf_encrypt", True)
+    watermark_on = config.get("pdf_watermark", True)
+    if not in_paths:
+        log_fn("❌ 没有选择要分发的文件")
         return None
-    for p in pdf_paths:
+    for p in in_paths:
         if not os.path.exists(p):
-            log_fn(f"❌ 找不到 PDF：{p}")
+            log_fn(f"❌ 找不到文件：{p}")
             return None
+    if not encrypt_on and not watermark_on:
+        log_fn("❌ 「加密」和「水印」至少要选一个")
+        return None
     if not mapping_path or not os.path.exists(mapping_path):
         log_fn("❌ 找不到映射清单文件")
         return None
     if not output_root:
-        output_root = os.path.join(os.path.dirname(pdf_paths[0]), "分发结果")
+        output_root = os.path.join(os.path.dirname(in_paths[0]), "分发结果")
 
-    rows, warnings = read_mapping(
-        mapping_path,
-        config.get("pdf_grid_column", ""),
-        config.get("pdf_password_column", ""),
-        config.get("pdf_receiver_column", ""),
-    )
+    grid_col = config.get("pdf_grid_column", "")
+    password_col = config.get("pdf_password_column", "")
+    receiver_col = config.get("pdf_receiver_column", "")
+    if not receiver_col:
+        try:
+            receiver_col = guess_receiver_column(list_mapping_columns(mapping_path),
+                                                 exclude=(grid_col, password_col))
+        except Exception:
+            receiver_col = ""
+        if receiver_col:
+            log_fn(f"👤 接收人列：自动认出「{receiver_col}」（抄进分发清单）")
+    try:
+        rows, warnings = read_mapping(mapping_path, grid_col, password_col,
+                                      receiver_col, need_password=encrypt_on)
+    except ValueError as e:
+        log_fn(f"❌ {e}")
+        return None
     for w in warnings:
         log_fn(f"⚠ 映射清单：{w}")
     if not rows:
-        log_fn("❌ 映射清单里没有有效的「网格 + 密码」行")
+        log_fn("❌ 映射清单里没有有效的「网格 + 密码」行" if encrypt_on
+               else "❌ 映射清单里没有有效的网格行")
         return None
-    log_fn(f"📋 映射清单：{len(rows)} 个网格；待分发 PDF：{len(pdf_paths)} 个")
 
-    watermark_on = config.get("pdf_watermark", True)
     wm_template = config.get("pdf_watermark_text", "{grid} {date}") or "{grid} {date}"
     opacity = float(config.get("pdf_watermark_opacity", 0.15))
     angle = float(config.get("pdf_watermark_angle", 45))
+
+    # 逐个看输入：PDF 开一个 reader 跨网格复用（writer 每网格重建，见 _stamp_and_encrypt）；
+    # Office 读一次字节跨网格复用
+    pdfs, offices = {}, {}
+    ooxml_cls = None
+    for p in in_paths:
+        name = os.path.basename(p)
+        ext = os.path.splitext(p)[1].lower()
+        try:
+            if ext == ".pdf":
+                r = PdfReader(p)
+                if r.is_encrypted:
+                    log_fn(f"⚠ 「{name}」本身带密码，无法处理，已跳过（请先解密另存）")
+                    continue
+                pdfs[p] = r
+            elif ext in OFFICE_EXTS:
+                if not encrypt_on:
+                    log_fn(f"⚠ 「{name}」：Word / Excel / PPT 只能加密、不能加水印，已跳过"
+                           "（需要水印请先转成 PDF）")
+                    continue
+                if ooxml_cls is None:
+                    ooxml_cls = _office_encryptor() or False
+                    if not ooxml_cls:
+                        log_fn("⚠ 未安装 msoffcrypto-tool，Word / Excel / PPT 文件跳过"
+                               "（pip install msoffcrypto-tool）")
+                if not ooxml_cls:
+                    continue
+                with open(p, "rb") as f:
+                    data = f.read()
+                if not zipfile.is_zipfile(io.BytesIO(data)):
+                    log_fn(f"⚠ 「{name}」本身带密码或文件已损坏，已跳过（请先去掉密码另存）")
+                    continue
+                offices[p] = data
+            elif ext in OLD_OFFICE_EXTS:
+                log_fn(f"⚠ 「{name}」是老格式，加不了密码，已跳过"
+                       "（请用 Word / Excel / WPS 另存为 .docx / .xlsx / .pptx）")
+            else:
+                log_fn(f"⚠ 「{name}」不是 PDF / Word / Excel / PPT，已跳过")
+        except Exception as e:
+            log_fn(f"⚠ 读取「{name}」失败：{e}，已跳过")
+    sources = list(pdfs) + list(offices)
+    if not sources:
+        log_fn("❌ 没有可处理的文件")
+        return None
+    if not pdfs:
+        watermark_on = False          # 只有 Office 文件：没有能加水印的，也不必找字体
+    elif watermark_on and offices:
+        log_fn("💧 水印只加在 PDF 上；Word / Excel / PPT 只加密（需要水印请先转成 PDF）")
+
     font_path = None
     if watermark_on:
         font_path = _find_cjk_font()
@@ -469,28 +595,14 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
                    "Windows：确认系统字体没被精简；"
                    "Linux（麒麟/UOS）：sudo apt install -y fonts-wqy-zenhei（或 fonts-noto-cjk）；"
                    "也可以设环境变量 ER_CJK_FONT 指向一个 .ttf/.otf/.ttc 文件")
+    algorithm = _encrypt_algorithm(log_fn) if encrypt_on and pdfs else "AES-256"
+    what = "、".join(x for x, on in (("加密", encrypt_on), ("加水印", watermark_on)) if on)
+    log_fn(f"📋 映射清单：{len(rows)} 个网格；待分发文件：{len(sources)} 个（{what}）")
 
-    algorithm = _encrypt_algorithm(log_fn)
     os.makedirs(output_root, exist_ok=True)
     date_str = time.strftime("%Y-%m-%d")
-
-    # 每个源 PDF 只开一个 reader，跨网格复用（writer 每网格重建，见 _stamp_and_encrypt）
-    readers = {}
-    for p in pdf_paths:
-        try:
-            r = PdfReader(p)
-            if r.is_encrypted:
-                log_fn(f"⚠ 「{os.path.basename(p)}」本身带密码，无法处理，已跳过（请先解密另存）")
-                continue
-            readers[p] = r
-        except Exception as e:
-            log_fn(f"⚠ 读取「{os.path.basename(p)}」失败：{e}，已跳过")
-    if not readers:
-        log_fn("❌ 没有可处理的 PDF")
-        return None
-
     entries = []
-    total = len(rows) * len(readers)
+    total = len(rows) * len(sources)
     done = 0
     ok_grids, fail_grids = 0, 0
     stopped = False
@@ -499,38 +611,42 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
             log_fn("⏹ 已停止，剩余网格未处理")
             stopped = True
             break
-        grid, password, receiver = row["grid"], row["password"], row["receiver"]
+        grid, receiver = row["grid"], row["receiver"]
+        password = row["password"] if encrypt_on else ""
         grid_dir = os.path.join(output_root, safe_filename(grid))
-        wm_text = wm_template.replace("{grid}", grid).replace("{date}", date_str) \
-            if watermark_on else ""
+        wm_text = (wm_template.replace("{grid}", grid).replace("{date}", date_str)
+                   .replace("{receiver}", receiver or grid)) if watermark_on else ""
         grid_ok = True
-        for src, reader in readers.items():
+        for src in sources:
             base = safe_filename(os.path.basename(src))
             out_path = os.path.join(grid_dir, base)
+            entry = {"grid": grid, "password": password, "receiver": receiver,
+                     "file": os.path.relpath(out_path, output_root)}
             try:
                 os.makedirs(grid_dir, exist_ok=True)
-                pages = _stamp_and_encrypt(reader, out_path, wm_text, password, algorithm,
-                                           opacity=opacity, angle=angle, font_path=font_path)
-                entries.append({"grid": grid, "password": password, "receiver": receiver,
-                                "file": os.path.relpath(out_path, output_root),
-                                "pages": pages, "status": "✅ 完成"})
+                if src in pdfs:
+                    entry["pages"] = _stamp_and_encrypt(
+                        pdfs[src], out_path, wm_text, password, algorithm,
+                        opacity=opacity, angle=angle, font_path=font_path)
+                else:
+                    _encrypt_office(ooxml_cls, offices[src], out_path, password)
+                entry["status"] = "✅ 完成"
             except Exception as e:
                 grid_ok = False
                 log_fn(f"❌ 「{grid}」× {base} 失败：{e}")
-                entries.append({"grid": grid, "password": password, "receiver": receiver,
-                                "file": os.path.relpath(out_path, output_root),
-                                "status": f"失败：{e}"})
+                entry["status"] = f"失败：{e}"
+            entries.append(entry)
             done += 1
             progress_fn(done / total * 0.95)
         if grid_ok:
             ok_grids += 1
-            log_fn(f"🔐 {grid} → {len(readers)} 个文件已加密")
+            log_fn(f"{'🔐' if encrypt_on else '💧'} {grid} → {len(sources)} 个文件已{what}")
         else:
             fail_grids += 1
 
     manifest_path = os.path.join(output_root, MANIFEST_NAME)
     try:
-        write_manifest(entries, manifest_path)
+        write_manifest(entries, manifest_path, with_password=encrypt_on)
         log_fn(f"📄 分发清单已生成：{MANIFEST_NAME}")
     except Exception as e:
         log_fn(f"⚠ 分发清单写入失败：{e}")
@@ -540,7 +656,8 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
         log_fn(f"⏹ 已停止：完成 {ok_grids} 个网格")
     else:
         log_fn(f"✅ 完成：{ok_grids} 个网格成功" + (f"，{fail_grids} 个失败" if fail_grids else ""))
-    log_fn("🔒 提醒：分发清单里有明文密码，只留给自己用，不要随文件一起发出去")
+    if encrypt_on:
+        log_fn("🔒 提醒：分发清单里有明文密码，只留给自己用，不要随文件一起发出去")
 
     # 机器可读收尾行（v2.7）：GUI 提取后渲染完成摘要；追加式，不改返回值与契约。
     summary = {
@@ -548,6 +665,8 @@ def run_pdf_dist(config, log_fn=None, progress_fn=None, stop_flag=None):
         "grids_ok": ok_grids,
         "grids_fail": fail_grids,
         "files": done,
+        "encrypt": encrypt_on,
+        "watermark": watermark_on,
         "stopped": stopped,
         "output": output_root if ok_grids else None,
         "manifest": manifest_path if ok_grids else None,
