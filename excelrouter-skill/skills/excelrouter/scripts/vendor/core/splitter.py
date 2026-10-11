@@ -977,6 +977,18 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
             _log(f"  …已保存 {j + 1}/{n_out}")
         time.sleep(0.002)   # 让出 GIL，保存阶段保持界面响应
 
+    # ---------- 让对方填写的列（v2.10，选填）：标黄、锁定其余列、写下发记录 ----------
+    # 必须在打包之前做，ZIP 里才是可以直接发出去的「待填写」版本。
+    issued = False
+    if config.get('fill_columns') and saved and not stopped:
+        try:
+            from core.collect import prepare_issue
+            done = [((key[2] if key[0] == '到人' else key[1]), ob.save_path, key[0] == '汇总')
+                    for key, ob in outputs.items() if os.path.exists(ob.save_path)]
+            issued = bool(prepare_issue(output_path, done, config, _log))
+        except Exception as e:
+            _log(f"  ⚠️ 标出填写列失败（拆分结果不受影响）：{e}")
+
     # ---------- 对每个生成了文件夹的主取值打包 ZIP（方便分发） ----------
     zips = 0
     if make_zip and not single_file:
@@ -1023,6 +1035,8 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         "stopped": stopped,
         "output": output_path,
     }
+    if issued:
+        summary["issued"] = True      # 写了下发记录：GUI 据此提示「收回来后用回收汇总查」
     _log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
 
     return output_path
