@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 check_clawhub.py —— 核实 ExcelRouter 在 ClawHub 上的发布/审核状态。
 

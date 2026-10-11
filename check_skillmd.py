@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """SKILL.md frontmatter 预检 —— 发布前拦掉「静默降级」的元数据问题。
 
 为什么要这个脚本（2026-09-15 踩坑）：

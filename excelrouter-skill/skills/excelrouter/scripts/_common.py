@@ -18,30 +18,6 @@ import os
 import sys
 
 
-def _pin_native_threads() -> None:
-    """Windows 上限制 numpy/OpenBLAS 的线程数，绕开内存分配失败导致的崩溃。
-
-    背景：Windows 某些环境下 numpy 底层的 OpenBLAS 默认开多线程，进程会直接崩在
-    `Memory allocation` / `Intel MKL` 报错上，与用户数据无关、也不是本工具的 bug。
-    单线程即可规避。
-
-    两个关键约束：
-    1. 必须在 **numpy 被导入之前** 设置才生效——BLAS 在加载时读这两个变量。
-       所以放在本模块顶层：所有 er_*.py 都把 `from _common import ...` 作为第一个
-       非标准库导入，排在对 pandas / openpyxl / core.* 的导入之前。
-    2. 用 setdefault：**用户自己设过就不覆盖**。想要多线程的人自己设即可。
-
-    只在 Windows 收紧；其他平台不动，避免无谓地拖慢本来正常的 numpy。
-    """
-    if os.name != "nt":
-        return
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-    # 同一进程里混进两份 OpenMP 运行时时的经典报错（OMP: Error #15）也一并兜住
-    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-
-
-_pin_native_threads()
-
 _VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
 
 # 上游 config/default_config.json 的镜像（截至上游 v2.7.0 tag），外加本 CLI 自有的
@@ -139,7 +115,7 @@ def eprint(msg):
 
 _SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 国内办公网络直连 pypi.org 很慢（实测下 pandas+numpy 两分钟没装完）。按顺序试，失败即换下一个。
+# 国内办公网络直连 pypi.org 很慢（v2.x 时实测 pandas+numpy 两分钟没装完）。按顺序试，失败即换下一个。
 # 2026-10 公司网络实测索引响应：腾讯云 0.3s、阿里云 1.5s、清华 6s（pip 直接报 versions: none）、pypi.org 5.7s。
 _PIP_MIRRORS = (
     "https://mirrors.cloud.tencent.com/pypi/simple",
@@ -147,8 +123,9 @@ _PIP_MIRRORS = (
 )
 _PIP_MIRROR = _PIP_MIRRORS[0]  # 报错提示里给用户手动用的那个
 
-_EXCEL_DEPS = (("pandas", "pandas"), ("openpyxl", "openpyxl"), ("xlrd", "xlrd"))
-_LITE_DEPS = (("openpyxl", "openpyxl"), ("xlrd", "xlrd"))   # 汇总 / 查收：core/collect.py 不用 pandas
+# v3.0 起拆分也不用 pandas 了：拆分、汇总、查收都只要这两个
+_LITE_DEPS = (("openpyxl", "openpyxl"), ("xlrd", "xlrd"))
+_EXCEL_DEPS = _LITE_DEPS
 _PDF_DEPS = (("pypdf", "pypdf"), ("fpdf", "fpdf2"), ("cryptography", "cryptography"))
 # 给 Word / Excel / PPT 加密才要（也写在 requirements-pdf.txt 里）；只发 PDF 时不检查，
 # 免得内网装不上它的用户每次跑 PDF 分发都去试一次安装
@@ -170,8 +147,8 @@ def _pip_install(req_file, packages=None):
 
     返回 "ok" / "timeout" / "fail"。packages 给了就只装这几个包（版本要求照 req_file 里写的）。
 
-    **国内镜像优先**：用户几乎都在国内，直连 pypi.org 下 pandas+numpy 实测两分钟都没装完、
-    被宿主杀掉；用户若自己配过 pip 源（pip.ini / PIP_INDEX_URL）就尊重他的配置。
+    **国内镜像优先**：用户几乎都在国内，直连 pypi.org 实测很慢（v2.x 装 pandas+numpy 两分钟都没装完、
+    被宿主杀掉）；用户若自己配过 pip 源（pip.ini / PIP_INDEX_URL）就尊重他的配置。
     两轮共用一个总时限，超时不算失败：已下载的包在 pip 缓存里，再跑一次会快很多。"""
     import subprocess
     import time
@@ -227,26 +204,23 @@ def _has_pip_config():
 def ensure_deps(need_pdf=False, need_office=False, lite=False):
     """缺依赖就自动装上（首次使用），装不上再报人话错误。
 
-    **必须在 import pandas / core.* 之前调用**——否则缺包时 Python 直接甩
+    **必须在 import openpyxl / core.* 之前调用**——否则缺包时 Python 直接甩
     ImportError 堆栈，这里的人话提示根本走不到（旧版 check_deps 就是这么失效的）。
 
     为什么默认自动装：用户的诉求是「把表拆了」，不是「配环境」。首次使用卡在
     pip 上是这个技能最大的流失点；装的只是 requirements*.txt 里声明的包。
     不想自动装（内网、受管环境）就设环境变量 ER_NO_AUTO_INSTALL=1。
 
-    lite=True：汇总 / 查收只用 openpyxl + xlrd（core/collect.py 不导入 pandas），
-    只检查、只装这两个——几秒钟装完，不用为了合几张表先等 pandas + numpy 下载一分钟。
+    Excel 这一组（拆分、汇总、查收）v3.0 起都只要 openpyxl + xlrd，只装缺的那几个，几秒钟。
+    lite 是旧参数，现在和默认一样，留着给已有调用方。
     """
-    if lite:
-        _install_group(_LITE_DEPS, "requirements.txt", only=True)
-        return
     groups = [(_EXCEL_DEPS, "requirements.txt")]
     if need_pdf:
         groups.append((_PDF_DEPS, "requirements-pdf.txt"))
     if need_office:
         groups.append((_OFFICE_DEPS, "requirements-pdf.txt"))
     for deps, req in groups:
-        _install_group(deps, req)
+        _install_group(deps, req, only=deps is _EXCEL_DEPS)
 
 
 def _install_group(deps, req, only=False):
@@ -286,24 +260,12 @@ check_deps = ensure_deps
 def sheet_headers(file_path, config):
     """返回 [(sheet_name, header_row_1based, [columns]), ...]，覆盖文件里每一个 sheet。
     只读每个 sheet 前 20 行，快。调用前须已 ensure_deps()。"""
-    import pandas as pd
-    from core.splitter import _header_values, normalize_to_xlsx, resolve_header_row
-    work_path, is_tmp = normalize_to_xlsx(file_path)
-    try:
-        df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine="openpyxl", nrows=20)
-        out = []
-        for sheet_name, df in df_dict.items():
-            h = resolve_header_row(df.values.tolist(), config)
-            cols = [c for c in _header_values(df, h) if c] if (h != -1 and h <= len(df)) else []
-            out.append((sheet_name, h, cols))
-        return out
-    finally:
-        if is_tmp and os.path.exists(work_path):
-            os.remove(work_path)
+    from core.splitter import sheet_headers as _core_sheet_headers
+    return _core_sheet_headers(file_path, config)
 
 
 def match_column(columns, target):
-    """与内核 _find_col_index 同一规则（先精确、再包含），但把**所有**包含命中都报出来：
+    """与内核 _find_col 同一规则（先精确、再包含），但把**所有**包含命中都报出来：
     返回 (实际命中的列名或 None, 其余也命中的列名列表)。内核拿第一个包含命中就走，
     「部门」同时撞上「所属部门」「部门编码」时用户却不知道按的是哪列。"""
     from core.utils import soft_clean

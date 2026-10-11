@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 git push 走不通时的退路：用 GitHub Git Data API 推送（只走 api.github.com）。
 

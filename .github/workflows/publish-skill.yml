@@ -103,7 +103,7 @@ jobs:
         # 这些 GUI 依赖混进来会让无界面环境（CI / SkillHub 沙箱）装依赖失败或明显变慢。
         # 注意别写成只排除 customtkinter —— 上游第 2 行就是 tkinterdnd2。
         #
-        # 同时把 PDF 三件套拆到 requirements-pdf.txt：主文件只留 Excel 拆分必需的 3 个，
+        # 同时把 PDF 三件套拆到 requirements-pdf.txt：主文件只留 Excel 必需的 2 个（v3.0 起不要 pandas），
         # 用户不用 PDF 功能就不必装（SkillHub 自动化评测会把"依赖过多"记为扣分项）。
         shell: bash
         run: |
@@ -111,7 +111,7 @@ jobs:
           # msoffcrypto-tool：v2.10 起给 Word/Excel/PPT 加打开密码，core 里延迟导入，没装只跳过 Office 文件
           PDF_DEPS='pypdf|fpdf2|cryptography|msoffcrypto-tool'
           {
-            echo "# excelrouter skill 运行依赖 —— 只做 Excel 拆分时，只需要下面这 3 个"
+            echo "# excelrouter skill 运行依赖 —— Excel 拆分、汇总、查收只需要下面这 2 个"
             echo "# PDF 加密分发才需要的 pypdf / fpdf2 / cryptography 已拆到 requirements-pdf.txt，"
             echo "# 用不到 PDF 功能就不必装（脚本会在真正用到时报人话提示）。"
             echo "# 已去掉桌面版 GUI 专用依赖 customtkinter / tkinterdnd2 —— skill 是命令行形态。"

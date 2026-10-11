@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 excelrouter skill · 本地副本统一同步脚本
 

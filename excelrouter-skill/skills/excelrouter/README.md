@@ -79,11 +79,11 @@
 
 ## 装上之后
 
-什么都不用装。第一次用时脚本会自动装好依赖（拆分约 1 分钟；只做汇总、查收几秒钟，只装一次；
+什么都不用装。第一次用时脚本会自动装好依赖（拆分、汇总、查收只要两个包，几秒钟，只装一次；
 网络不通会换国内镜像再试）。不想自动装的环境设 `ER_NO_AUTO_INSTALL=1`，再手动：
 
 ```bash
-pip install -r requirements.txt        # 拆分要这 3 个：openpyxl、pandas、xlrd（汇总、查收只用前一个和 xlrd）
+pip install -r requirements.txt        # 拆分、汇总、查收只要这 2 个：openpyxl、xlrd
 pip install -r requirements-pdf.txt    # 要做文件加密分发（PDF / Word / Excel）时再装
 ```
 

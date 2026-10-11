@@ -135,7 +135,7 @@ cp -r excelrouter-skill/skills/excelrouter ~/.workbuddy/skills/   # WorkBuddy
 pip install -r skills/excelrouter/requirements.txt
 ```
 
-> 只用 Excel 拆分的话，装 `pandas` / `openpyxl` / `xlrd` 就够；
+> 只用 Excel 拆分、汇总的话，装 `openpyxl` / `xlrd` 就够；
 > 要用文件加密分发，再装上 `pypdf` / `fpdf2` / `cryptography`，给 Word / Excel 加密还要 `msoffcrypto-tool`
 > （缺 `cryptography` 会自动降级，功能仍可用，只是 PDF 加密强度低一些）。
 

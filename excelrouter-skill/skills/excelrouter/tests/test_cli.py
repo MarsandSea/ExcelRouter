@@ -478,38 +478,28 @@ def test_pdf_dist_rejects_office_watermark_old_format_and_both_off(tmp_path):
     assert rc == 1 and "至少要一个" in obj["error"]
 
 
-@pytest.mark.skipif(os.name != "nt", reason="仅 Windows 有 OpenBLAS 多线程崩溃问题")
-def test_common_pins_openblas_threads():
-    """_common 必须在导入 numpy 之前把 OpenBLAS 线程数限制为 1。
-
-    真实故障：Windows 部分环境 numpy 底层 OpenBLAS 多线程会因内存分配失败直接崩，
-    报错里带 Memory allocation / Intel MKL，与用户数据无关。
-    这个测试防止有人日后调整导入顺序、把设置挪到 numpy 之后（那样就失效了）。
-    """
-    code = (
-        "import sys, os;"
-        "sys.path.insert(0, %r);"
-        "os.environ.pop('OPENBLAS_NUM_THREADS', None);"
-        "import _common;"
-        "assert 'numpy' not in sys.modules, 'numpy 必须在 _common 之后才被导入';"
-        "print(os.environ.get('OPENBLAS_NUM_THREADS', ''))" % SCRIPTS
-    )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "1"
+def _run_without_pandas(script, *args):
+    """把 pandas / numpy 屏蔽掉再跑脚本：v3.0 起看表、拆分都不该再碰它们。"""
+    path = os.path.join(SCRIPTS, script)
+    code = ("import runpy, sys;"
+            "sys.modules['pandas'] = None; sys.modules['numpy'] = None;"
+            f"sys.argv = [{path!r}] + {list(args)!r};"
+            f"runpy.run_path({path!r}, run_name='__main__')")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8")
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    assert lines, proc.stderr
+    return proc.returncode, json.loads(lines[-1]), proc.stderr
 
 
-@pytest.mark.skipif(os.name != "nt", reason="仅 Windows 有 OpenBLAS 多线程崩溃问题")
-def test_common_does_not_override_user_setting():
-    """用户自己设过 OPENBLAS_NUM_THREADS 时要尊重他的选择（setdefault 语义）。"""
-    env = dict(os.environ, OPENBLAS_NUM_THREADS="8")
-    code = (
-        "import sys, os;"
-        "sys.path.insert(0, %r);"
-        "import _common;"
-        "print(os.environ.get('OPENBLAS_NUM_THREADS', ''))" % SCRIPTS
-    )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                          text=True, env=env)
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "8"
+def test_inspect_and_split_do_not_need_pandas(two_books, tmp_path):
+    """首次使用只装 openpyxl + xlrd 几秒钟，不再等 pandas + numpy 下载一分钟。"""
+    inp, _ = two_books
+    rc, obj, err = _run_without_pandas("er_inspect.py", "--input", inp, "--column", "部门", "--all-files")
+    assert rc == 0, err
+    assert obj["values"] == ["技术部", "销售部"]
+    rc, obj, err = _run_without_pandas("er_inspect.py", "--input", os.path.join(inp, "A.xlsx"))
+    assert rc == 0, err
+    assert obj["group_counts"]["部门"] == 2
+    rc, obj, err = _run_without_pandas("er_split.py", "--input", inp, "--by", "部门",
+                                       "--output", str(tmp_path / "split"))
+    assert rc == 0 and obj["ok"], err

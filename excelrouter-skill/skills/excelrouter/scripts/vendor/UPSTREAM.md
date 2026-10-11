@@ -16,9 +16,9 @@
 <!-- SYNC:BEGIN 以下内容由 publish-skill.yml 每次发布自动重写，手改无效 -->
 ## 当前同步状态
 
-- 对应本仓库 tag：`v2.10.0`
-- 对应 commit：`fb1af09d60842855063bec5a835b03097d255519`
-- 同步时间：2026-10-11 09:47 UTC
+- 对应本仓库 tag：尚未打 tag（v3.0.0 开发中，技能脚本改为不用 pandas，需与 core 同步更新）
+- 对应 commit：`11ce4fc` 之后的 main（含新模块 `xlio.py`）
+- 同步时间：2026-10-12（手工 `cp core/*.py`，与 publish-skill 同一做法；打 tag 时会被自动重写）
 - 来源：与本仓库 `core/` 同一套代码（skill 与桌面版同仓，无需跨仓拉取）
 <!-- SYNC:END -->
 

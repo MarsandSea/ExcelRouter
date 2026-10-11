@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 log_skillhub_stats.py —— 把 SkillHub 的下载量等指标按次追加到 CSV，用来画增长曲线。
 

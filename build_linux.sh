@@ -34,12 +34,12 @@ ARCH=$(uname -m)                    # x86_64 / aarch64
 
 echo "[0/5] 环境自检 ..."
 
-# --- Python 版本：requirements.txt 钉了 pandas>=2.0.0，需要 3.9+。
+# --- Python 版本：requirements.txt 钉了 pypdf>=6.0.0，需要 3.9+。
 #     麒麟 V10 SP1 自带的常常是 3.7，不先拦住的话后面 pip 会吐一屏天书。
 "$PY" - <<'PYEOF' || exit 1
 import sys
 if sys.version_info < (3, 9):
-    print(f"❌ {sys.executable} 是 Python {sys.version.split()[0]}，pandas 2.x 需要 3.9+")
+    print(f"❌ {sys.executable} 是 Python {sys.version.split()[0]}，pypdf 6.x 需要 3.9+")
     print("   解决办法（任选其一）：")
     print("     1) sudo apt install -y python3.9 python3.9-tk python3.9-dev")
     print("        然后：PYTHON=python3.9 ./build_linux.sh")
@@ -93,6 +93,13 @@ echo "[4/5] PyInstaller onedir ..."
   --collect-all tkinterdnd2 \
   --add-data "config:config" \
   --add-data "app.png:." \
+  --exclude-module numpy \
+  --exclude-module pandas \
+  --exclude-module pytest \
+  --exclude-module _pytest \
+  --exclude-module pygments \
+  --exclude-module setuptools \
+  --exclude-module pip \
   main.py
 
 echo "[5/5] 生成启动脚本 + 打 tar.gz ..."

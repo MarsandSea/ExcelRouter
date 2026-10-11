@@ -65,6 +65,13 @@ jobs:
           --collect-all tkinterdnd2
           --add-data "config;config"
           --add-data "app.ico;."
+          --exclude-module numpy
+          --exclude-module pandas
+          --exclude-module pytest
+          --exclude-module _pytest
+          --exclude-module pygments
+          --exclude-module setuptools
+          --exclude-module pip
           main.py
 
       - name: Build onefile (single-file fallback)
@@ -77,6 +84,13 @@ jobs:
           --collect-all tkinterdnd2
           --add-data "config;config"
           --add-data "app.ico;."
+          --exclude-module numpy
+          --exclude-module pandas
+          --exclude-module pytest
+          --exclude-module _pytest
+          --exclude-module pygments
+          --exclude-module setuptools
+          --exclude-module pip
           main.py
 
       - name: Package onedir as zip

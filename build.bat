@@ -56,6 +56,13 @@ pyinstaller --onedir --noconsole ^
   --add-data "config;config" ^
   --add-data "app.ico;." ^
   --add-data "app.png;." ^
+  --exclude-module numpy ^
+  --exclude-module pandas ^
+  --exclude-module pytest ^
+  --exclude-module _pytest ^
+  --exclude-module pygments ^
+  --exclude-module setuptools ^
+  --exclude-module pip ^
   main.py
 
 echo.
@@ -69,6 +76,13 @@ pyinstaller --onefile --noconsole ^
   --add-data "config;config" ^
   --add-data "app.ico;." ^
   --add-data "app.png;." ^
+  --exclude-module numpy ^
+  --exclude-module pandas ^
+  --exclude-module pytest ^
+  --exclude-module _pytest ^
+  --exclude-module pygments ^
+  --exclude-module setuptools ^
+  --exclude-module pip ^
   main.py
 
 echo.

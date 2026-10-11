@@ -26,15 +26,15 @@ python scripts/er_split.py ... --header-mode keyword --grid-keys 网格 --id-key
 
 ## 公式列在输出里是空白
 
-pandas 读的是 Excel 文件里缓存的计算结果，不是重新计算。如果源文件是程序生成的、或者
+工具读的是 Excel 文件里缓存的计算结果，不是重新计算。如果源文件是程序生成的、或者
 公式从未被 Excel/WPS 真正打开计算过一次，就没有缓存值，读出来必然是空白——这不是 bug，
-是 openpyxl/pandas 读取 xlsx 的机制限制。`er_split.py` 底层在处理时会检测这种情况并在
+是 openpyxl 读取 xlsx 的机制限制。`er_split.py` 底层在处理时会检测这种情况并在
 stderr 打印警告，看到就转告用户"请先用 Excel 或 WPS 打开源表，随便改一下再撤销、保存一次，
 让公式产生缓存值，再重新拆分"。
 
 ## `.xls`（旧版 Excel 格式）拆完之后格式全丢了
 
-工具会先把 `.xls` 转换成临时 `.xlsx` 再处理，但样式信息在这一步的读取阶段就已经丢失，
+工具用 xlrd 读 `.xls` 时只读得到值，样式信息在读取阶段就已经丢失，
 `preserve_format`/`--fast` 在 `.xls` 源文件上没有区别。目前没有绕过办法，如果格式很重要，
 建议用户先在 Excel/WPS 里把源文件另存为 `.xlsx` 再拆分。
 
@@ -55,21 +55,6 @@ stderr 打印警告，看到就转告用户"请先用 Excel 或 WPS 打开源表
 - `--merge` 会把所有输出工作簿整批留在内存到最后统一保存，宽表+大批量文件时内存压力更大，
   非必要不加这个选项。
 
-## Windows 脚本运行报 `Memory allocation` / `Intel MKL` 错误
-
-numpy 底层的 OpenBLAS 在 Windows 上默认多线程，某些环境下会因内存分配失败直接崩溃
-（与你的数据无关，也不是本工具的 bug）。
-
-**v2.7.6 起脚本已自动处理**：`scripts/_common.py` 会在导入 numpy **之前**把
-`OPENBLAS_NUM_THREADS` 设为 `1`（另外顺手设 `KMP_DUPLICATE_LIB_OK=TRUE` 兜住
-`OMP: Error #15`），**不需要你手动设置**。
-
-只有在你确实需要多线程时才自己指定，脚本用 `setdefault`，不会覆盖你的设置：
-```bash
-OPENBLAS_NUM_THREADS=8 python scripts/er_split.py --input 明细.xlsx --by 部门
-```
-这是 numpy 的已知问题，不影响数据正确性。
-
 ## 提示缺依赖、自动安装没成功，或者提示缺 pypdf/fpdf2/cryptography
 
 脚本首次运行会用**当前解释器**（`sys.executable -m pip`）自动安装依赖：依次试腾讯云、阿里云镜像和官方源（用户自己配过 pip 源则只用他的），总时长控制在 95 秒内——WorkBuddy 会强制结束超过 120 秒的命令。没装完会返回 `retry: true`，再跑一次即可接着装。
@@ -77,7 +62,7 @@ OPENBLAS_NUM_THREADS=8 python scripts/er_split.py --input 明细.xlsx --by 部�
 **别用裸 `pip`**，多个 Python 并存时它常装到别的环境里，装完照样报缺。
 受管环境不希望脚本自动装包，设环境变量 `ER_NO_AUTO_INSTALL=1`。
 
-Excel 拆分只需要 `pandas`/`openpyxl`/`xlrd` 这三个，文件加密分发才需要 `pypdf`/`fpdf2`；
+Excel 拆分、汇总、查收只需要 `openpyxl`/`xlrd` 这两个，文件加密分发才需要 `pypdf`/`fpdf2`；
 给 Word / Excel / PPT 加密还要 `msoffcrypto-tool`（只在传了这类文件时才检查和安装）。
 如果只做 Excel 拆分，分发相关依赖装不上可以先忽略。`cryptography` 缺失不会导致 PDF 分发
 报错，只是加密强度从 AES-256 降级为 RC4-128（stderr 会警告，功能仍然可用）。

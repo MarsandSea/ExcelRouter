@@ -30,6 +30,7 @@ import argparse
 import os
 import re
 import sys
+from itertools import chain
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
@@ -37,13 +38,11 @@ from _common import (  # noqa: E402
 )
 
 bootstrap()
-ensure_deps()  # 必须排在 pandas / core 的 import 之前
+ensure_deps()  # 只要 openpyxl + xlrd；必须排在 core 的 import 之前
 
-import pandas as pd  # noqa: E402
-from core.splitter import (  # noqa: E402
-    normalize_to_xlsx, resolve_header_row, _find_col_index, _header_values,
-)
+from core.splitter import _find_col, _sheet_heads  # noqa: E402
 from core.utils import apply_alias, is_skip_value  # noqa: E402
+from core.xlio import key_value  # noqa: E402
 
 # 与桌面版 _recommend_split / _recommend_person 同一份关键词，保证两边「默认选中」一致
 _SPLIT_KEYWORDS = ("部门", "网格", "区域", "分公司", "门店", "班组", "科室", "组织", "单位", "类别", "分类")
@@ -82,26 +81,18 @@ def _profile_columns(file_path, config):
     给用户列出「按部门 5 组 / 按区域 3 组 / 按姓名 55 人」让他挑，不用再逐个字段去查。"""
     alias = config.get("value_alias_map", {})
     skip = config.get("skip_values", [])
-    work_path, is_tmp = normalize_to_xlsx(file_path)
-    try:
-        df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine="openpyxl")
-        prof = {}
-        for _sn, df in df_dict.items():
-            h = resolve_header_row(df.values[:20].tolist(), config)
-            if h == -1 or h > len(df):
-                continue
-            for ci, name in enumerate(_header_values(df, h)):
-                if not name:
-                    continue
-                vals = prof.setdefault(name, set())
-                for v in df.iloc[h:, ci]:
-                    nv = apply_alias(v, alias)
-                    if not is_skip_value(nv, skip):
-                        vals.add(nv)
-        return prof
-    finally:
-        if is_tmp and os.path.exists(work_path):
-            os.remove(work_path)
+    prof = {}
+    # 只读方式逐行流式读，和内核拆分同一套表头识别、取值口径（错误格当空、3.0 当 3）
+    for _sn, h, names, head, it in _sheet_heads(file_path, config):
+        if not 0 < h <= len(head):
+            continue
+        cols = [(ci, prof.setdefault(name, set())) for ci, name in enumerate(names) if name]
+        for row in chain(head[h:], it):
+            for ci, vals in cols:
+                nv = apply_alias(key_value(row[ci]) if ci < len(row) else None, alias)
+                if not is_skip_value(nv, skip):
+                    vals.add(nv)
+    return prof
 
 
 _NUM_RE = re.compile(r"^[-+]?[\d,]*\.?\d+%?$")
@@ -126,28 +117,20 @@ def _enum_values_all_sheets(file_path, column, config):
     """跨所有 sheet 枚举某列取值。返回 (values_sorted, sheets_with_col)。"""
     alias = config.get("value_alias_map", {})
     skip = config.get("skip_values", [])
-    work_path, is_tmp = normalize_to_xlsx(file_path)
-    try:
-        df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine="openpyxl")
-        values = set()
-        sheets_with = []
-        for sn, df in df_dict.items():
-            head_rows = df.values[:20].tolist()
-            h = resolve_header_row(head_rows, config)
-            if h == -1 or h > len(df):
-                continue
-            ci = _find_col_index(df, h, column)
-            if ci is None:
-                continue
-            sheets_with.append(sn)
-            for v in df.iloc[h:, ci]:
-                nv = apply_alias(v, alias)
-                if not is_skip_value(nv, skip):
-                    values.add(nv)
-        return sorted(values), sheets_with
-    finally:
-        if is_tmp and os.path.exists(work_path):
-            os.remove(work_path)
+    values = set()
+    sheets_with = []
+    for sn, h, names, head, it in _sheet_heads(file_path, config):
+        if not 0 < h <= len(head):
+            continue
+        ci = _find_col(names, column)
+        if ci is None:
+            continue
+        sheets_with.append(sn)
+        for row in chain(head[h:], it):
+            nv = apply_alias(key_value(row[ci]) if ci < len(row) else None, alias)
+            if not is_skip_value(nv, skip):
+                values.add(nv)
+    return sorted(values), sheets_with
 
 
 def _enum_values_many(files, column, config, heartbeat_every=20):
