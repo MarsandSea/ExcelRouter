@@ -4,6 +4,7 @@ import os
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 import pytest
 
 from core.splitter import (
@@ -1043,3 +1044,84 @@ def test_single_group_warns(tmp_path):
     logs = []
     run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=logs.append)
     assert any("只拆出了 1 组「销售部」" in m for m in logs)
+
+
+# ---------- 下拉 / 数据验证（v3.0）----------
+
+def _dvs(ws):
+    """产出 sheet 的数据验证 → {(类型, 公式): 区域}。"""
+    return {(dv.type, dv.formula1): str(dv.sqref) for dv in ws.data_validations.dataValidation}
+
+
+def _dv_book(path, header=("工号", "姓名", "部门", "结果", "分数"), rows=None):
+    from openpyxl.worksheet.datavalidation import DataValidation
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "明细"
+    ws.append(list(header))
+    for r in rows or [["1", "张三", "销售部", None, None], ["2", "李四", "技术部", None, None],
+                      ["3", "王五", "销售部", None, None]]:
+        ws.append(r)
+    opt = wb.create_sheet("选项")
+    for v in ("已走访", "未走访", "待定"):
+        opt.append([v])
+    opt.sheet_state = "hidden"
+    col = {h: get_column_letter(i) for i, h in enumerate(header, start=1)}
+    lit = DataValidation(type="list", formula1='"是,否"', showErrorMessage=True)
+    lit.add(f"{col['部门']}1:{col['部门']}200")              # 连表头那格也有（表头区照原位置带上）
+    ref = DataValidation(type="list", formula1="选项!$A$1:$A$3")
+    ref.add(f"{col['结果']}2:{col['结果']}200")
+    whole = DataValidation(type="whole", operator="between", formula1="0", formula2="100")
+    whole.add(f"{col['分数']}2:{col['分数']}200")
+    custom = DataValidation(type="custom", formula1=f"LEN({col['工号']}2)<5")
+    custom.add(f"{col['工号']}2:{col['工号']}200")
+    for dv in (lit, ref, whole, custom):
+        ws.add_data_validation(dv)
+    wb.save(path)
+
+
+def test_validations_follow_rows(tmp_path):
+    src = tmp_path / "走访.xlsx"
+    _dv_book(src)
+    logs = []
+    res = run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=logs.append)
+    sales = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))["明细"]
+    assert _dvs(sales) == {
+        ("list", '"是,否"'): "C1:C3",                          # 表头格 + 两行数据
+        ("list", '"已走访,未走访,待定"'): "D2:D3",              # 引用隐藏「选项」表的，选项直接写进下拉
+        ("whole", "0"): "E2:E3",
+    }                                                          # 自定义公式那个去掉了
+    tech = openpyxl.load_workbook(os.path.join(res, "技术部.xlsx"))["明细"]
+    assert _dvs(tech)[("list", '"是,否"')] == "C1:C2"
+    text = "\n".join(logs)
+    assert "1 个下拉的选项引用了别处的格子" in text and "1 个数据验证引用了别处的格子" in text
+
+
+def test_validations_follow_columns_when_merging(tmp_path):
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _dv_book(inp / "A.xlsx")
+    _dv_book(inp / "B.xlsx", header=("姓名", "工号", "结果", "部门", "分数"),
+             rows=[["赵六", "4", None, "销售部", None]])
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out"), make_zip=False), log_fn=lambda m: None)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))["明细"]
+    assert ws["B4"].value == "赵六"                             # B 表的行按列名对齐，落在第 4 行
+    dvs = _dvs(ws)
+    assert dvs[("list", '"是,否"')] == "C1:C4"                  # B 表「部门」在 D 列，跟着列名回到 C 列
+    assert dvs[("list", '"已走访,未走访,待定"')] == "D2:D4"
+
+
+def test_list_from_range_limits():
+    from core.splitter import _list_from_range
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for v in ("甲", "乙", "甲", None, 3.0):
+        ws.append([v])
+    ws["B1"] = "有,逗号"
+    assert _list_from_range(wb, ws, "$A$1:$A$5") == '"甲,乙,3"'   # 去重、跳过空格、3.0 当 3
+    assert _list_from_range(wb, ws, "B1") is None                # 含英文逗号：没法写成字面下拉
+    assert _list_from_range(wb, ws, "不存在!A1:A3") is None
+    for i in range(1, 300):
+        ws.cell(row=i, column=3, value=f"选项{i}")
+    assert _list_from_range(wb, ws, "C1:C299") is None           # 超过 255 个字
+    assert ws.max_column == 3                                    # 只读格子，没把源表撑大

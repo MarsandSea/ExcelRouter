@@ -52,7 +52,8 @@ from itertools import chain, islice
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
+from openpyxl.worksheet.cell_range import MultiCellRange
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.formula.translate import Translator
 
@@ -443,6 +444,149 @@ def _copy_header_cell(ws_src, h_src, c, ws_out, h_out, d, name):
 
 
 # =====================================================
+# 下拉 / 数据验证：照源表带到每个产出
+# =====================================================
+
+# 判断两个数据验证是不是同一个时比的属性（公式另算）
+_DV_ATTRS = ('type', 'operator', 'allow_blank', 'showDropDown', 'showErrorMessage', 'showInputMessage',
+             'errorTitle', 'error', 'promptTitle', 'prompt', 'errorStyle', 'imeMode')
+_DV_LIST_MAX = 255       # Excel 写死的下拉选项总长度上限（字面列表）
+_DV_RANGE_MAX = 5000     # 引用的选项区域最多看这么多格，再大就不内联
+
+
+def _formula_ref(f):
+    """数据验证公式里引用了格子吗：返回 (有引用, 整个公式只是一个区域时的区域文字)。解析不了按「有引用」处理。"""
+    try:
+        items = Tokenizer(f if f.startswith('=') else '=' + f).items
+    except Exception:
+        return True, None
+    refs = [t for t in items if t.type == 'OPERAND' and t.subtype == 'RANGE']
+    if not refs:
+        return False, None
+    only = refs[0].value if len(items) == 1 else None
+    return True, only
+
+
+def _list_from_range(wb, ws, ref):
+    """下拉选项引用的区域（同表、别的 sheet、或定义的名称）→ 字面列表 '"甲,乙"'；读不出、太长、含英文逗号时返回 None。
+
+    只读格子不建格子（用 _cells），不改动源表的尺寸。
+    """
+    target, rng = ws, ref
+    if '!' in ref:
+        sheet, rng = ref.rsplit('!', 1)
+        sheet = sheet.strip("'").replace("''", "'")
+        target = wb[sheet] if sheet in wb.sheetnames else None
+    else:
+        dn = ws.defined_names.get(ref) if hasattr(ws, 'defined_names') else None
+        dn = dn or wb.defined_names.get(ref)
+        if dn is not None:
+            dests = list(dn.destinations)
+            if len(dests) != 1 or dests[0][0] not in wb.sheetnames:
+                return None
+            target, rng = wb[dests[0][0]], dests[0][1]
+    if target is None:
+        return None
+    try:
+        c1, r1, c2, r2 = range_boundaries(rng.replace('$', ''))
+    except Exception:
+        return None
+    r1, c1 = r1 or 1, c1 or 1
+    r2 = min(r2 or target.max_row, target.max_row)
+    c2 = min(c2 or target.max_column, target.max_column)
+    if r2 < r1 or c2 < c1 or (r2 - r1 + 1) * (c2 - c1 + 1) > _DV_RANGE_MAX:
+        return None
+    vals = []
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            cell = target._cells.get((r, c))
+            v = key_value(cell_value(cell)) if cell is not None else None
+            t = "" if v is None else str(v).strip()
+            if t and t not in vals:
+                vals.append(t)
+    if not vals or any(',' in t or '"' in t for t in vals):
+        return None
+    lit = ','.join(vals)
+    return f'"{lit}"' if len(lit) <= _DV_LIST_MAX else None
+
+
+def _source_validations(wb, ws, h):
+    """源 sheet 的数据验证 → (表头区, 数据区, 去掉了几个, 内联了几个)。
+
+    表头区 / 数据区各是 [(签名, 模板, [(起行, 止行, 起列, 止列)])]，表头区只含第 1～h 行，数据区只含 h 行以下。
+    · 公式里不引用格子的（字面下拉、数值 / 日期范围）照搬；
+    · 下拉选项引用本工作簿一片格子的：把选项直接写进下拉（不超过 255 个字、不含英文逗号），否则去掉；
+    · 其余引用格子的（自定义公式、按别的格子算范围）去掉——拆出去以后引用的格子对不上了。
+    """
+    header, data, dropped, inlined = [], [], 0, 0
+    for dv in ws.data_validations.dataValidation:
+        f1 = dv.formula1
+        if dv.formula2 and _formula_ref(dv.formula2)[0]:
+            dropped += 1
+            continue
+        if f1:
+            has_ref, only = _formula_ref(f1)
+            if has_ref:
+                lit = _list_from_range(wb, ws, only) if (dv.type == 'list' and only) else None
+                if lit is None:
+                    dropped += 1
+                    continue
+                f1 = lit
+                inlined += 1
+        tpl = copy(dv)
+        tpl.formula1 = f1
+        sig = (f1, dv.formula2) + tuple(getattr(dv, a, None) for a in _DV_ATTRS)
+        hr, dr = [], []
+        for cr in dv.sqref.ranges:
+            c1, r1, c2, r2 = cr.bounds
+            if r1 <= h:
+                hr.append((r1, min(r2, h), c1, c2))
+            if r2 > h:
+                dr.append((max(r1, h + 1), r2, c1, c2))
+        if hr:
+            header.append((sig, tpl, hr))
+        if dr:
+            data.append((sig, tpl, dr))
+    return header, data, dropped, inlined
+
+
+def _note_validations(sinfo, entries, src_index, start, col_of, max_col):
+    """把源表 0 基行号 src_index[i]（Excel 第 src_index[i]+1 行）的数据验证记到产出第 start+i 行
+    （列按 col_of 换算），保存时统一写（见 _flush_validations）。"""
+    if not entries:
+        return
+    store = sinfo.setdefault('dv', {})
+    for sig, tpl, ranges in entries:
+        cols = store.setdefault(sig, (tpl, {}))[1]
+        for r1, r2, c1, c2 in ranges:
+            hit = [start + i for i, si in enumerate(src_index) if r1 <= si + 1 <= r2]
+            if not hit:
+                continue
+            for c in range(c1, min(c2, max_col) + 1):
+                cols.setdefault(col_of(c), set()).update(hit)
+
+
+def _flush_validations(info):
+    """把一个产出 sheet 记下的数据验证写进去：同一个验证一列里连着的行合成一段。"""
+    for _sig, (tpl, cols) in info.get('dv', {}).items():
+        parts = []
+        for d in sorted(cols):
+            letter, rows = get_column_letter(d), sorted(cols[d])
+            a = prev = rows[0]
+            for r in rows[1:] + [None]:
+                if r is not None and r == prev + 1:
+                    prev = r
+                    continue
+                parts.append(f"{letter}{a}" if a == prev else f"{letter}{a}:{letter}{prev}")
+                if r is not None:
+                    a = prev = r
+        if parts:
+            dv = copy(tpl)
+            dv.sqref = MultiCellRange(" ".join(parts))
+            info['ws'].add_data_validation(dv)
+
+
+# =====================================================
 # 文件名 / sheet 名去重与净化
 # =====================================================
 
@@ -577,6 +721,8 @@ class _OutputBook:
         if not self.sheets:
             self.wb.close()
             return False
+        for info in self.sheets.values():
+            _flush_validations(info)
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         self.wb.save(self.save_path)
         self.wb.close()
@@ -936,7 +1082,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
 
         # ---------- 先按拆分列分好组，再清空隐藏列，最后读表头格式 ----------
         # 顺序不能反：隐藏的拆分列照样要能分组；表头格式里带着列名，要在清空之后读。
-        plan = []          # [(sheet 名, ws, 表头行号, 最后一行, 拆分列号, 到人列号, 分组键, 到人键)]
+        plan = []          # [(sheet 名, ws, 表头行号, 最后一行, 拆分列号, 到人列号, 分组键, 到人键, 有内容的行)]
+        validations = {}   # sheet 名 -> (表头区, 数据区) 的数据验证，见 _source_validations
         for sn, ws, h, last, names in sheets:
             col_idx = _find_col(names, split_column)
             if col_idx is None:
@@ -953,6 +1100,17 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             pkeys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, pcol_idx + 1, h + 1, last)]
                      if pcol_idx is not None and last > h else None)
             content = _content_rows(ws, h, last)        # 清空隐藏列之前算：只在隐藏列里有内容的行也算一行
+            # 下拉选项可能就放在这张表的隐藏列里：也要在清空之前读
+            try:
+                dv_head, dv_data, dv_drop, dv_inline = _source_validations(wb_src, ws, h)
+            except Exception:
+                dv_head, dv_data, dv_drop, dv_inline = [], [], 0, 0
+            validations[sn] = (dv_head, dv_data)
+            if log_fn and (dv_drop or dv_inline):
+                bits = ([f"{dv_inline} 个下拉的选项引用了别处的格子，已把选项直接写进下拉"] if dv_inline else []) + \
+                       ([f"{dv_drop} 个数据验证引用了别处的格子（如自定义公式），拆出去会对不上，产出里去掉了"]
+                        if dv_drop else [])
+                log_fn(f"  ℹ️ sheet「{sn}」" + "；".join(bits))
             hcols = hidden_cols.get(sn, set())
             if hcols:
                 if stats is not None:
@@ -1030,6 +1188,16 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             for c in hidden_cols.get(sheet_name, ()):              # 源表隐藏的列，产出里照样隐藏
                 d = c if col_map is None else col_map[c - 1]
                 sinfo['ws'].column_dimensions[get_column_letter(d)].hidden = True
+            dv_head, dv_data = validations.get(sheet_name, ((), ()))
+            if 'dv' not in sinfo:      # 第一次往这个产出 sheet 写：表头区的数据验证照原位置带上
+                sinfo['dv'] = {}
+                for sig, tpl, ranges in dv_head:
+                    cols_ = sinfo['dv'].setdefault(sig, (tpl, {}))[1]
+                    for r1, r2, c1, c2 in ranges:
+                        for c in range(c1, min(c2, src_max_col) + 1):
+                            cols_.setdefault(c, set()).update(range(r1, r2 + 1))
+            _note_validations(sinfo, dv_data, rows.index, sinfo['next_row'],
+                              (lambda c: c) if col_map is None else (lambda c: col_map[c - 1]), src_max_col)
             _append_rows(sinfo, rows, preserve_ok, ws_src, src_max_col, style_cache,
                          heartbeat=heartbeat, formula_ws=formula_ws, col_map=col_map)
             total_rows += len(rows)
