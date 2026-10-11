@@ -378,6 +378,18 @@ jobs:
             exit 0
           fi
           echo "ClawHub 发布版本：$VERSION"
+          # ClawHub 面向海外用户：发布前把工作副本里的 description 换成英文（已提交的 SKILL.md 不动，
+          # SkillHub 上面已经按中文发过），换完再跑一遍 frontmatter 校验
+          python3 - "$SKILL_DIR/SKILL.md" excelrouter-skill/clawhub/description_en.txt <<'PY'
+          import re, sys
+          md, en = sys.argv[1], open(sys.argv[2], encoding="utf-8").read().strip()
+          assert '"' not in en and ": " not in en, "英文 description 里不能有双引号或「冒号+空格」"
+          text = open(md, encoding="utf-8").read()
+          new, n = re.subn(r'^description: ".*"$', lambda m: f'description: "{en}"', text, count=1, flags=re.M)
+          assert n == 1, "SKILL.md 里没找到 description 行"
+          open(md, "w", encoding="utf-8").write(new)
+          PY
+          python3 check_skillmd.py "$SKILL_DIR"
           npm i -g clawhub
           clawhub login --token "$CLAWHUB_TOKEN"
           clawhub skill publish "$SKILL_DIR" \
