@@ -518,3 +518,112 @@ def test_preserve_format_copies_each_cells_own_style(tmp_path):
         for k, r in enumerate(src_rows):
             for c in (1, 2, 3):
                 assert _style_sig(ws.cell(k + 2, c)) == _style_sig(ws_src.cell(r, c)), (dept, r, c)
+
+
+# ---------- v3.0：纯 openpyxl 读表 ----------
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _cfg_for(inp, out, **over):
+    return _base_cfg(str(inp), str(out), make_zip=False, merge_across_files=False, **over)
+
+
+def test_split_does_not_need_pandas(two_books):
+    """拆分全程不导入 pandas：子进程里把 pandas 设成导入就报错，列名、取值、拆分照常。"""
+    import json
+    import subprocess
+    import sys
+    inp, out = two_books
+    code = ("import json, os, sys\n"
+            "sys.modules['pandas'] = None\n"
+            "from core.splitter import list_columns, list_values, run_split\n"
+            "cfg = json.loads(sys.argv[1])\n"
+            "a = os.path.join(cfg['input_path'], 'A.xlsx')\n"
+            "res = run_split(cfg, log_fn=lambda m: None)\n"
+            "print(json.dumps([list_columns(a, cfg), list_values(a, cfg, '部门'), sorted(os.listdir(res))]))\n")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    p = subprocess.run([sys.executable, "-c", code, json.dumps(_base_cfg(inp, out))], cwd=ROOT, env=env,
+                       capture_output=True, text=True, encoding="utf-8")
+    assert p.returncode == 0, p.stderr
+    cols, vals, files = json.loads(p.stdout)
+    assert cols == HEADERS
+    assert vals == ["技术部", "销售部"]
+    assert "销售部.xlsx" in files and "技术部.xlsx" in files
+
+
+def _injection_book(path):
+    """表头上方的说明行、备注列里都有以「=」开头的文字；金额列是真公式（同行）。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "结算"
+    ws.append(["=说明：本表按部门拆"])
+    ws["A1"].data_type = "s"
+    ws.append(["部门", "备注", "单价", "数量", "金额"])
+    ws.append(["销售部", "=单价×数量", 10, 3, "=C3*D3"])
+    ws["B3"].data_type = "s"
+    ws.append(["销售部", "正常", 5, 2, "=C4*D4"])
+    wb.save(path)
+
+
+@pytest.mark.parametrize("keep, preserve", [(True, True), (False, True), (False, False)])
+def test_equals_text_never_becomes_formula(tmp_path, keep, preserve):
+    """安全修复：源表里以「=」开头的文字，拆出来仍是文字；真公式开了「保留公式」才是活公式。"""
+    src = tmp_path / "结算.xlsx"
+    _injection_book(src)
+    res = run_split(_cfg_for(src, tmp_path / "out", keep_formulas=keep, preserve_format=preserve),
+                    log_fn=lambda m: None)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert (ws["A1"].value, ws["A1"].data_type) == ("=说明：本表按部门拆", "s")
+    assert (ws["B3"].value, ws["B3"].data_type) == ("=单价×数量", "s")
+    if keep:
+        assert (ws["E3"].value, ws["E3"].data_type) == ("=C3*D3", "f")
+        assert (ws["E4"].value, ws["E4"].data_type) == ("=C4*D4", "f")
+    else:
+        # 造表时公式没有计算结果，不保留公式时落成空值；关键是不能是公式
+        assert ws["E3"].data_type != "f" and ws["E4"].data_type != "f"
+
+
+def test_na_like_words_are_real_groups(tmp_path):
+    """「NA」「N/A」「null」是用户写的文字：旧版（pandas）当成空格子，整行被丢掉；现在照常成组、照常输出。"""
+    src = tmp_path / "na.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["部门", "编号", "备注"])
+    for row in (["NA", 1, None], ["N/A", 2, None], ["null", 3, None], ["销售部", 4, "N/A"]):
+        ws.append(row)
+    wb.save(src)
+    cfg = _cfg_for(src, tmp_path / "out", preserve_format=False)
+    assert list_values(str(src), cfg, "部门") == sorted(["NA", "N/A", "null", "销售部"])
+    res = run_split(cfg, log_fn=lambda m: None)
+    assert {"NA.xlsx", "N_A.xlsx", "null.xlsx", "销售部.xlsx"} <= set(os.listdir(res))
+    sales = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert sales["C2"].value == "N/A"           # 快速模式下也不再变成空白
+
+
+def test_error_cells_are_not_groups(tmp_path):
+    """错误格（#N/A、#DIV/0!）和文字「#N/A」都不成组，取值预览里也看不到（预览和拆分口径一致）。"""
+    src = tmp_path / "err.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["部门", "金额"])
+    ws.append(["销售部", 1])
+    ws.append(["#N/A", 2])                      # 错误格
+    ws.append(["#N/A", 3])
+    ws["A4"].data_type = "s"                    # 写成文字的「#N/A」
+    ws.append(["技术部", "#DIV/0!"])
+    wb.save(src)
+    cfg = _cfg_for(src, tmp_path / "out")
+    assert list_values(str(src), cfg, "部门") == ["技术部", "销售部"]
+    res = run_split(cfg, log_fn=lambda m: None)
+    groups = {f for f in os.listdir(res) if f.endswith(".xlsx")} - {"请核对_无归属.xlsx"}
+    assert groups == {"技术部.xlsx", "销售部.xlsx"}
+
+
+def test_numeric_header_names_read_like_text():
+    """表头格存成 2026.0 时列名仍叫「2026」（和旧版 pandas 一致）；错误格的列名当空。"""
+    from core.splitter import _find_col, _header_names
+    names = _header_names([2026.0, "部门", None, "#N/A"])
+    assert names == ["2026", "部门", "", ""]
+    assert _find_col(names, "2026") == 0
+    assert _find_col(names, "部") == 1

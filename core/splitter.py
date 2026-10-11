@@ -23,11 +23,15 @@ Excel 智能拆分工具 - 核心拆分逻辑
   · 快速模式：数据行只写值，不处理格式，最快
 
 【跨文件合并】同一个取值若出现在多个源文件里，会**追加合并到同一个输出文件**
-（config['merge_across_files']，默认 True），从根本上修掉旧版「同名文件互相覆盖」的 bug。
+（config['merge_across_files']，默认 False，界面上叫「跨文件合并汇总」），从根本上修掉旧版「同名文件互相覆盖」的 bug。
 实现：输出工作簿在内存里按取值累积、最后统一保存；第一个产生该取值的源文件定义表头/格式，
 后续文件按列位置追加。
 
-【重要】保留格式时，按【原始行号】从源表读取、加法式写入输出，绝不删行——
+【读表】v3.0 起只用 openpyxl：每个源文件完整加载一次（data_only=True，值和格式都从这一份取），
+.xls 用 xlrd 读成内存工作簿，不再落临时文件；每一行都按【原始 Excel 行号】处理，按取值一次分好桶。
+不再依赖 pandas（体积、安装、某些嵌入式 Python 加载 pandas 会卡死）。
+
+【重要】按【原始行号】从源表读取、加法式写入输出，绝不删行——
 从根本上规避历史上「删行后用错位行号索引」的 bug。
 
 Copyright (c) 2026 AbeLin
@@ -38,16 +42,12 @@ import os
 import re
 import json
 import time
-import shutil
-import tempfile
 import threading
 import warnings
 import datetime
 from copy import copy
+from itertools import chain, islice
 
-# pandas 只在真正读表 / 转 xls 时才导入（函数内 import），不在模块顶层导入：
-# 某些嵌入式 Python（如企业客户端自带的解释器）加载 pandas 的 C 扩展会长时间卡住甚至挂死，
-# 顶层导入会让只想复用表头识别、格式复制等纯 openpyxl 函数的调用方也被拖死。
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.cell.cell import MergedCell
@@ -59,6 +59,7 @@ from core.utils import soft_clean, apply_alias, is_skip_value, safe_filename
 # 表头识别在 core/xlio.py（汇总也用它）；这里照旧导出原名，collect / 技能 / 测试都按 splitter 的名字调用
 from core.xlio import resolve_header_row
 from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
+from core.xlio import _head_limit, _iter_sheets_ro, cell_value, key_value, open_book, put, zip_folder
 
 warnings.filterwarnings('ignore')
 
@@ -70,7 +71,7 @@ warnings.filterwarnings('ignore')
 def detect_uncalculated_formulas(work_path, max_rows=200):
     """检测文件是否含「未计算的公式」：有公式(=开头)但没有缓存值。
 
-    真实 Excel 文件保存时会缓存公式计算结果，pandas 能读到真实值；若文件由程序生成或
+    真实 Excel 文件保存时会缓存公式计算结果，拆分读到的就是这个值；若文件由程序生成或
     公式从未被 Excel 计算过，缓存值为空，拆分后这些列会变成空白且用户不会察觉。
     只采样前 max_rows 行，避免对大文件做双倍全量加载。返回 True 表示存在风险。
     """
@@ -103,43 +104,11 @@ def detect_uncalculated_formulas(work_path, max_rows=200):
 
 
 # =====================================================
-# xls 转 xlsx
-# =====================================================
-
-def normalize_to_xlsx(file_path, log_fn=None):
-    """把 .xls 转成临时 .xlsx 以便 openpyxl 处理；返回 (工作路径, 是否为临时文件)。"""
-    if not file_path.lower().endswith('.xls'):
-        return file_path, False
-
-    # 临时文件写到系统临时目录（而非源文件同目录），避免残留被下次运行的 os.walk 重复处理。
-    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
-    os.close(fd)
-    try:
-        import pandas as pd
-        dfs = pd.read_excel(file_path, sheet_name=None, header=None, engine='xlrd')
-        with pd.ExcelWriter(tmp_path, engine='openpyxl') as w:
-            for sn, df in dfs.items():
-                df.to_excel(w, sheet_name=sn, index=False, header=False)
-        if log_fn:
-            log_fn("  ⚙️ xls 已转换为 xlsx 处理")
-        return tmp_path, True
-    except Exception as e:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-        if log_fn:
-            log_fn(f"  ⚠️ xls 转换失败：{e}")
-        return file_path, False
-
-
-# =====================================================
-# 长耗时阻塞调用的"仍在运行"心跳（pd.read_excel / openpyxl.load_workbook 无进度回调）
+# 长耗时阻塞调用的"仍在运行"心跳（openpyxl.load_workbook 无进度回调）
 # =====================================================
 
 class _Ticker:
-    """在一段无法拆分、无进度回调的阻塞调用（整份 pandas/openpyxl 读取）期间，
+    """在一段无法拆分、无进度回调的阻塞调用（整份 openpyxl 读取）期间，
     定时打一条"仍在处理"日志，避免宽表/大文件读取几十秒甚至更久时，界面在这段
     空窗期里毫无变化，被用户误判为卡死（实际只是单线程还在读，见 CLAUDE.md 用户反馈）。
     用独立守护线程纯计时打日志，不碰被计时的调用本身，调用结束后 stop 即可。
@@ -262,31 +231,32 @@ def _safe_translate(formula, origin, dest):
 
 
 # =====================================================
-# 列名 / 取值枚举（供 GUI 下拉与多选）
+# 列名 / 取值枚举（供 GUI 下拉与多选，也给技能用）
 # =====================================================
 
-def _read_all_sheets(file_path, config, log_fn=None, nrows=None):
-    """读入文件所有 sheet 为「值 DataFrame」字典（header=None）。返回 (df_dict, work_path, is_tmp)。"""
-    import pandas as pd
-    work_path, is_tmp = normalize_to_xlsx(file_path, log_fn)
-    engine = 'openpyxl'
-    df_dict = pd.read_excel(work_path, sheet_name=None, header=None,
-                            engine=engine, nrows=nrows)
-    return df_dict, work_path, is_tmp
+def _trim_tail(rows):
+    """去掉尾部的空行：尾部只有格式、没有内容的行不算数（和旧版 pandas 读表的口径一样）。"""
+    rows = list(rows)
+    while rows and all(v is None or v == "" for v in rows[-1]):
+        rows.pop()
+    return rows
 
 
-def _header_values(df, h_idx):
-    """取表头行的列名列表（soft_clean 后）。"""
-    header = df.iloc[h_idx - 1]
-    return [soft_clean(header.iloc[c]) for c in range(len(header))]
+def _key_row(row):
+    """一行的值 → 识别表头、比列名用的值：错误格当空，3.0 当 3。"""
+    return tuple(key_value(v) for v in row)
 
 
-def _find_col_index(df, h_idx, column):
-    """按列名在表头行里定位 0 基列索引：先精确匹配，再包含匹配。找不到返回 None。"""
+def _header_names(row):
+    """表头行 → 列名列表（soft_clean 后）。只看这一行，和旧版一致。"""
+    return [soft_clean(key_value(v)) for v in row]
+
+
+def _find_col(names, column):
+    """按列名定位 0 基列号：先精确匹配，再包含匹配。找不到返回 None。"""
     target = soft_clean(column)
     if not target:
         return None
-    names = _header_values(df, h_idx)
     for c, name in enumerate(names):
         if name == target:
             return c
@@ -296,44 +266,49 @@ def _find_col_index(df, h_idx, column):
     return None
 
 
+def _sheet_heads(file_path, config):
+    """只读方式逐 sheet 产出 (sheet 名, 表头行号或 -1, 列名, 表头附近的行, 其余行的迭代器)。
+
+    表头只在前几行里找；数据行先是「表头附近的行」里表头之后的部分，再接着从迭代器里取。
+    """
+    limit = _head_limit(config)
+    for sn, it in _iter_sheets_ro(file_path):
+        head = _trim_tail(_key_row(r) for r in islice(it, limit))
+        h = resolve_header_row(head, config)
+        names = _header_names(head[h - 1]) if 0 < h <= len(head) else []
+        yield sn, h, names, head, it
+
+
+def sheet_headers(file_path, config):
+    """每个 sheet 的表头：[(sheet 名, 表头行号或 -1, [列名])]。只读每个 sheet 前几行，快（技能用）。"""
+    return [(sn, h, [c for c in names if c] if 0 < h <= len(head) else [])
+            for sn, h, names, head, _it in _sheet_heads(file_path, config)]
+
+
 def list_columns(file_path, config, log_fn=None):
     """返回首个可识别 sheet 的列名列表（供 GUI 主/二级列下拉）。只读前若干行，快。"""
-    df_dict, work_path, is_tmp = _read_all_sheets(file_path, config, log_fn, nrows=20)
-    try:
-        for sn, df in df_dict.items():
-            rows = df.values.tolist()
-            h = resolve_header_row(rows, config)
-            if h != -1 and h <= len(df):
-                return [c for c in _header_values(df, h) if c]
-        return []
-    finally:
-        if is_tmp and os.path.exists(work_path):
-            os.remove(work_path)
+    for _sn, h, names, head, _it in _sheet_heads(file_path, config):
+        if 0 < h <= len(head):
+            return [c for c in names if c]
+    return []
 
 
 def list_values(file_path, config, column, log_fn=None):
     """返回某列去重、归并、去跳过值后的取值列表（供 GUI「只拆这些值」多选）。"""
     alias = config.get('value_alias_map', {})
     skip = config.get('skip_values', [])
-    df_dict, work_path, is_tmp = _read_all_sheets(file_path, config, log_fn)
-    try:
-        values = set()
-        for sn, df in df_dict.items():
-            head_rows = df.values[:20].tolist()
-            h = resolve_header_row(head_rows, config)
-            if h == -1 or h > len(df):
-                continue
-            ci = _find_col_index(df, h, column)
-            if ci is None:
-                continue
-            for v in df.iloc[h:, ci]:
-                nv = apply_alias(v, alias)
-                if not is_skip_value(nv, skip):
-                    values.add(nv)
-        return sorted(values)
-    finally:
-        if is_tmp and os.path.exists(work_path):
-            os.remove(work_path)
+    values = set()
+    for _sn, h, names, head, it in _sheet_heads(file_path, config):
+        if not 0 < h <= len(head):
+            continue
+        ci = _find_col(names, column)
+        if ci is None:
+            continue
+        for row in chain(head[h:], it):
+            nv = apply_alias(key_value(row[ci]) if ci < len(row) else None, alias)
+            if not is_skip_value(nv, skip):
+                values.add(nv)
+    return sorted(values)
 
 
 # =====================================================
@@ -368,7 +343,7 @@ def _write_header(ws_out, header_cells, merges, widths):
         if ci['is_merged']:
             continue
         dst = ws_out.cell(row=ci['row'], column=ci['col'])
-        dst.value = ci['value']
+        put(dst, ci['value'])      # 表头里以「=」开头的文字照样是文字
         if ci['font']:          dst.font          = ci['font']
         if ci['fill']:          dst.fill          = ci['fill']
         if ci['border']:        dst.border        = ci['border']
@@ -460,62 +435,77 @@ class _OutputBook:
         return True
 
 
+class _Rows:
+    """给 _append_rows 的行容器：index 是这些行在源表里的 0 基行号（Excel 行号减 1）。
+
+    _append_rows 只用 .index 和 len()；内部 er_lite 也传同款容器，别改这个约定。
+    """
+
+    __slots__ = ('index',)
+
+    def __init__(self, index):
+        self.index = index
+
+    def __len__(self):
+        return len(self.index)
+
+
 def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache,
                  heartbeat=None, formula_ws=None):
-    """把过滤后的数据行追加到输出 sheet 的当前游标下。
+    """把选中的数据行追加到输出 sheet 的当前游标下。
 
-    rows_df 的 index 是源表的【原始 0 基行号】，excel_row = index + 1。
-    preserve=True 时从 ws_src 按原始行号逐格复制「值 + 格式」；否则只写值（来自 pandas）。
+    rows_df.index 是这些行在源表里的【原始 0 基行号】，excel_row = index + 1（只用 .index 和 len()，
+    splitter 传 _Rows，内部 er_lite 传同款容器）。值和格式都从 ws_src 按原始行号取：
+    preserve=True 时逐格复制「值 + 格式」；否则只写值（错误格和空格子不写）。
+    写值一律走 put：源表里以「=」开头的文字照样是文字，不会变成能执行的公式。
     formula_ws 非 None 时（keep_formulas 开启且 preserve 有效），对每个公式单元格尝试
     「同行安全平移」：能平移则覆盖为新公式，不能则保留已写入的缓存数值（见 _safe_translate）。
-    heartbeat(n) 每写入约 200 行回调一次，用于向界面报进度并让出 GIL（保持界面响应）。
+    heartbeat(n) 每写入一批行回调一次，用于向界面报进度并让出 GIL（保持界面响应）。
     """
     ws_out = sheet_info['ws']
     start = sheet_info['next_row']
+    n = len(rows_df)
     # 心跳按「已处理单元格数」折算成行数阈值，而非固定行数：宽表（列数多）单元格
     # 级操作更贵，若仍按固定 200 行让一次 GIL，两次让出之间工作线程霸占 GIL 的时间会随列数
     # 线性变长，表现为列数越多界面越卡（甚至处理详情面板都打不开）。目标约 4000 格/次让出。
     batch = max(20, 4000 // max(1, src_max_col))
 
-    if preserve and ws_src is not None:
+    if ws_src is not None:
         for offset, src_idx in enumerate(rows_df.index):
             excel_row = int(src_idx) + 1
             out_row = start + offset
-            for c in range(1, src_max_col + 1):
-                src_cell = ws_src.cell(row=excel_row, column=c)
-                dst = ws_out.cell(row=out_row, column=c)
-                dst.value = src_cell.value
-                if not isinstance(src_cell, MergedCell):
-                    try:
-                        if src_cell.has_style:
-                            _copy_cell_style(src_cell, dst, style_cache)
-                    except Exception:
-                        pass
-                if formula_ws is not None:
-                    fcell = formula_ws.cell(row=excel_row, column=c)
-                    if isinstance(fcell.value, str) and fcell.value.startswith('='):
-                        col_letter = get_column_letter(c)
-                        translated = _safe_translate(
-                            fcell.value, f"{col_letter}{excel_row}", f"{col_letter}{out_row}")
-                        if translated is not None:
-                            dst.value = translated
-                        # 不安全：dst.value 保持上面已写入的缓存数值，不覆盖
+            if preserve:
+                for c in range(1, src_max_col + 1):
+                    src_cell = ws_src.cell(row=excel_row, column=c)
+                    dst = ws_out.cell(row=out_row, column=c)
+                    put(dst, src_cell.value)
+                    if not isinstance(src_cell, MergedCell):
+                        try:
+                            if src_cell.has_style:
+                                _copy_cell_style(src_cell, dst, style_cache)
+                        except Exception:
+                            pass
+                    if formula_ws is not None:
+                        fcell = formula_ws.cell(row=excel_row, column=c)
+                        # 按单元格类型认公式：以「=」开头的文字不是公式，不能拿去平移
+                        if fcell.data_type == 'f' and isinstance(fcell.value, str):
+                            col_letter = get_column_letter(c)
+                            translated = _safe_translate(
+                                fcell.value, f"{col_letter}{excel_row}", f"{col_letter}{out_row}")
+                            if translated is not None:
+                                dst.value = translated
+                            # 不安全：dst.value 保持上面已写入的缓存数值，不覆盖
+            else:
+                for c in range(1, src_max_col + 1):
+                    v = cell_value(ws_src.cell(row=excel_row, column=c))
+                    if v is not None and v != "":
+                        put(ws_out.cell(row=out_row, column=c), v)
             if heartbeat and (offset + 1) % batch == 0:
                 heartbeat(batch)
-    else:
-        import pandas as pd
-        for offset, (_, row_series) in enumerate(rows_df.iterrows()):
-            out_row = start + offset
-            for c_idx, val in enumerate(row_series, start=1):
-                if pd.isna(val):
-                    continue
-                ws_out.cell(row=out_row, column=c_idx).value = val
-            if heartbeat and (offset + 1) % batch == 0:
-                heartbeat(batch)
-    if heartbeat and len(rows_df) % batch:
-        heartbeat(len(rows_df) % batch)
+    if heartbeat and n % batch:
+        heartbeat(n % batch)
 
-    sheet_info['next_row'] = start + len(rows_df)
+    sheet_info['next_row'] = start + n
 
 
 def _matches_filter(name, keywords):
@@ -566,6 +556,21 @@ def _person_key_path(output_root, primary, person, src_stem, merge):
 # 单文件处理
 # =====================================================
 
+def _last_data_row(ws):
+    """最后一行有内容的行号；尾部只有格式、没有内容的行不算（和旧版 pandas 读表的口径一样）。整页空返回 0。"""
+    last = 0
+    for (r, _c), cell in ws._cells.items():
+        if r > last and cell.value is not None and cell.value != "":
+            last = r
+    return last
+
+
+def _column_values(ws, col, first_row, last_row):
+    """第 col 列（1 基）从 first_row 到 last_row 的值。"""
+    return [row[0] for row in ws.iter_rows(min_row=first_row, max_row=last_row,
+                                           min_col=col, max_col=col, values_only=True)]
+
+
 def process_file(file_path, rel_path, output_root, config, outputs,
                  single_file=False, log_fn=None, stop_flag=None, tick_fn=None, stats=None):
     """处理单个文件：始终产出『汇总』；满足条件时附加产出『到人』。返回写入总行数。
@@ -577,8 +582,10 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     · 到人：仅当 to_person 开、有 person_column、且文件名命中 person_file_filter 时，
       按 split_column → person_column 拆，同一人跨文件合并到一个文件。
     · tick_fn(0..1) 报告本文件内部进度（读取→拆分各阶段），供界面进度条使用。
+
+    读表：源文件只完整加载一次（open_book），值和格式都从这一份取；每个 sheet 先把拆分列读一遍、
+    按取值分好桶（取值 → 原始行号），再按桶输出。输出顺序与旧版逐取值筛选完全一致。
     """
-    import pandas as pd
     preserve_format = config.get('preserve_format', True)
     keep_formulas   = config.get('keep_formulas', False)
     split_column    = soft_clean(config.get('split_column', ''))
@@ -599,9 +606,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     do_person = (config.get('to_person', False) and not single_file and bool(person_column)
                  and _matches_filter(base_name, config.get('person_file_filter', [])))
 
-    work_path, is_tmp = normalize_to_xlsx(file_path, log_fn)
-    out_base = (base_name[:-4] + ".xlsx") if is_tmp else base_name
-    src_stem = safe_filename(os.path.splitext(out_base)[0], "source")
+    is_xls = base_name.lower().endswith('.xls')
+    src_stem = safe_filename(os.path.splitext(base_name)[0], "source")
 
     wb_src = None
     wb_formula = None
@@ -615,22 +621,25 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         tick(0.02)
         if log_fn:
             log_fn("  ⏳ 正在读取数据…（行数多的大文件这一步最慢，请耐心等待）")
-        if not is_tmp and detect_uncalculated_formulas(work_path):
+        if not is_xls and detect_uncalculated_formulas(file_path):
             if log_fn:
                 log_fn("  ⚠️ 注意：该文件含未计算的公式，相关列可能为空白，"
                        "建议用 Excel 打开另存后再处理")
         tick(0.10)
-        preserve_ok = preserve_format and not is_tmp
-        if preserve_format and is_tmp and log_fn:
-            log_fn("  ⚠️ .xls 转换后无法保留原始格式（仅保留数据，表头格式也会丢失）")
+        preserve_ok = preserve_format and not is_xls
+        if preserve_format and is_xls and log_fn:
+            log_fn("  ⚠️ .xls 无法保留原始格式（仅保留数据，表头格式也会丢失）")
         keep_formulas_ok = keep_formulas and preserve_ok
         if keep_formulas and not preserve_ok and log_fn:
-            log_fn("  ⚠️ 保留公式需同时开启保留格式（且非 .xls 转换文件），本次已忽略该选项")
+            log_fn("  ⚠️ 保留公式需同时开启保留格式（且不是 .xls 文件），本次已忽略该选项")
 
-        # ---------- 读数据 ----------
+        # ---------- 读表：每个文件只完整加载一次，值和格式都从这一份取 ----------
         try:
             with _Ticker(log_fn, "读取数据"):
-                df_dict = pd.read_excel(work_path, sheet_name=None, header=None, engine='openpyxl')
+                wb_src, _ = open_book(file_path)
+                if keep_formulas_ok:
+                    # 额外打开一份 data_only=False 的源工作簿，专门取公式文本（不影响 wb_src 的缓存值读取）
+                    wb_formula = openpyxl.load_workbook(file_path, read_only=False, data_only=False)
         except Exception as e:
             if stats is not None:
                 stats["failed_files"] += 1
@@ -640,45 +649,39 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         tick(0.30)
 
         # ---------- 逐 sheet 识别表头 ----------
-        sheet_headers = {}
-        for sn, df in df_dict.items():
-            h = resolve_header_row(df.values[:20].tolist(), config)
-            if h != -1 and h <= len(df):
-                sheet_headers[sn] = h
+        limit = _head_limit(config)
+        sheets = []        # [(sheet 名, ws, 表头行号, 最后一行有内容的行号, 表头行的列名)]
+        for ws in wb_src.worksheets:
+            last = _last_data_row(ws)
+            head = [_key_row(r) for r in ws.iter_rows(min_row=1, max_row=min(last, limit),
+                                                       values_only=True)] if last else []
+            h = resolve_header_row(head, config)
+            if h != -1 and h <= last and h <= len(head):
+                sheets.append((ws.title, ws, h, last, _header_names(head[h - 1])))
             else:
                 if stats is not None:
                     stats["skipped_sheets"] += 1
                 if log_fn:
-                    log_fn(f"  ⚠️ sheet「{sn}」没识别出表头行，已跳过该 sheet")
-        if not sheet_headers:
+                    log_fn(f"  ⚠️ sheet「{ws.title}」没识别出表头行，已跳过该 sheet")
+        if not sheets:
             if stats is not None:
                 stats["failed_files"] += 1
             if log_fn:
                 log_fn("  ⚠️ 未找到有效表头，跳过")
             return 0
 
-        # ---------- 读表头格式（一次性打开源工作簿） ----------
-        if log_fn:
-            log_fn("  ⏳ 正在读取格式…")
-        header_meta = {}
+        # ---------- 读表头格式 ----------
         try:
-            with _Ticker(log_fn, "读取格式"):
-                wb_src = openpyxl.load_workbook(work_path, read_only=False, data_only=True)
-                for sn, h in sheet_headers.items():
-                    if sn in wb_src.sheetnames:
-                        header_meta[sn] = _read_header_format(wb_src[sn], h)
-                if keep_formulas_ok:
-                    # 额外打开一份 data_only=False 的源工作簿，专门取公式文本（不影响 wb_src 的缓存值读取）
-                    wb_formula = openpyxl.load_workbook(work_path, read_only=False, data_only=False)
+            header_meta = {sn: _read_header_format(ws, h) for sn, ws, h, _last, _names in sheets}
         except Exception as e:
             if stats is not None:
                 stats["failed_files"] += 1
             if log_fn:
                 log_fn(f"  ❌ 读取格式失败：{e}")
             return 0
-        est_rows = sum(max(0, len(df_dict[sn]) - h) for sn, h in sheet_headers.items())
+        est_rows = sum(max(0, last - h) for _sn, _ws, h, last, _names in sheets)
         if log_fn:
-            log_fn(f"  ⏳ 读取完成（{len(sheet_headers)} 个 sheet，约 {est_rows} 行数据），开始拆分…")
+            log_fn(f"  ⏳ 读取完成（{len(sheets)} 个 sheet，约 {est_rows} 行数据），开始拆分…")
         tick(0.55)
 
         # 每个源文件一套样式缓存（源工作簿存活期间 id 稳定）
@@ -697,9 +700,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 last_hb_log = rows_written
                 log_fn(f"    …已拆分写入 {rows_written} 行")
 
-        def emit(key, save_path, sheet_name, h_idx, rows_df, ws_src, src_max_col, formula_ws):
+        def emit(key, save_path, sheet_name, h_idx, rows, ws_src, src_max_col, formula_ws):
             nonlocal total_rows
-            if len(rows_df) == 0 or sheet_name not in header_meta:
+            if len(rows) == 0 or sheet_name not in header_meta:
                 return
             ob = outputs.get(key)
             if ob is None:
@@ -713,18 +716,18 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             if first_cols != src_max_col and log_fn:
                 log_fn(f"  ⚠️ 列数与首个来源不一致（{first_cols}→{src_max_col}），"
                        f"按列位置合并可能错位：sheet「{sheet_name}」")
-            _append_rows(sinfo, rows_df, preserve_ok, ws_src, src_max_col, style_cache,
+            _append_rows(sinfo, rows, preserve_ok, ws_src, src_max_col, style_cache,
                          heartbeat=heartbeat, formula_ws=formula_ws)
-            total_rows += len(rows_df)
+            total_rows += len(rows)
             touched_keys.add(key)
 
         # ---------- 逐 sheet 拆分 ----------
-        n_sheets = max(1, len(sheet_headers))
-        for si, (sn, h) in enumerate(sheet_headers.items()):
+        contains = bool(selected_set) and not exact       # 包含匹配：一行可以落进几个分组
+        n_sheets = max(1, len(sheets))
+        for si, (sn, ws, h, last, names) in enumerate(sheets):
             if stop_flag and stop_flag():
                 break
-            df = df_dict[sn]
-            col_idx = _find_col_index(df, h, split_column)
+            col_idx = _find_col(names, split_column)
             if col_idx is None:
                 if stats is not None:
                     stats["skipped_sheets"] += 1
@@ -732,18 +735,20 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     log_fn(f"  ⚠️ sheet「{sn}」第 {h} 行（识别出的表头行）里没找到拆分字段"
                            f"「{split_column}」，已跳过该 sheet")
                 continue
-            pcol_idx = _find_col_index(df, h, person_column) if do_person else None
-
-            data = df.iloc[h:]
-            if len(data) == 0:
+            pcol_idx = _find_col(names, person_column) if do_person else None
+            if last <= h:
                 continue
-            prim = data.iloc[:, col_idx].map(lambda v: apply_alias(v, alias))
-            persons = (data.iloc[:, pcol_idx].map(lambda v: apply_alias(v, alias))
-                       if (do_person and pcol_idx is not None) else None)
 
-            targets = selected if selected_set else sorted({v for v in prim if not is_skip_value(v, skip)})
-            ws_src = wb_src[sn] if (preserve_ok and sn in wb_src.sheetnames) else None
-            src_max_col = ws_src.max_column if ws_src is not None else df.shape[1]
+            # 数据行是 Excel 第 h+1 ~ last 行；第 j 个数据行的 0 基源行号是 h + j
+            keys = [apply_alias(key_value(v), alias) for v in _column_values(ws, col_idx + 1, h + 1, last)]
+            pkeys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, pcol_idx + 1, h + 1, last)]
+                     if pcol_idx is not None else None)
+            targets = selected if selected_set else sorted({k for k in keys if not is_skip_value(k, skip)})
+            buckets = {}
+            if not contains:
+                for j, k in enumerate(keys):
+                    buckets.setdefault(k, []).append(j)
+            src_max_col = ws.max_column
             formula_ws = (wb_formula[sn] if (keep_formulas_ok and wb_formula is not None
                           and sn in wb_formula.sheetnames) else None)
 
@@ -754,29 +759,28 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 tick(0.55 + 0.44 * ((si + ti / max(1, len(targets))) / n_sheets))
                 if is_skip_value(pval, skip):
                     continue
-                pmask = prim.map(lambda x: pval in x) if (selected_set and not exact) else (prim == pval)
-                if not pmask.any():
+                idxs = [j for j, k in enumerate(keys) if pval in k] if contains else buckets.get(pval)
+                if not idxs:
                     continue
-                sub = data[pmask]
 
                 # 汇总（始终产出）
                 k, p = _summary_key_path(output_root, pval, src_stem, single_file, merge)
-                emit(k, p, sn, h, sub, ws_src, src_max_col, formula_ws)
+                emit(k, p, sn, h, _Rows([h + j for j in idxs]), ws, src_max_col, formula_ws)
 
                 # 到人（可选附加产出）
-                if persons is not None:
-                    sub_persons = persons[pmask]
-                    for person in sorted({v for v in sub_persons if not is_skip_value(v, skip)}):
-                        rows_df = sub[sub_persons == person]
-                        if len(rows_df):
-                            k2, p2 = _person_key_path(output_root, pval, person, src_stem, merge)
-                            emit(k2, p2, sn, h, rows_df, ws_src, src_max_col, formula_ws)
+                if pkeys is not None:
+                    per = {}
+                    for j in idxs:
+                        per.setdefault(pkeys[j], []).append(j)
+                    for person in sorted(v for v in per if not is_skip_value(v, skip)):
+                        k2, p2 = _person_key_path(output_root, pval, person, src_stem, merge)
+                        emit(k2, p2, sn, h, _Rows([h + j for j in per[person]]), ws, src_max_col, formula_ws)
 
         if log_fn and total_rows:
             log_fn(f"  ✅ 本文件命中 {total_rows} 行 → 分入 {len(touched_keys)} 个输出文件")
         return total_rows
     finally:
-        # 无论正常结束还是中途异常，都释放源工作簿并清理临时文件（F2）
+        # 无论正常结束还是中途异常，都释放源工作簿
         if wb_src is not None:
             try:
                 wb_src.close()
@@ -787,16 +791,18 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 wb_formula.close()
             except Exception:
                 pass
-        if is_tmp and os.path.exists(work_path):
-            try:
-                os.remove(work_path)
-            except OSError:
-                pass
 
 
 # =====================================================
 # 主流程
 # =====================================================
+
+def _copy_file(src, dst):
+    """按字节复制一个文件。"""
+    with open(src, 'rb') as fi, open(dst, 'wb') as fo:
+        for chunk in iter(lambda: fi.read(1 << 20), b''):
+            fo.write(chunk)
+
 
 def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
     """拆分入口：input_path 可为单文件或目录。一次运行产出『汇总』+ 可选『到人』，
@@ -841,7 +847,7 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
                 continue
             for f in files:
                 # 大小写统一用 lf 判断：区分大小写的文件系统（Linux）上，残留的
-                # `X__TMP__.XLSX` 会绕过原来那条大小写敏感的判断被当数据重新吃进去
+                # `X__TMP__.XLSX` 会绕过原来那条区分大小写的判断被当数据重新吃进去
                 lf = f.lower()
                 if (lf.endswith(('.xlsx', '.xls')) and not f.startswith('~$')
                         and not lf.endswith('__tmp__.xlsx')):   # 跳过旧版可能残留的临时文件
@@ -937,12 +943,12 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
                 try:
                     dst_dir = os.path.join(folder, "汇总")
                     os.makedirs(dst_dir, exist_ok=True)
-                    shutil.copy2(sb.save_path, os.path.join(dst_dir, os.path.basename(sb.save_path)))
+                    _copy_file(sb.save_path, os.path.join(dst_dir, os.path.basename(sb.save_path)))
                 except Exception:
                     pass
             if any(os.scandir(folder)):
                 try:
-                    shutil.make_archive(folder, 'zip', folder)
+                    zip_folder(folder, folder + ".zip")
                     zips += 1
                     _log(f"  📦 {safe_filename(primary)}.zip")
                 except Exception as e:
