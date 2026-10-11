@@ -535,14 +535,16 @@ class App(_RootBase):
         frow.grid(row=7, column=0, padx=12, pady=(0, 12), sticky="ew")
         ctk.CTkLabel(frow, text="让对方填写的列（选填）").pack(side="left")
         self._fill_var = ctk.StringVar(value=str(self.cfg.get("fill_columns", "") or ""))
-        ctk.CTkEntry(frow, textvariable=self._fill_var, width=200,
-                     placeholder_text="如 走访日期、走访结果").pack(side="left", padx=(8, 12))
+        ctk.CTkEntry(frow, textvariable=self._fill_var, width=300,
+                     placeholder_text="如 走访日期（日期）、走访结果（已走访/未走访）").pack(side="left", padx=(8, 12))
         ctk.CTkLabel(frow, text="截止时间").pack(side="left")
         self._due_var = ctk.StringVar(value=str(self.cfg.get("due", "") or ""))
         ctk.CTkEntry(frow, textvariable=self._due_var, width=130,
                      placeholder_text="如 10月15日 18:00").pack(side="left", padx=(8, 0))
         ctk.CTkLabel(card, text="填了的话：这几列标浅黄可编辑、其余列锁定，并生成下发记录和发送清单；"
-                                "收回来后切到「Excel 汇总」一键查谁没交、谁漏填",
+                                "收回来后切到「Excel 汇总」一键查谁没交、谁漏填。括号里可写要求："
+                                "（日期）（数字）（整数）（手机号）（电话）（选填），或用 / 隔开的选项做成下拉框，"
+                                "填错的收回来也查得出",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w", justify="left",
                      wraplength=640).grid(row=8, column=0, padx=12, pady=(0, 10), sticky="w")
 
@@ -1654,7 +1656,7 @@ class App(_RootBase):
             done_all = (ok == exp) if exp is not None else (sub and ok == sub)
             warn = not done_all
             problems = [f"{lab} {s[k]}" for k, lab in (("missing", "未交"), ("empty", "空表"), ("partial", "漏填"),
-                                                       ("changed", "有改动"), ("bad", "没法查"), ("extra", "名单外"))
+                                                       ("invalid", "填写有误"), ("changed", "有改动"), ("bad", "没法查"), ("extra", "名单外"))
                         if s.get(k)]
             head = f"📊 应交 {exp} · 已交 {sub} · 合格 {ok}" if exp is not None else f"📊 已收 {sub} 份 · 合格 {ok} 份"
             lines.append(head + ("（" + " · ".join(problems) + "）" if problems else ""))

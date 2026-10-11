@@ -97,7 +97,7 @@ def test_check_reports_each_status(tmp_path):
     ws = wb["回收进度"]
     assert ws.cell(row=3, column=2).value == "王五"              # 未交排在最前
     assert ws.cell(row=3, column=3).fill.fgColor.rgb.endswith("FFC7CE")
-    assert [c.value for c in wb["漏填明细"]["C"]][1:] == ["走访日期", "走访结果"]
+    assert [c.value for c in wb["问题明细"]["C"]][1:] == ["走访日期", "走访结果"]
 
 
 def test_longest_name_wins(tmp_path):

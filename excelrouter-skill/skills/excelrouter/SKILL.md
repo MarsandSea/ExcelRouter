@@ -369,7 +369,10 @@ python scripts/er_check.py --input "<收回来的表所在文件夹>" --expect "
 - 把 `message` **原样**给用户：开头是可以直接复制发群的通报，后面是逐人催办的话。**本技能不替用户发消息。**
 - 用户追问某个人的情况（「东城还差什么」「只列有漏填的人」）时，读结果里的 `people`
   （每人的 `status` 和 `issues`：`blank` 漏填、`no_col` 没这列、`rows_lost` / `rows_added` / `rows_changed` /
-  `col_deleted` 改了表、`unreadable` 打不开…），**不要重新运行**。
+  `col_deleted` 改了表、`not_in_options` / `not_date` / `not_number` / `not_whole` / `not_mobile` / `not_phone`
+  填写有误、`unreadable` 打不开…），**不要重新运行**。
+- `counts.invalid` 是「填写有误」的人数：下发时在填写列括号里写了要求（如「走访日期（日期）」），
+  收回来不合要求的格子按列、按行号点名，**通报里不写填错的内容本身**。
 - 用户说补齐了就再运行一次（通报里会写新交了谁、谁改好了、谁还差）。
 
 查完要**汇总交了的表**：同一个输入加 `--checked`，`--expect` / `--required` / `--by` / `--record` 照抄查收时的值：

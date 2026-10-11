@@ -129,7 +129,7 @@ def main():
             pass
     emit({"ok": True, "notice": notice, "message": notice + "\n\n" + "\n".join(tail),
           "counts": {k: got.get(k) for k in ("expected", "submitted", "ok", "missing", "empty", "partial",
-                                             "changed", "bad", "extra")},
+                                             "invalid", "changed", "bad", "extra")},
           "people": people, "result_file": got.get("result") or "",
           "files": files, "output_dir": out_dir, "warnings": g["warnings"], "opened": opened,
           "next": "把 message 原样告诉用户（通报可以直接复制发群，逐人催办可单独发给本人）。"

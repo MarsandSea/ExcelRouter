@@ -35,6 +35,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from collections import Counter
 from copy import copy
 from itertools import islice
@@ -43,6 +44,7 @@ import openpyxl
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 from core import splitter as sp
 from core.utils import hard_clean, safe_filename, soft_clean
@@ -72,15 +74,17 @@ SAVE_PER_CELL = 20e-6    # 结果工作簿存盘每个格子约用的秒数（�
 MAX_CELLS = 600_000
 
 ST_MISSING, ST_EMPTY, ST_PARTIAL, ST_CHANGED, ST_BAD, ST_OK = "未交", "空表", "有漏填", "有改动", "表头对不上", "合格"
+ST_INVALID = "填写有误"
 EXTRA = "名单外"
-_RANK = {ST_MISSING: 0, ST_EMPTY: 1, ST_PARTIAL: 2, ST_CHANGED: 3, ST_BAD: 4, ST_OK: 5}
+_RANK = {ST_MISSING: 0, ST_EMPTY: 1, ST_PARTIAL: 2, ST_INVALID: 3, ST_CHANGED: 4, ST_BAD: 5, ST_OK: 6}
 TABLE_EXTS = (".xlsx", ".xlsm", ".xls")
 # 收回来的文件里常见、但读不了的格式：照样算「交了」（不然通报会把交了的人写成未交），原因写成人话
 OTHER_EXTS = {".et": "是 WPS 表格自己的格式（.et）", ".ett": "是 WPS 表格模板（.ett）",
               ".csv": "是 CSV 文本", ".xlsb": "是二进制工作簿（.xlsb）", ".ods": "是 OpenDocument 表格（.ods）",
               ".numbers": "是苹果 Numbers 表格"}
-_STATUS_COLOR = {ST_MISSING: "FFC7CE", ST_EMPTY: "FFC7CE", ST_PARTIAL: "FFEB9C", ST_CHANGED: "FFEB9C",
-                 ST_BAD: "FFEB9C", ST_OK: "C6EFCE"}
+_STATUS_COLOR = {ST_MISSING: "FFC7CE", ST_EMPTY: "FFC7CE", ST_PARTIAL: "FFEB9C", ST_INVALID: "FFEB9C",
+                 ST_CHANGED: "FFEB9C", ST_BAD: "FFEB9C", ST_OK: "C6EFCE"}
+INVALID_FILL = PatternFill("solid", fgColor="FFEB9C")       # 填错的格子（汇总时认不出、没改写法的）标浅橙
 _MASK = (1 << 64) - 1
 
 
@@ -212,12 +216,14 @@ def fingerprint_file(path, cfg, keys):
 
 # ---------- 扫描：只读，不写任何文件 ----------
 
-def scan(files, cfg, deadline=None, log=None, by=None, fp_keys=None, stop=None, progress=None):
+def scan(files, cfg, deadline=None, log=None, by=None, fp_keys=None, stop=None, progress=None, rules=None,
+         base=None):
     """读各表各 sheet 的表头、行数、每列空了哪几行。超过 deadline 或 stop() 为真就停，如实返回 complete=False。
 
     files 是 [(绝对路径, 相对路径)]。返回：
       sheets   [{file: 文件序号, rel, sheet, names, keys, rows, totals, filled: {列键: 有内容的行数},
-                 blank_rows: {列键: [空着的 Excel 行号]}, groups?: 按 by 列分组的同样统计, fp?: 指纹}]
+                 blank_rows: {列键: [空着的 Excel 行号]}, groups?: 按 by 列分组的同样统计, fp?: 指纹,
+                 bad?: 按 rules（{列名: 规则}）查出的填错 [{col, code, count, rows}]}]
       claims   {文件序号: 「填报说明」里写的填报对象}
       seen     读成功的文件序号；skipped / dupes / errors / empty（只有表头、没填数据的表）
     只留列名、计数和行号，不留任何单元格的值。
@@ -264,7 +270,7 @@ def scan(files, cfg, deadline=None, log=None, by=None, fp_keys=None, stop=None, 
                     if any(_nonempty(r) for r in head):
                         res["skipped"].append({"file": rel, "sheet": sn, "reason": "认不出表头"})
                     continue
-                entry = _scan_sheet(head, h, it, by, fp_keys)
+                entry = _scan_sheet(head, h, it, by, fp_keys, rules, base)
                 if not entry["rows"]:
                     header_only = True            # 只有表头的 sheet（空模板、填表说明）不合
                     continue
@@ -283,10 +289,27 @@ def scan(files, cfg, deadline=None, log=None, by=None, fp_keys=None, stop=None, 
     return res
 
 
-def _scan_sheet(head, h, it, by, fp_keys):
+def _bad_add(store, col, code, r, options=None):
+    b = store.get((col, code))
+    if b is None:
+        b = store[(col, code)] = {"col": col, "code": code, "count": 0, "rows": []}
+        if options and len(options) <= SHOW_OPTIONS:
+            b["options"] = list(options)
+    b["count"] += 1
+    if len(b["rows"]) < BLANK_KEEP:
+        b["rows"].append(r)
+
+
+def _scan_sheet(head, h, it, by, fp_keys, rules=None, base=None):
     names = col_names(head, h)
     keys = col_keys(names)
     n = len(names)
+    checks = []                       # [(列号, 列名, 规则)]：按下发时的规则查格式
+    for name, rule in (rules or {}).items():
+        c = _key_index(keys, name)
+        if c is not None and rule.get("type", "text") in BAD_CODE:
+            checks.append((c, name, rule))
+    bad = {}
     rows = totals = 0
     nblank, blank_rows = [0] * n, [[] for _ in range(n)]
     bi = _key_index(keys, by) if by else None
@@ -305,15 +328,24 @@ def _scan_sheet(head, h, it, by, fp_keys):
             nblank[c] += 1
             if len(blank_rows[c]) < BLANK_KEEP:
                 blank_rows[c].append(r)
+        wrong = []
+        for c, name, rule in checks:
+            v = _cell(row, c)
+            if soft_clean(v) != "" and not _coerce(v, rule, base)[0]:
+                wrong.append((name, BAD_CODE[rule["type"]], rule.get("options")))
+                _bad_add(bad, *wrong[-1][:2], r, wrong[-1][2])
         if groups is not None:
             g = groups.get(soft_clean(_cell(row, bi)))
             if g is None:
-                g = groups[soft_clean(_cell(row, bi))] = {"rows": 0, "nblank": [0] * n, "blank_rows": [[] for _ in range(n)]}
+                g = groups[soft_clean(_cell(row, bi))] = {"rows": 0, "nblank": [0] * n, "blank_rows": [[] for _ in range(n)],
+                                                          "bad": {}}
             g["rows"] += 1
             for c in empty_cols:
                 g["nblank"][c] += 1
                 if len(g["blank_rows"][c]) < BLANK_KEEP:
                     g["blank_rows"][c].append(r)
+            for name, code, opts in wrong:
+                _bad_add(g["bad"], name, code, r, opts)
         if fpi is not None:
             vals = [_norm(_cell(row, c)) for c in fpi]
             row_fp.append(_digest("\x1f".join(vals))[:12])
@@ -326,8 +358,11 @@ def _scan_sheet(head, h, it, by, fp_keys):
     if groups is not None:
         entry["by"] = names[bi]
         entry["groups"] = {gv: {"rows": g["rows"], "filled": {k: g["rows"] - nb for k, nb in zip(keys, g["nblank"])},
-                                "blank_rows": {k: br for k, br in zip(keys, g["blank_rows"]) if br}}
+                                "blank_rows": {k: br for k, br in zip(keys, g["blank_rows"]) if br},
+                                "bad": list(g["bad"].values())}
                            for gv, g in groups.items()}
+    if checks:
+        entry["bad"] = list(bad.values())
     if fpi is not None:
         entry["fp"] = {"rows": row_fp, "row_no": row_no,
                        "cols": {k: f"{a:016x}" for k, a in zip(fp_keys, col_acc)}}
@@ -364,7 +399,7 @@ def compare(sheets, mode):
         g["items"].append({"file": s["file"], "rel": s["rel"], "sheet": s["sheet"], "rows": s["rows"],
                            "totals": s["totals"], "missing": missing, "extra": extra, "mismatch": bad,
                            "filled": s["filled"], "blank_rows": s.get("blank_rows", {}), "blanks": {},
-                           "fp": s.get("fp"), "group": s.get("group")})
+                           "fp": s.get("fp"), "group": s.get("group"), "bad": s.get("bad", [])})
         if not bad:
             g["rows"] += s["rows"]
     return groups
@@ -438,6 +473,251 @@ def split_names(text):
     else:
         parts = [soft_clean(t) for t in re.split(r"[、,，;；\s]+", text or "")]
     return list(dict.fromkeys(p for p in parts if p))
+
+
+# ---------- 填报规则：「让对方填写的列」括号里写的要求 ----------
+
+RULE_TYPES = {"日期": "date", "数字": "number", "整数": "whole", "手机号": "mobile", "手机": "mobile",
+              "手机号码": "mobile", "电话": "phone"}
+RULE_LABELS = {"list": "从下拉里选", "date": "日期", "number": "数字", "whole": "整数", "mobile": "手机号",
+               "phone": "电话号码"}
+RULE_EXAMPLES = {"date": "2026-10-15", "number": "3.5", "whole": "3", "mobile": "13800138000",
+                 "phone": "13800138000 或 010-12345678"}
+BAD_CODE = {"list": "not_in_options", "date": "not_date", "number": "not_number", "whole": "not_whole",
+            "mobile": "not_mobile", "phone": "not_phone"}
+LIST_MAX = 255               # Excel 下拉框选项文字的上限
+SHOW_OPTIONS = 6             # 通报里最多列出这么多个选项，再多只说「请从下拉里选」
+_NUM_LIMIT = "1E+15"
+
+
+def parse_fill_spec(text, log=None):
+    """「走访日期（日期）、走访结果（已走访/未走访）、备注（选填）」→ [(列名, 规则)]。
+
+    规则：{"type": text|list|date|number|whole|mobile|phone, "options": [...]（仅 list）, "optional": bool}。
+    括号外按 split_names 的分隔符切；不写括号时和 split_names 完全一样（每列都是 text、必填）。
+    括号里看不懂的词不拦人：这一列按普通文字处理（只查漏填），日志里说一句。
+    """
+    log = log or (lambda m: None)
+    if isinstance(text, (list, tuple)):
+        text = "、".join(str(t) for t in text if t is not None)
+    text = text or ""
+    if "(" not in text and "（" not in text:
+        return [(n, {"type": "text", "optional": False}) for n in split_names(text)]
+    tokens, buf, depth = [], "", 0
+    for ch in text:
+        if ch in "(（":
+            depth += 1
+        elif ch in ")）":
+            depth = max(0, depth - 1)
+        if depth == 0 and re.match(r"[、,，;；\s]", ch):
+            tokens.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    tokens.append(buf)
+    out, seen = [], set()
+    for tok in tokens:
+        m = re.match(r"^(.*?)[(（](.*)[)）]\s*$", tok.strip())
+        name = soft_clean(m.group(1) if m else tok)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        rule = {"type": "text", "optional": False}
+        typ, options, unknown = None, None, []
+        for w in re.split(r"[\s,，、;；]+", m.group(2) if m else ""):
+            w = w.strip()
+            if not w:
+                continue
+            if re.search(r"[/｜|]", w):
+                options = list(dict.fromkeys(o.strip() for o in re.split(r"[/｜|]", w) if o.strip()))
+            elif w in RULE_TYPES:
+                typ = RULE_TYPES[w]
+            elif w == "选填":
+                rule["optional"] = True
+            elif w != "必填":
+                unknown.append(w)
+        if options:
+            if typ:
+                log(f"  ℹ️ 「{name}」同时写了选项和类型，按选项处理")
+            rule.update(type="list", options=options)
+        elif typ:
+            rule["type"] = typ
+        if unknown:
+            hint = "；日期请写（日期），选项用 / 隔开" if rule["type"] == "text" else ""
+            log(f"  ℹ️ 看不懂「{'、'.join(unknown)}」，「{name}」" + ("按普通文字处理" if rule["type"] == "text"
+                                                                 else "其余要求照常") + hint)
+        out.append((name, rule))
+    return out
+
+
+def _nfkc(v):
+    return unicodedata.normalize("NFKC", str(v)).strip()
+
+
+_DATE_FULL = re.compile(r"^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?$")
+_DATE_COMPACT = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
+_DATE_SHORT = re.compile(r"^(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*日?$")
+_NUMBER = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([\u4e00-\u9fff]{1,2})?$")
+_SERIAL_MIN, _SERIAL_MAX = 32874, 73415          # 1990-01-01 ～ 2100-12-31 的 Excel 日期序号
+
+
+def _mk_date(y, m, d):
+    try:
+        return datetime.datetime(int(y), int(m), int(d))
+    except ValueError:
+        return None
+
+
+def _near_year(m, d, base):
+    """只写了月、日：年份取离下发日期最近的那一年（12 月下发、填「1月3日」算次年）。"""
+    best = None
+    for y in (base.year - 1, base.year, base.year + 1):
+        dt = _mk_date(y, m, d)
+        if dt and (best is None or abs((dt.date() - base).days) < abs((best.date() - base).days)):
+            best = dt
+    return best
+
+
+def _as_number(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return v
+    t = _nfkc(v).replace(",", "").replace(" ", "")
+    m = _NUMBER.match(t)
+    if not m:
+        return None
+    n = float(m.group(1)) if "." in m.group(1) else int(m.group(1))
+    return -n if t.startswith("-") else n
+
+
+def _mobile(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    t = re.sub(r"[\s-]", "", _nfkc(v))
+    for p in ("+86", "0086"):
+        if t.startswith(p):
+            t = t[len(p):]
+    if t.startswith("86") and len(t) == 13:
+        t = t[2:]
+    return t if re.fullmatch(r"1[3-9]\d{9}", t) else None
+
+
+def _landline(v):
+    if not isinstance(v, str):
+        return None
+    t = _nfkc(v)
+    m = re.match(r"^(.*?)((?:转|ext\.?|#)\s*\d{1,6})?$", t, re.I)
+    body, ext = m.group(1).strip(), (m.group(2) or "")
+    m2 = re.fullmatch(r"[(（]?(0\d{2,3})[)）]?[\s-]+(\d{7,8})|[(（](0\d{2,3})[)）](\d{7,8})", body)
+    if m2:
+        area, local = (m2.group(1), m2.group(2)) if m2.group(1) else (m2.group(3), m2.group(4))
+    else:
+        digits = body.replace(" ", "")
+        if not re.fullmatch(r"0\d{9,11}", digits):
+            return None
+        n = 3 if digits[1] in "12" else 4           # 010、02x 是三位区号，其余四位
+        area, local = digits[:n], digits[n:]
+        if not 7 <= len(local) <= 8:
+            return None
+    return f"{area}-{local}{ext}"
+
+
+def _coerce(value, rule, base=None):
+    """按规则判一个非空格子：返回 (对不对, 规范写法)。查收判对错、汇总时改写法共用这一个函数，口径不会对不上。
+
+    宽进：能无歧义认出来的算对（文字日期、「1,200」「3户」、带空格 / +86 的手机号、全角选项）；
+    数字形式的「10.1」分不清是 10月1日 还是 10月10日，不算日期。base：下发日期（补年份用），默认今天。
+    """
+    typ = rule.get("type", "text")
+    if typ == "text":
+        return True, value
+    if typ == "list":
+        t = _nfkc(value).casefold()
+        for o in rule.get("options", ()):
+            if _nfkc(o).casefold() == t:
+                return True, o
+        return False, value
+    if typ in ("number", "whole"):
+        n = _as_number(value)
+        if n is None:
+            return False, value
+        if isinstance(n, float) and n.is_integer():
+            n = int(n)
+        if typ == "whole" and not isinstance(n, int):
+            return False, value
+        return True, n
+    if typ == "date":
+        if isinstance(value, datetime.date):
+            # 设成日期格式的格子里填了「10.1」这类数，读出来是 1900 年的日期：和序号一样只认 1990～2100 年
+            if not 1990 <= value.year <= 2100:
+                return False, value
+            if isinstance(value, datetime.datetime):
+                return True, value
+            return True, datetime.datetime(value.year, value.month, value.day)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if _SERIAL_MIN <= value <= _SERIAL_MAX:
+                return True, datetime.datetime(1899, 12, 30) + datetime.timedelta(days=int(value))
+            return False, value
+        t = _nfkc(value)
+        base = base or datetime.date.today()
+        m = _DATE_FULL.match(t) or _DATE_COMPACT.match(t)
+        dt = _mk_date(*m.groups()[:3]) if m else None
+        if dt is None and not m:
+            m = _DATE_SHORT.match(t)
+            dt = _near_year(m.group(1), m.group(2), base) if m else None
+        return (True, dt) if dt else (False, value)
+    if typ == "mobile":
+        mob = _mobile(value)
+        return (True, mob) if mob else (False, value)
+    if typ == "phone":
+        tel = _mobile(value) or _landline(value)
+        return (True, tel) if tel else (False, value)
+    return True, value
+
+
+def _mask(text):
+    """号码打码：只留前 3 位和后 4 位数字（「汇总说明」被截图转发时不带出号码）。"""
+    t = str(text)
+    pos = [i for i, ch in enumerate(t) if ch.isdigit()]
+    hide = set(pos[3:-4]) if len(pos) > 7 else set()
+    return "".join("*" if i in hide else ch for i, ch in enumerate(t))
+
+
+def _rule_text(rule):
+    """填报说明里「要求」一栏。"""
+    head = "选填" if rule.get("optional") else "必填"
+    return f"{head} · {RULE_LABELS[rule['type']]}" if rule["type"] in RULE_LABELS else head
+
+
+def _validation(rule, name, top, letter):
+    """一列的数据验证；不能加（选项太长、含英文逗号、电话）时返回 None。"""
+    typ = rule["type"]
+    kw = {"allow_blank": True, "showErrorMessage": True, "errorStyle": "stop", "showInputMessage": True,
+          "errorTitle": name[:32], "promptTitle": name[:32]}
+    if typ == "list":
+        opts = rule["options"]
+        lit = ",".join(opts)
+        if len(lit) > LIST_MAX or any("," in o or '"' in o for o in opts):
+            return None
+        tip = " / ".join(opts)
+        return DataValidation(type="list", formula1=f'"{lit}"', error=f"请从下拉里选：{tip}"[:255],
+                              prompt=f"从下拉里选：{tip}"[:255], **kw)
+    if typ == "date":
+        return DataValidation(type="date", operator="greaterThan", formula1="1",
+                              error="请填日期，比如 2026-10-15", prompt="填日期，比如 2026-10-15", **kw)
+    if typ in ("number", "whole"):
+        what = "数字" if typ == "number" else "整数"
+        return DataValidation(type="decimal" if typ == "number" else "whole", operator="between",
+                              formula1=f"-{_NUM_LIMIT}", formula2=_NUM_LIMIT,
+                              error=f"请填{what}，不要带单位或文字", prompt=f"填{what}", **kw)
+    if typ == "mobile":
+        c = f"{letter}{top}"
+        return DataValidation(type="custom", formula1=f'AND(LEN({c})=11,LEFT({c},1)="1",ISNUMBER(--{c}))',
+                              error="请填 11 位手机号", prompt="填 11 位手机号", **kw)
+    return None
 
 
 def _keyed(names):
@@ -612,12 +892,17 @@ ISSUE_STATUS = {
     "missing": ST_MISSING, "not_in_total": ST_MISSING,
     "empty": ST_EMPTY,
     "blank": ST_PARTIAL, "no_col": ST_PARTIAL,
+    "not_in_options": ST_INVALID, "not_date": ST_INVALID, "not_number": ST_INVALID, "not_whole": ST_INVALID,
+    "not_mobile": ST_INVALID, "not_phone": ST_INVALID,
     "col_deleted": ST_CHANGED, "rows_lost": ST_CHANGED, "rows_added": ST_CHANGED, "rows_changed": ST_CHANGED,
     "header_mismatch": ST_BAD, "unreadable": ST_BAD, "no_header": ST_BAD,
     "old_version": None, "same_as": None,          # 只注明，不影响状态
 }
 ISSUE_NAG = {c: st is not None for c, st in ISSUE_STATUS.items()}    # 要不要催（只注明的不催）
 _BLANK_CODES = ("blank", "no_col")
+_INVALID_CODES = ("not_in_options", "not_date", "not_number", "not_whole", "not_mobile", "not_phone")
+INVALID_TEXT = {"not_in_options": "不在选项里", "not_date": "不是日期", "not_number": "不是数字",
+                "not_whole": "不是整数", "not_mobile": "不是手机号", "not_phone": "不是电话号码"}
 _CHANGE_CODES = ("col_deleted", "rows_lost", "rows_added", "rows_changed")
 _NOTE_CODES = ("not_in_total", "old_version", "same_as", "unreadable", "no_header", "header_mismatch")
 
@@ -632,6 +917,8 @@ ISSUE_TEXT = {
     "empty": lambda i: "只有表头，没填数据" if i.get("why") == "header_only" else "该填的列一格都没填",
     "blank": lambda i: _blank_text(i),
     "no_col": lambda i: _blank_text(dict(i, no_col=True)),
+    **{c: (lambda i: _invalid_text(i)) for c in ("not_in_options", "not_date", "not_number", "not_whole",
+                                                 "not_mobile", "not_phone")},
     "col_deleted": lambda i: "删了" + _quoted(i["cols"]) + "列",
     "rows_lost": lambda i: f"少了 {i['count']} 行",
     "rows_added": lambda i: f"多了 {i['count']} 行",
@@ -645,12 +932,19 @@ ISSUE_TEXT = {
 }
 
 
+def _invalid_text(i):
+    text = f"{i['col']} {_rows_text(i.get('rows', []), i['count'])}{INVALID_TEXT[i['code']]}"
+    if i["code"] == "not_in_options":
+        text += f"（应为 {' / '.join(i['options'])}）" if i.get("options") else "（请从下拉里选）"
+    return text
+
+
 def issue_text(i):
     """一个问题的说明文字。多 sheet 时漏填、改动类问题前面带「sheet·」。"""
     fn = ISSUE_TEXT.get(i["code"])
     text = fn(i) if fn else i["code"]
-    if i["code"] in _BLANK_CODES + _CHANGE_CODES and i.get("sheet"):
-        if i["code"] in _BLANK_CODES:
+    if i["code"] in _BLANK_CODES + _INVALID_CODES + _CHANGE_CODES and i.get("sheet"):
+        if i["code"] in _BLANK_CODES + _INVALID_CODES:
             return fn(dict(i, col=f"{i['sheet']}·{i['col']}"))
         return f"{i['sheet']}·{text}"
     return text
@@ -670,6 +964,8 @@ def _derive(p):
     p["blanks"] = [{"col": (f"{i['sheet']}·" if i.get("sheet") else "") + i["col"], "count": i["count"],
                     "rows": i.get("rows", []), **({"no_col": True} if i["code"] == "no_col" else {})}
                    for i in issues if i["code"] in _BLANK_CODES]
+    p["invalid"] = [{"col": (f"{i['sheet']}·" if i.get("sheet") else "") + i["col"], "code": i["code"],
+                     "count": i["count"], "rows": i.get("rows", [])} for i in issues if i["code"] in _INVALID_CODES]
     p["changes"] = [issue_text(i) for i in issues if i["code"] in _CHANGE_CODES]
     notes = [issue_text(i) for i in issues if i["code"] in _NOTE_CODES]
     if not notes and any(i["code"] == "empty" and i.get("why") == "header_only" for i in issues):
@@ -719,7 +1015,8 @@ def analyze(files, res, expect=(), wanted=(), record=None, by=None, rows_mode=Fa
     record = record or {}
     sheets = res["sheets"]
     if rows_mode:
-        sheets = [dict(s, rows=g["rows"], filled=g["filled"], blank_rows=g["blank_rows"], group=gv, fp=None)
+        sheets = [dict(s, rows=g["rows"], filled=g["filled"], blank_rows=g["blank_rows"], group=gv, fp=None,
+                       bad=g.get("bad", []))
                   for s in res["sheets"] for gv, g in s.get("groups", {}).items()]
         mode = "by_name"
     else:
@@ -858,6 +1155,7 @@ def _judge(p, pairs, chosen_count, rec, lock_names):
             elif it["filled"][k] < it["rows"]:
                 found.append({"code": "blank", "col": tn[k], "count": it["rows"] - it["filled"][k],
                               "rows": it["blank_rows"].get(k, []), **where})
+        found += [dict(b, **where) for b in it.get("bad", ())]
         if rec and it.get("fp"):
             sheets = rec.get("sheets", {})
             base = sheets.get(it["sheet"]) or (next(iter(sheets.values())) if len(sheets) == 1 else None)
@@ -889,6 +1187,7 @@ def counts(report):
             "missing": sum(1 for p in people if p["status"] == ST_MISSING),
             "empty": sum(1 for p in people if ST_EMPTY in p["flags"]),
             "partial": sum(1 for p in people if ST_PARTIAL in p["flags"]),
+            "invalid": sum(1 for p in people if ST_INVALID in p["flags"]),
             "changed": sum(1 for p in people if ST_CHANGED in p["flags"]),
             "bad": sum(1 for p in people if ST_BAD in p["flags"]),
             "extra": len(report["extra"])}
@@ -905,6 +1204,8 @@ def _remind(p, title, due, has_fill):
     parts = []
     if p["blanks"]:
         parts.append("有漏填：" + "，".join(_blank_text(b) for b in p["blanks"]))
+    if p.get("invalid"):
+        parts.append("填写有误：" + "；".join(issue_text(i) for i in p["issues"] if i["code"] in _INVALID_CODES))
     if p["changes"]:
         tip = "请用下发的原表填写，只填黄色的列" if has_fill else "请用下发的原表填写"
         parts.append("和下发时不一样：" + "，".join(p["changes"]) + f"（{tip}）")
@@ -941,6 +1242,11 @@ def notice_text(report, title, due="", now=None, has_fill=False):
     if part:
         lines.append(f"有漏填（{len(part)}）：")
         lines += [f"  {p['name']}：" + "，".join(_blank_text(b) for b in p["blanks"]) for p in part]
+    inv = names(ST_INVALID)
+    if inv:
+        lines.append(f"填写有误（{len(inv)}）：")
+        lines += [f"  {p['name']}：" + "；".join(issue_text(i) for i in p["issues"] if i["code"] in _INVALID_CODES)
+                  for p in inv]
     chg = names(ST_CHANGED)
     if chg:
         lines.append(f"改了不该改的（{len(chg)}）：")
@@ -976,7 +1282,7 @@ def notice_text(report, title, due="", now=None, has_fill=False):
 
 
 def write_progress(report, path, title, now=None, due="", has_fill=False):
-    """回收进度.xlsx：每人一行，未交 / 空表标红、有漏填 / 有改动标橙、合格标绿；另有「漏填明细」。
+    """回收进度.xlsx：每人一行，未交 / 空表标红、有漏填 / 填写有误 / 有改动标橙、合格标绿；另有「问题明细」。
 
     文件正被打开、存不进去时换个带时间的文件名，返回实际写入的路径。
     """
@@ -985,7 +1291,8 @@ def write_progress(report, path, title, now=None, due="", has_fill=False):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "回收进度"
-    head = ["序号", "应交", "状态", "交的文件", "数据行数", "漏填", "和下发时不一样", "交表时间", "说明", "催办话术"]
+    head = ["序号", "应交", "状态", "交的文件", "数据行数", "漏填", "填写有误", "和下发时不一样", "交表时间", "说明",
+            "催办话术"]
     summary = (f"【{title}】应交 {c['expected']}，已交 {c['submitted']}，合格 {c['ok']}"
                if c["expected"] is not None else f"【{title}】已收 {c['submitted']} 份，合格 {c['ok']} 份")
     ws.append([f"{summary}（{_now_text(now)}）"])
@@ -1001,28 +1308,35 @@ def write_progress(report, path, title, now=None, due="", has_fill=False):
         p = report["people"][j]
         status = p["status"] if len(p["flags"]) <= 1 else "、".join(p["flags"])
         ws.append([n, p["name"], status, "、".join(p["files"]), p["rows"] or "",
-                   "；".join(_blank_text(b) for b in p["blanks"]), "；".join(p["changes"]), p["time"],
+                   "；".join(_blank_text(b) for b in p["blanks"]),
+                   "；".join(issue_text(i) for i in p.get("issues", ()) if i["code"] in _INVALID_CODES),
+                   "；".join(p["changes"]), p["time"],
                    "；".join(p["notes"]), _remind(p, title, due, has_fill)])
         ws.cell(row=ws.max_row, column=3).fill = PatternFill("solid", fgColor=_STATUS_COLOR[p["status"]])
     for x in report["extra"]:
-        ws.append(["", "", EXTRA, x, "", "", "", "", "不在应交名单里，请核对是不是这次的表", ""])
-    for col, w in zip("ABCDEFGHIJ", (6, 14, 12, 30, 9, 40, 30, 12, 30, 50)):
+        ws.append(["", "", EXTRA, x, "", "", "", "", "", "不在应交名单里，请核对是不是这次的表", ""])
+    for col, w in zip("ABCDEFGHIJK", (6, 14, 12, 30, 9, 40, 36, 30, 12, 30, 50)):
         ws.column_dimensions[col].width = w
     wrap = Alignment(wrap_text=True, vertical="top")
     for row in ws.iter_rows(min_row=3):
         for cell in row:
             cell.alignment = wrap
     ws.freeze_panes = "C3"
-    ws2 = wb.create_sheet("漏填明细")
-    ws2.append(["应交", "交的文件", "列", "漏填格数", "行号"])
+    ws2 = wb.create_sheet("问题明细")
+    ws2.append(["应交", "交的文件", "列", "问题", "格数", "行号"])
     for cell in ws2[1]:
         cell.font = bold
+
+    def rows_cell(b):
+        return "、".join(str(r) for r in b["rows"]) + ("…" if len(b["rows"]) < b["count"] else "")
+
     for p in report["people"]:
         for b in p["blanks"]:
-            ws2.append([p["name"], "、".join(p["files"]), b["col"], b["count"],
-                        "整列没有" if b.get("no_col") else "、".join(str(r) for r in b["rows"])
-                        + ("…" if len(b["rows"]) < b["count"] else "")])
-    for col, w in zip("ABCDE", (14, 30, 20, 10, 60)):
+            ws2.append([p["name"], "、".join(p["files"]), b["col"], "漏填", b["count"],
+                        "整列没有" if b.get("no_col") else rows_cell(b)])
+        for b in p.get("invalid", ()):
+            ws2.append([p["name"], "、".join(p["files"]), b["col"], INVALID_TEXT[b["code"]], b["count"], rows_cell(b)])
+    for col, w in zip("ABCDEF", (14, 30, 20, 12, 8, 60)):
         ws2.column_dimensions[col].width = w
     ws2.freeze_panes = "A2"
     return _save_book(wb, path, now)
@@ -1120,16 +1434,19 @@ def prepare_issue(output_path, saved, config, log=None):
     下发记录.json 只有分组名、文件名、列名、行数和每行的短哈希，不含单元格内容。返回记录路径。
     """
     log = log or (lambda m: None)
-    fill = split_names(config.get("fill_columns") or [])
+    specs = parse_fill_spec(config.get("fill_columns") or [], log)
+    fill = [n for n, _r in specs]
     if not fill:
         return ""
+    rules = {n: r for n, r in specs if r["type"] != "text"}
+    optional = [n for n, r in specs if r.get("optional")]
     due = soft_clean(config.get("due", ""))
     title = soft_clean(config.get("issue_title", "")) or os.path.splitext(
         os.path.basename(os.path.normpath(config.get("input_path", ""))))[0]
     lock_order, lock_names, files = [], {}, []
     for group, path, is_summary in saved:
         try:
-            names = _mark_fill(path, group, fill, title, due, config)
+            names = _mark_fill(path, group, fill, title, due, config, specs, log)
         except Exception as e:
             log(f"  ⚠️ 没能标出填写列：{os.path.basename(path)}：{e}")
             continue
@@ -1155,6 +1472,9 @@ def prepare_issue(output_path, saved, config, log=None):
     record = {"version": 1, "title": title, "due": due, "created": datetime.datetime.now().isoformat(timespec="seconds"),
               "split_column": soft_clean(config.get("split_column", "")), "fill_columns": fill,
               "lock_keys": lock_order, "lock_columns": [lock_names[k] for k in lock_order], "groups": groups}
+    if rules or optional:            # 写了括号才有：不写括号时记录和 v2.10 一字不差
+        record["required"] = [n for n in fill if n not in optional]
+        record["rules"] = rules
     rec_path = os.path.join(output_path, RECORD_NAME)
     with open(rec_path, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=1)
@@ -1168,9 +1488,15 @@ def prepare_issue(output_path, saved, config, log=None):
     return rec_path
 
 
-def _mark_fill(path, group, fill, title, due, cfg):
-    """标黄填写列、锁定其余格子、加「填报说明」sheet。返回各 sheet 的列名（含新加的填写列）。"""
+def _mark_fill(path, group, fill, title, due, cfg, specs=None, log=None):
+    """标黄填写列、锁定其余格子、加「填报说明」sheet。返回各 sheet 的列名（含新加的填写列）。
+
+    specs（parse_fill_spec 的结果）里有规则的列再加数据验证：下拉框、日期、数字、整数、手机号；
+    日期列显示成 yyyy-mm-dd，手机号 / 电话列设成文本格式。数据验证拦不住粘贴，所以查收时照样按规则再查。
+    """
     from openpyxl.styles import Protection
+    rules = dict(specs or [])
+    noted = set()
     wb = openpyxl.load_workbook(path)
     yellow = PatternFill("solid", fgColor=FILL_COLOR)
     unlocked = Protection(locked=False)
@@ -1193,7 +1519,9 @@ def _mark_fill(path, group, fill, title, due, cfg):
                     _add_col(ws, h, c + 1, want)
                 cols.append(c + 1)
             last = ws.max_row
-            for c in cols:
+            for want, c in zip(fill, cols):
+                rule = rules.get(want, {"type": "text"})
+                fmt = {"date": "yyyy-mm-dd", "mobile": "@", "phone": "@"}.get(rule["type"])
                 ws.cell(row=h, column=c).fill = yellow
                 for r in range(h + 1, last + 1):
                     cell = ws.cell(row=r, column=c)
@@ -1201,6 +1529,18 @@ def _mark_fill(path, group, fill, title, due, cfg):
                         continue
                     cell.fill = yellow
                     cell.protection = unlocked
+                    if fmt:
+                        cell.number_format = fmt
+                if rule["type"] == "text" or last <= h:
+                    continue
+                letter = get_column_letter(c)
+                dv = _validation(rule, want, h + 1, letter)
+                if dv is not None:
+                    dv.add(f"{letter}{h + 1}:{letter}{last}")
+                    ws.add_data_validation(dv)
+                elif rule["type"] == "list" and want not in noted and log:
+                    noted.add(want)
+                    log(f"  ℹ️ 「{want}」的选项太长（或带英文逗号），没加下拉框；收回来照样按选项查")
             ws.protection.sheet = True
             ws.protection.formatColumns = False      # 允许调列宽、行高，看得清楚
             ws.protection.formatRows = False
@@ -1217,6 +1557,17 @@ def _mark_fill(path, group, fill, title, due, cfg):
         g.column_dimensions["B"].width = 70
         for c in g["A"]:
             c.font = Font(bold=True)
+        if any(r["type"] != "text" or r.get("optional") for r in rules.values()):
+            g.append([])
+            g.append(["列名", "要求", "可填的值 / 示例"])
+            for c in g[g.max_row]:
+                c.font = Font(bold=True)
+            for want in fill:
+                rule = rules.get(want, {"type": "text"})
+                example = " / ".join(rule["options"]) if rule["type"] == "list" else RULE_EXAMPLES.get(rule["type"], "")
+                g.append([want, _rule_text(rule), example])
+            g.column_dimensions["C"].width = 40
+        g.protection.sheet = True        # 防止无意中改了「填报对象」，查收时认不出是谁交的（不设口令）
         wb.save(path)
     finally:
         wb.close()
@@ -1299,7 +1650,12 @@ def _prepare(config, log):
     wanted = split_names(config.get("collect_required") or [])
     req_source = "指定的列" if wanted else ""
     if not wanted and record and record.get("fill_columns"):
-        wanted, req_source = list(record["fill_columns"]), "下发时的填写列"
+        wanted, req_source = list(record.get("required") or record["fill_columns"]), "下发时的填写列"
+    rules = (record or {}).get("rules") if isinstance((record or {}).get("rules"), dict) else None
+    try:
+        issued = datetime.date.fromisoformat(str((record or {}).get("created", ""))[:10])
+    except ValueError:
+        issued = datetime.date.today()
     by = soft_clean(config.get("collect_by", ""))
     rows_mode = bool(by) and os.path.isfile(input_path)
     title = soft_clean(config.get("collect_title")) or (record or {}).get("title") or (
@@ -1310,7 +1666,8 @@ def _prepare(config, log):
             "by": by, "rows_mode": rows_mode, "title": title, "due": due,
             # 文件夹模式：没指定分人列时用下发时的拆分列认文件（只用来认，不按它分人）
             "claim_by": by or ((record or {}).get("split_column", "") if not rows_mode else ""),
-            "fp_keys": (record or {}).get("lock_keys") if record and not rows_mode else None}
+            "fp_keys": (record or {}).get("lock_keys") if record and not rows_mode else None,
+            "rules": rules, "base": issued}
 
 
 def _inspect(config, log, progress, stop):
@@ -1322,7 +1679,7 @@ def _inspect(config, log, progress, stop):
     if not files:
         log("⚠️ 没有找到交回来的表（.xlsx / .xls），请检查文件夹")
     res = scan(files, config, log=log, by=ctx["claim_by"] or None, fp_keys=ctx["fp_keys"], stop=stop,
-               progress=progress)
+               progress=progress, rules=ctx["rules"], base=ctx["base"])
     if not res["complete"]:
         return ctx, res, None
     report = analyze(files, res, ctx["expect"], ctx["wanted"], ctx["record"], ctx["by"], ctx["rows_mode"])
@@ -1332,6 +1689,8 @@ def _inspect(config, log, progress, stop):
         log("⚠️ 没有定出该填的列，只查谁没交、谁交了空表；可在「必须填的列」里指定")
     if report["unknown_required"]:
         log("⚠️ 表头里找不到这些列，请核对列名：" + "、".join(report["unknown_required"]))
+    if ctx["rules"]:
+        log("按下发时的填写要求查格式：" + "；".join(f"{n} {_rule_text(r)}" for n, r in ctx["rules"].items()))
     for n in report["notes"]:
         log(f"⚠️ {n}")
     return ctx, res, report
@@ -1438,6 +1797,7 @@ def run_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     output = _result_path(out_dir, ctx["title"])
     log(f"\n开始汇总 {len(sel)} 个表…")
     st = merge_start(output)
+    st["base"] = ctx["base"].isoformat()
 
     def _prog(frac, _text=""):
         if progress_fn:
@@ -1445,7 +1805,8 @@ def run_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
 
     done = merge_step(st, sel, config, mode, {k: g["required"] for k, g in groups.items()}, log=log,
                       progress=_prog, labels=labels if report["mode"] == "files" else None,
-                      people=report["people"] if report["mode"] == "files" else None, stop=stop_flag)
+                      people=report["people"] if report["mode"] == "files" else None, stop=stop_flag,
+                      rules=ctx["rules"])
     summary.update(counts(report))
     return _finish_merge(st, done, output, ctx["title"], t0, summary, log, progress_fn)
 
@@ -1603,11 +1964,13 @@ def _add_col(ws, h, col, name):
 
 
 def merge_step(st, files, cfg, mode, required=None, until=None, log=None, progress=None, commit=None,
-               labels=None, people=None, stop=None):
+               labels=None, people=None, stop=None, rules=None):
     """从 st['next'] 接着合并，过了 until（time.time() 时刻）就停在两个源文件之间。返回是否全部做完。
 
     required：{组键: [该填的列键]}，这些列空着的格子标浅红、计数。labels：{相对路径: 交表人}，写进「来源」列。
     people：查收结果，写进「回收统计」。stop() 为真时立刻停下，不存盘，返回 False。
+    rules：{列名: 填报规则}（下发记录里的），有规则的列按 _coerce 规整写法（只改汇总结果），认不出的标浅橙；
+    补年份用 st["base"]（下发日期，ISO 文字），没有时用今天。不传时行为不变。
     每次至少合一个文件；按已合文件的速度和上次存盘用时估算，来不及就先停。
     停下或做完时先把结果工作簿存盘，再调用 commit()（调用方在里面把 st 存盘）。
     """
@@ -1630,7 +1993,7 @@ def merge_step(st, files, cfg, mode, required=None, until=None, log=None, progre
         progress(i / total, f"合并第 {i + 1}/{len(files)} 个表")
         log(f"[{i + 1}/{len(files)}] {rel}")
         t0 = time.time()
-        _merge_file(wb, st, path, rel, cfg, mode, required or {}, log, labels or {})
+        _merge_file(wb, st, path, rel, cfg, mode, required or {}, log, labels or {}, rules)
         st["sec_per_mb"] = max(st["sec_per_mb"], (time.time() - t0) / size_mb)
         st["next"] = i + 1
         done_here += 1
@@ -1651,7 +2014,7 @@ def merge_step(st, files, cfg, mode, required=None, until=None, log=None, progre
     return st["done"]
 
 
-def _merge_file(wb, st, path, rel, cfg, mode, required, log, labels):
+def _merge_file(wb, st, path, rel, cfg, mode, required, log, labels, rules=None):
     """把一个源文件的各 sheet 并进结果工作簿；读不了只记进 errors，不影响其余文件。"""
     why = unreadable(path)
     if why:
@@ -1695,7 +2058,7 @@ def _merge_file(wb, st, path, rel, cfg, mode, required, log, labels):
         style_cache = {}     # 按源文件作用域，见 splitter._copy_cell_style
         for sn, rows, ws, h in usable:
             _merge_sheet(wb, st, rel, sn, rows, ws, h, mode, len(usable) > 1, style_cache,
-                         set(required.get(group_key(mode, sn), ())), labels.get(rel))
+                         set(required.get(group_key(mode, sn), ())), labels.get(rel), rules)
     except Exception as e:
         st["errors"].append({"file": rel, "error": f"处理失败：{e}"})
         log(f"  处理失败：{e}")
@@ -1707,7 +2070,7 @@ def _merge_file(wb, st, path, rel, cfg, mode, required, log, labels):
                 pass
 
 
-def _merge_sheet(wb, st, rel, sn, rows, ws_src, h, mode, multi_sheet, style_cache, required, who=None):
+def _merge_sheet(wb, st, rel, sn, rows, ws_src, h, mode, multi_sheet, style_cache, required, who=None, rules=None):
     names = col_names(rows[:h], h)
     keys = col_keys(names)
     key = group_key(mode, sn)
@@ -1739,6 +2102,15 @@ def _merge_sheet(wb, st, rel, sn, rows, ws_src, h, mode, multi_sheet, style_cach
     src_label = label(rel, sn, mode, multi_sheet, who)
     check = {c: names[c] or f"第 {c + 1} 列" for c, k in enumerate(keys) if k in required}
     blanks = dict.fromkeys(check.values(), 0)
+    fix = {}                              # 列号 → (列名, 规则)：按填报规则规整写法
+    for name, rule in (rules or {}).items():
+        c = _key_index(keys, name)
+        if c is not None and rule.get("type", "text") in BAD_CODE:
+            fix[c] = (name, rule)
+    try:
+        base = datetime.date.fromisoformat(st.get("base") or "")
+    except ValueError:
+        base = datetime.date.today()
     r_out = out["next_row"]
     for idx in range(h, len(rows)):
         row = rows[idx]
@@ -1761,6 +2133,8 @@ def _merge_sheet(wb, st, rel, sn, rows, ws_src, h, mode, multi_sheet, style_cach
             if c in check and soft_clean(src.value) == "":
                 blanks[check[c]] += 1
                 cell.fill = BLANK_FILL
+            elif c in fix and soft_clean(src.value) != "":
+                _fix_cell(st, cell, src.value, fix[c], base, src_label, idx + 1)
         ws.cell(row=r_out, column=out["src_col"]).value = src_label
         r_out += 1
         item["rows"] += 1
@@ -1768,6 +2142,35 @@ def _merge_sheet(wb, st, rel, sn, rows, ws_src, h, mode, multi_sheet, style_cach
     out["next_row"] = r_out
     item["blanks"] = {n: v for n, v in blanks.items() if v}
     st["sources"].append(item)
+
+
+def _fix_cell(st, cell, value, name_rule, base, src_label, src_row):
+    """有填报规则的格子：认得出就改成规范写法（记个数和两个例子），认不出就标浅橙。"""
+    name, rule = name_rule
+    ok, new = _coerce(value, rule, base)
+    phone = rule["type"] in ("mobile", "phone")
+    if not ok:
+        cell.fill = INVALID_FILL
+        u = st.setdefault("uncoerced", {"n": 0, "ex": []})
+        u["n"] += 1
+        if len(u["ex"]) < 3:
+            u["ex"].append([src_label, src_row, _mask(value) if phone else str(value)])
+        return
+    if rule["type"] == "date":
+        cell.number_format = "yyyy-mm-dd"
+    elif phone:
+        cell.number_format = "@"
+    if new == value and type(new) is type(value):
+        return
+    cell.value = new
+    d = st.setdefault("coerced", {}).setdefault(name, {"n": 0, "ex": []})
+    d["n"] += 1
+    after = new.strftime("%Y-%m-%d") if isinstance(new, datetime.datetime) else str(new)
+    before = str(value)
+    if phone:
+        before, after = _mask(before), _mask(after)
+    if len(d["ex"]) < 2 and [before, after] not in d["ex"]:
+        d["ex"].append([before, after])
 
 
 def _write_report(wb, st, people=None, labels=None):
@@ -1818,6 +2221,16 @@ def _write_report(wb, st, people=None, labels=None):
         put(["", "", d["file"], "", 0, 0, "", "", "", f"与「{d['same_as']}」内容完全相同，只合了一份"])
     for e in st["errors"]:
         put(["", "", e["file"], "", 0, 0, "", "", "", e["error"]])
+    if st.get("coerced") or st.get("uncoerced"):
+        ws.append([])
+        ws.append(["自动规整（只改了汇总表，原文件没动）"])
+        ws.cell(row=ws.max_row, column=1).font = bold
+        for name, d in st.get("coerced", {}).items():
+            ws.append([name, f"{d['n']} 格", "例：" + "；".join(f"{a} → {b}" for a, b in d["ex"])])
+        u = st.get("uncoerced")
+        if u:
+            ws.append(["没敢改的", f"{u['n']} 格", "；".join(f"{lab} 第 {r} 行「{v}」" for lab, r, v in u["ex"])
+                       + ("…" if u["n"] > len(u["ex"]) else "") + "，已标浅橙"])
     for col, w in zip("ABCDEFGHIJ", (14, 12, 28, 14, 10, 18, 26, 24, 24, 36)[cut:]):
         ws.column_dimensions[col].width = w
     ws.freeze_panes = "A2"
@@ -1847,6 +2260,11 @@ def merge_text(st, title):
     totals = sum(s.get("totals", 0) for s in st["sources"])
     if totals:
         lines.append(f"各表自己的合计 / 小计行没合进来（{totals} 行）")
+    fixed = sum(d["n"] for d in st.get("coerced", {}).values())
+    if fixed:
+        lines.append(f"按填写要求规整了 {fixed} 格写法（日期、数字、号码、选项），只改了汇总表，例子见「{REPORT_SHEET}」")
+    if st.get("uncoerced"):
+        lines.append(f"有 {st['uncoerced']['n']} 格认不出写法、没敢改，标了浅橙")
     if st["dupes"]:
         lines.append(f"内容完全相同、只合了一份（{len(st['dupes'])}）：" + "、".join(d["file"] for d in st["dupes"]))
     if st["errors"]:
