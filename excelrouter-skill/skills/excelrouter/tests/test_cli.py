@@ -531,3 +531,21 @@ def test_inspect_and_split_do_not_need_pandas(two_books, tmp_path):
     rc, obj, err = _run_without_pandas("er_split.py", "--input", inp, "--by", "部门",
                                        "--output", str(tmp_path / "split"))
     assert rc == 0 and obj["ok"], err
+
+
+def test_split_reports_unassigned_rows_and_keeps_them_out_of_bundle(tmp_path):
+    """v3.0：没写分组的行进「请核对_无归属.xlsx」——结果 JSON 要说出来；它不进总包，也不被当成一个分组按人拆。"""
+    src = tmp_path / "表.xlsx"
+    _make_book(src, [["001", "张三", "销售部", "北京", 100], ["002", "李四", "", "上海", 200],
+                     ["003", "王五", "技术部", "广州", 300]])
+    rc, obj, stderr = _run("er_split.py", "--input", str(src), "--by", "部门", "--to-person", "姓名",
+                           "--output", str(tmp_path / "out"))
+    assert rc == 0, stderr
+    s = obj["summary"]
+    assert s["unassigned"] == 1 and s["source_rows"] == s["routed"] + s["skip_rows"] + s["unassigned"]
+    assert os.path.exists(os.path.join(obj["output_path"], "请核对_无归属.xlsx"))
+    assert any("请核对_无归属" in w for w in obj["warnings"]) and "请核对" in obj["message"]
+    assert not os.path.isdir(os.path.join(obj["output_path"], "请核对_无归属"))     # 没被当成分组按人拆
+    import zipfile
+    with zipfile.ZipFile(obj["bundle_zip"]) as zf:
+        assert not any("请核对" in n for n in zf.namelist())

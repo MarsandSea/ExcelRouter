@@ -56,14 +56,18 @@ from openpyxl.utils import get_column_letter
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.formula.translate import Translator
 
-from core.utils import soft_clean, apply_alias, is_skip_value, safe_filename
+from core.utils import soft_clean, hard_clean, apply_alias, is_skip_value, safe_filename
 # 表头识别在 core/xlio.py（汇总也用它）；这里照旧导出原名，collect / 技能 / 测试都按 splitter 的名字调用
 from core.xlio import resolve_header_row
 from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
-from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, hidden_info, key_value,
-                       match, open_book, put, zip_folder)
+from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, hidden_info, is_total_row,
+                       key_value, match, open_book, put, zip_folder)
 
 warnings.filterwarnings('ignore')
+
+# 拆分字段没写（或只有「-」「/」这类符号）、但这一行有内容：放进输出根目录的这个文件让用户自己核对，不再悄悄丢掉。
+# 内部版 er_lite 用同一个文件名。
+UNASSIGNED = "请核对_无归属.xlsx"
 
 
 # =====================================================
@@ -745,6 +749,39 @@ def _hidden_data_rows(ws, h, last):
     return len({r for (r, _c), cell in ws._cells.items() if r in hid and cell.value not in (None, "")})
 
 
+def _content_rows(ws, h, last):
+    """表头以下（第 h+1 ~ last 行）有内容的行号集合：只有空格的不算。"""
+    rows = set()
+    for (r, _c), cell in ws._cells.items():
+        if h < r <= last and r not in rows:
+            v = cell.value
+            if v is not None and (not isinstance(v, str) or soft_clean(v) != ""):
+                rows.add(r)
+    return rows
+
+
+def _looks_like_total(ws, r, end):
+    """没写分组的这一行其实是合计行：前几格写着「合计 / 小计 / 总计」，或者是表里最后一行、只有数字没有文字。
+
+    这类行算进「合计等」，不放进「请核对_无归属」——不然几乎每张带合计行的表都要多一个请核对文件。
+    """
+    row = next(ws.iter_rows(min_row=r, max_row=r, values_only=True), ())
+    if is_total_row(row):
+        return True
+    vals = [v for v in row if v is not None and soft_clean(v) != ""]
+    return r == end and bool(vals) and all(_looks_numeric(v) for v in vals)
+
+
+def _review_sheet(review, rel_path, sn, title, h, header):
+    """「请核对_无归属」里给一个源 sheet 的那一页（第一次用时建，表头照源表）。"""
+    info = review.sheets.get((rel_path, sn))
+    if info is None:
+        ws = review.wb.create_sheet(title=_safe_sheet_title(title, review._used_titles))
+        _write_header(ws, *header)
+        info = review.sheets[(rel_path, sn)] = {'ws': ws, 'next_row': h + 1}
+    return info
+
+
 def _last_data_row(ws):
     """最后一行有内容的行号；尾部只有格式、没有内容的行不算（和旧版 pandas 读表的口径一样）。整页空返回 0。"""
     last = 0
@@ -761,7 +798,7 @@ def _column_values(ws, col, first_row, last_row):
 
 
 def process_file(file_path, rel_path, output_root, config, outputs,
-                 single_file=False, log_fn=None, stop_flag=None, tick_fn=None, stats=None):
+                 single_file=False, log_fn=None, stop_flag=None, tick_fn=None, stats=None, review=None):
     """处理单个文件：始终产出『汇总』；满足条件时附加产出『到人』。返回写入总行数。
 
     stats 为可选的可变 dict（由 run_split 传入），用于跨文件累计「跳过 sheet 数 /
@@ -771,6 +808,10 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     · 到人：仅当 to_person 开、有 person_column、且文件名命中 person_file_filter 时，
       按 split_column → person_column 拆，同一人跨文件合并到一个文件。
     · tick_fn(0..1) 报告本文件内部进度（读取→拆分各阶段），供界面进度条使用。
+    · review 为「请核对_无归属」的 _OutputBook（run_split 建）：拆分字段没写、但有内容的行写进去，
+      一个源 sheet 一页；为 None 时这些行只计数。
+    · stats 里累计行数对账：source_rows（有内容的数据行）= routed（进了至少一个分组）+ skip_rows（合计等）
+      + unassigned（没写分组）+ not_selected（选了只拆部分取值时没选上的）。隐藏的、跳过的 sheet 不计。
 
     读表：源文件只完整加载一次（open_book），值和格式都从这一份取；每个 sheet 先把拆分列读一遍、
     按取值分好桶（取值 → 原始行号），再按桶输出。输出顺序与旧版逐取值筛选完全一致。
@@ -909,6 +950,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     if last > h else [])
             pkeys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, pcol_idx + 1, h + 1, last)]
                      if pcol_idx is not None and last > h else None)
+            content = _content_rows(ws, h, last)        # 清空隐藏列之前算：只在隐藏列里有内容的行也算一行
             hcols = hidden_cols.get(sn, set())
             if hcols:
                 if stats is not None:
@@ -929,7 +971,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 if log_fn:
                     log_fn(f"  ℹ️ sheet「{sn}」有 {n_hidden_rows} 行是隐藏的（可能是筛选掉的），"
                            f"照常发出，产出里不再隐藏")
-            plan.append((sn, ws, h, last, col_idx, pcol_idx, keys, pkeys))
+            plan.append((sn, ws, h, last, col_idx, pcol_idx, keys, pkeys, content))
 
         try:
             header_meta = {p[0]: _read_header_format(p[1], p[2]) for p in plan}
@@ -970,6 +1012,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             if ob is None:
                 # 防撞名覆盖：不同取值净化后同名时，自动追加 (2)/(3)... 后缀（F1）
                 used = {os.path.normcase(os.path.abspath(o.save_path)) for o in outputs.values()}
+                if review is not None:      # 真有一个叫「请核对_无归属」的分组时，它拿 (2) 后缀
+                    used.add(os.path.normcase(os.path.abspath(review.save_path)))
                 ob = _OutputBook(_dedupe_path(save_path, used))
                 outputs[key] = ob
             keys_, names_ = cols[sheet_name]
@@ -993,13 +1037,47 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         contains = bool(selected_set) and not exact       # 包含匹配：一行可以落进几个分组
         n_sheets = max(1, len(plan))
         tpl = None         # 这个文件的模板：第一个含拆分字段的 sheet 的列名（见 template_groups）
-        for si, (sn, ws, h, last, col_idx, pcol_idx, keys, pkeys) in enumerate(plan):
+        kinds = {}         # 分组键 -> 这一行算哪类（对账用；同一个键只判一次）
+
+        def kind(k):
+            c = kinds.get(k)
+            if c is None:
+                if hard_clean(k) == "":
+                    c = 'unassigned'
+                elif is_skip_value(k, skip):
+                    c = 'skip_rows'
+                elif not selected_set:
+                    c = 'routed'
+                elif contains:
+                    c = 'routed' if any(p in k for p in selected if not is_skip_value(p, skip)) else 'not_selected'
+                else:
+                    c = 'routed' if k in selected_set else 'not_selected'
+                kinds[k] = c
+            return c
+
+        for si, (sn, ws, h, last, col_idx, pcol_idx, keys, pkeys, content) in enumerate(plan):
             if stop_flag and stop_flag():
                 break
             if tpl is None:
                 tpl = tpl_names[sn]
             if last <= h:
                 continue
+            # 行数对账：只数有内容的行
+            tally = {'source_rows': 0, 'routed': 0, 'skip_rows': 0, 'unassigned': 0, 'not_selected': 0}
+            blank = []         # 拆分字段没写、但有内容的行（0 基数据行序号）
+            end = max(content) if content else 0
+            for j, k in enumerate(keys):
+                if h + 1 + j in content:
+                    c = kind(k)
+                    if c == 'unassigned' and _looks_like_total(ws, h + 1 + j, end):
+                        c = 'skip_rows'
+                    tally['source_rows'] += 1
+                    tally[c] += 1
+                    if c == 'unassigned':
+                        blank.append(j)
+            if stats is not None:
+                for tk, tv in tally.items():
+                    stats[tk] = stats.get(tk, 0) + tv
             targets = selected if selected_set else sorted({k for k in keys if not is_skip_value(k, skip)})
             buckets = {}
             if not contains:
@@ -1032,6 +1110,17 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     for person in sorted(v for v in per if not is_skip_value(v, skip)):
                         k2, p2 = _person_key_path(output_root, pval, person, src_stem, merge)
                         emit(k2, p2, sn, h, _Rows([h + j for j in per[person]]), ws, src_max_col, formula_ws)
+
+            if blank and not (stop_flag and stop_flag()):
+                if review is not None:
+                    rinfo = _review_sheet(review, rel_path, sn, f"{src_stem}·{sn}", h, header_meta[sn])
+                    for c in hidden_cols.get(sn, ()):
+                        rinfo['ws'].column_dimensions[get_column_letter(c)].hidden = True
+                    _append_rows(rinfo, _Rows([h + j for j in blank]), preserve_ok, ws, src_max_col,
+                                 style_cache, heartbeat=heartbeat)
+                if log_fn:
+                    log_fn(f"  ⚠️ sheet「{sn}」有 {len(blank)} 行没写「{split_column}」，没分进任何一组"
+                           + (f"，放进了「{UNASSIGNED}」请核对" if review is not None else ""))
 
             if notes:
                 if stats is not None and any(nk != 'formula' and nk[0] for nk in notes):
@@ -1133,6 +1222,7 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
          + f"｜跨文件合并：{'是' if config.get('merge_across_files', True) else '否'}\n")
 
     outputs = {}
+    review = _OutputBook(os.path.join(output_path, UNASSIGNED))   # 没写分组的行；有才保存
     grand_total = 0
     stopped = False
     stats = {"skipped_sheets": 0, "failed_files": 0, "unaligned": 0,     # 供收尾 [SUMMARY] 行汇总
@@ -1158,7 +1248,7 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         try:
             grand_total += process_file(fp, rp, output_path, config, outputs,
                                         single_file, _log, stop_flag, tick_fn=_tick,
-                                        stats=stats)
+                                        stats=stats, review=review)
         except Exception as e:
             stats["failed_files"] += 1
             _log(f"  ❌ 处理失败：{e}")
@@ -1196,6 +1286,17 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         if (j + 1) % 10 == 0 and (j + 1) < n_out:
             _log(f"  …已保存 {j + 1}/{n_out}")
         time.sleep(0.002)   # 让出 GIL，保存阶段保持界面响应
+
+    # ---------- 没写分组的行：单独一个文件请用户核对（不算组数、不进 ZIP、不进下发清单） ----------
+    unassigned_file = ""
+    try:
+        if review.save():
+            unassigned_file = review.save_path
+            _log(f"  📋 有 {stats.get('unassigned', 0)} 行没写「{config.get('split_column', '')}」，"
+                 f"放进了「{UNASSIGNED}」（一个源 sheet 一页），请核对后补上分组再拆，或手动发给对应的人")
+    except Exception as e:
+        failed_saves += 1
+        _log(f"  ❌ 保存失败 {UNASSIGNED}：{e}（若该文件正被 Excel/WPS 打开，请先关闭再重跑）")
 
     # ---------- 让对方填写的列（v2.10，选填）：标黄、锁定其余列、写下发记录 ----------
     # 必须在打包之前做，ZIP 里才是可以直接发出去的「待填写」版本。
@@ -1240,6 +1341,19 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
     _log(f"\n✅ 全部完成！生成 {saved} 个文件，共写入 {grand_total} 行，"
          f"耗时 {f'{mm} 分 {ss} 秒' if mm else f'{ss} 秒'}")
     _log(f"📁 输出目录：{output_path}")
+    src_rows = stats.get("source_rows", 0)
+    if src_rows and not stopped:
+        parts = [f"拆出 {stats.get('routed', 0)}"]
+        if stats.get("skip_rows"):
+            parts.append(f"合计等 {stats['skip_rows']}")
+        if stats.get("not_selected"):
+            parts.append(f"没选的分组 {stats['not_selected']}")
+        if stats.get("unassigned"):
+            parts.append(f"没写分组 {stats['unassigned']}（见 {UNASSIGNED}）")
+        _log(f"🧮 行数核对：源表 {src_rows} 行 = " + " + ".join(parts))
+    if len(primaries) == 1 and not config.get('selected_values') and not stopped:
+        _log(f"⚠️ 只拆出了 1 组「{next(iter(primaries))}」：每一行的「{config.get('split_column', '')}」都一样，"
+             f"可能选错了拆分字段")
 
     # 机器可读收尾行（v2.7）：GUI 提取后渲染完成摘要。追加式输出，不改变返回值与
     # 既有日志内容，下游 excelrouter-skill 只是多打一行，无契约变化。
@@ -1259,6 +1373,13 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         "hidden_sheets": stats["hidden_sheets"],
         "hidden_cols": stats["hidden_cols"],
         "hidden_rows": stats["hidden_rows"],
+        # v3.0：行数对账（隐藏的、跳过的 sheet 不计）。source_rows = routed + skip_rows + unassigned + not_selected
+        "source_rows": stats.get("source_rows", 0),
+        "routed": stats.get("routed", 0),
+        "skip_rows": stats.get("skip_rows", 0),
+        "unassigned": stats.get("unassigned", 0),
+        "not_selected": stats.get("not_selected", 0),
+        "unassigned_file": unassigned_file,
     }
     if groups:
         summary["templates"] = len(groups)    # v3.0：跨文件合并时，这批表有几种模板

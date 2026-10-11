@@ -178,6 +178,8 @@ def _iter_grid_files(grid_dir):
             low = fn.lower()
             if not low.endswith(".xlsx") or fn.startswith("~$") or low.endswith("__tmp__.xlsx"):
                 continue
+            if fn == "请核对_无归属.xlsx" and dirpath == grid_dir:   # 内核放没写分组的行，不是一个分组
+                continue
             full = os.path.join(dirpath, fn)
             parent = os.path.dirname(full)
             if os.path.basename(parent) == "汇总":

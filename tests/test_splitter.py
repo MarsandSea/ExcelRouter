@@ -931,3 +931,115 @@ def test_file_with_data_only_in_hidden_sheet_is_not_a_failure(tmp_path):
     run_split(_base_cfg(str(inp), str(tmp_path / "out")), log_fn=logs.append)
     s = _summary(logs)
     assert s["failed_files"] == 0 and s["hidden_sheets"] == 1 and s["rows"] == 1
+
+
+# ---------- 行数对账与「请核对_无归属」（v3.0）----------
+
+def _recon_ok(s):
+    return s["source_rows"] == s["routed"] + s["skip_rows"] + s["unassigned"] + s["not_selected"]
+
+
+def _make_rows_book(path, rows, header=("工号", "姓名", "部门", "金额")):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(list(header))
+    for r in rows:
+        ws.append(r)
+    wb.save(path)
+
+
+def test_unassigned_rows_go_to_review_file(tmp_path):
+    src = tmp_path / "名单.xlsx"
+    _make_rows_book(src, [
+        ["001", "张三", "销售部", 100],
+        ["002", "李四", None, 200],          # 没写部门 → 请核对
+        [None, None, None, None],            # 空行：不计
+        ["003", "王五", "-", 50],             # 只有符号 → 请核对
+        ["004", "赵六", "技术部", 300],
+        [None, "合计", None, 650],            # 写着合计 → 合计等
+        [None, None, None, 650],             # 最后一行只有数字 → 合计等
+    ])
+    logs = []
+    res = run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=logs.append)
+    s = _summary(logs)
+    assert (s["source_rows"], s["routed"], s["skip_rows"], s["unassigned"], s["not_selected"]) == (6, 2, 2, 2, 0)
+    assert _recon_ok(s)
+    assert s["files"] == 2 and s["groups"] == 2                     # 请核对不算组数、不算文件
+    assert s["unassigned_file"] == os.path.join(res, "请核对_无归属.xlsx")
+    wb = openpyxl.load_workbook(s["unassigned_file"])
+    assert wb.sheetnames == ["名单·Sheet"]
+    ws = wb.active
+    assert [c.value for c in ws[1]] == ["工号", "姓名", "部门", "金额"]
+    assert [ws.cell(row=r, column=2).value for r in (2, 3)] == ["李四", "王五"]
+    assert any("行数核对：源表 6 行 = 拆出 2 + 合计等 2 + 没写分组 2" in m for m in logs), logs
+
+
+def test_no_review_file_when_every_row_has_a_group(two_books):
+    inp, out = two_books
+    logs = []
+    res = run_split(_base_cfg(inp, out), log_fn=logs.append)
+    s = _summary(logs)
+    assert s["unassigned"] == 0 and s["unassigned_file"] == "" and _recon_ok(s)
+    assert s["skip_rows"] == 1                                       # A 表那行「合计」（部门是空的）
+    assert not os.path.exists(os.path.join(res, "请核对_无归属.xlsx"))
+
+
+def test_review_file_one_page_per_source_sheet_and_not_zipped(tmp_path):
+    inp = tmp_path / "in"
+    (inp / "子").mkdir(parents=True)
+    _make_rows_book(inp / "A.xlsx", [["1", "张三", "销售部", 1], ["2", "李四", None, 2]])
+    _make_rows_book(inp / "子" / "A.xlsx", [["3", "王五", None, 3], ["4", "赵六", "技术部", 4]])
+    logs = []
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out"), merge_across_files=False), log_fn=logs.append)
+    wb = openpyxl.load_workbook(os.path.join(res, "请核对_无归属.xlsx"))
+    assert len(wb.sheetnames) == 2                                   # 两个源文件同名，页名自动去重
+    import zipfile
+    for z in ("销售部.zip", "技术部.zip"):
+        with zipfile.ZipFile(os.path.join(res, z)) as zf:
+            assert not any("请核对" in n for n in zf.namelist())
+    assert _recon_ok(_summary(logs))
+
+
+def test_group_named_like_review_file_gets_suffix(tmp_path):
+    src = tmp_path / "a.xlsx"
+    _make_rows_book(src, [["1", "张三", "请核对_无归属", 1], ["2", "李四", None, 2]])
+    res = run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=lambda m: None)
+    names = sorted(f for f in os.listdir(res) if f.endswith(".xlsx"))
+    assert names == ["请核对_无归属(2).xlsx", "请核对_无归属.xlsx"]
+    ws = openpyxl.load_workbook(os.path.join(res, "请核对_无归属(2).xlsx")).active
+    assert ws["B2"].value == "张三"
+
+
+def test_reconcile_with_selected_values(tmp_path):
+    src = tmp_path / "a.xlsx"
+    _make_rows_book(src, [["1", "a", "销售一部", 1], ["2", "b", "销售二部", 2], ["3", "c", "技术部", 3],
+                          ["4", "d", "销售一部、销售二部", 4]])
+    logs = []
+    run_split(_base_cfg(str(src), str(tmp_path / "o1"), make_zip=False, selected_values=["销售一部"]),
+              log_fn=logs.append)
+    s = _summary(logs)
+    assert (s["routed"], s["not_selected"]) == (1, 3) and _recon_ok(s)
+    # 包含匹配：一行进了两个分组，对账里只算一行
+    logs = []
+    run_split(_base_cfg(str(src), str(tmp_path / "o2"), make_zip=False, exact_match=False,
+                        selected_values=["销售一部", "销售二部"]), log_fn=logs.append)
+    s = _summary(logs)
+    assert (s["source_rows"], s["routed"], s["not_selected"]) == (4, 3, 1) and _recon_ok(s)
+    assert s["rows"] == 4                                            # 写出的行数：第 4 行两组各一份
+
+
+def test_hidden_sheet_rows_not_in_reconciliation(tmp_path):
+    src = tmp_path / "明细.xlsx"
+    _make_hidden_book(src)
+    logs = []
+    run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=logs.append)
+    s = _summary(logs)
+    assert s["source_rows"] == 3 and _recon_ok(s)                     # 「底稿」那一行不计
+
+
+def test_single_group_warns(tmp_path):
+    src = tmp_path / "a.xlsx"
+    _make_rows_book(src, [["1", "张三", "销售部", 1], ["2", "李四", "销售部", 2]])
+    logs = []
+    run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=logs.append)
+    assert any("只拆出了 1 组「销售部」" in m for m in logs)

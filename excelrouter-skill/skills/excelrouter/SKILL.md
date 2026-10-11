@@ -279,6 +279,7 @@ python scripts/er_split.py --input 明细.xlsx --by 部门 --dry-run
 6. **隐藏的内容默认不发出去**（v3.0）：隐藏的 sheet 不拆不发；隐藏列在产出里内容清空、仍然隐藏；
    隐藏的行（多半是筛选掉的）照常发出。stderr 里有「🙈」开头的行时转告用户哪些被拦下了；
    用户确认要连隐藏内容一起发，再加 `--keep-hidden`。
+7. **没写分组的行不会悄悄丢掉**（v3.0）：拆分字段是空的、但这一行有内容，会放进结果目录的「请核对_无归属.xlsx」（一个源 sheet 一页，不算组数、不进 ZIP 和总包）。`summary` 里的 `source_rows = routed + skip_rows + unassigned + not_selected` 是行数对账，`warnings` 里有这条时转告用户去核对。
 
 ## 出错了怎么办（先照着这张表试，不用先翻文档）
 

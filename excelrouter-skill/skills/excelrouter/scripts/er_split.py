@@ -57,7 +57,7 @@ from _common import (  # noqa: E402
 bootstrap()
 ensure_deps()  # 必须排在下面这些 import 之前：缺包时要给人话提示 / 自动装，而不是 ImportError 堆栈
 
-from core.splitter import run_split  # noqa: E402
+from core.splitter import UNASSIGNED, run_split  # noqa: E402
 from _person_split import (  # noqa: E402  网格→人 二级拆分（scripts 包装层补强）
     flatten_output,
     parse_person_spec,
@@ -268,6 +268,8 @@ def main():
                 f"先用 er_inspect.py --column {resolved} 看真实取值"
                 if config.get("selected_values") else
                 f"字段「{resolved}」下没有可拆的取值（可能全是空或合计行）")
+        if summary.get("unassigned"):
+            hint += f"；有 {summary['unassigned']} 行没写「{resolved}」，放在 {UNASSIGNED} 里"
         emit_error(f"没有拆出任何文件：{hint}。", output_path=output_path, summary=summary)
         return
 
@@ -289,6 +291,11 @@ def main():
     if not args.no_zip:
         _zip_group_folders(output_path, log_fn=eprint)
         bundle = _make_bundle(output_path, resolved, log_fn=eprint)
+
+    after = _result_warnings(summary, resolved)
+    warnings.extend(after)
+    for w in after:
+        eprint(f"⚠ {w}")
 
     files = list_outputs(output_path)
     if bundle:  # 「拿去发」的那一个文件排第一，AI 先 present 它
@@ -407,8 +414,8 @@ def _make_bundle(output_path, column, log_fn=None):
     for root, _dirs, names in os.walk(output_path):
         for n in names:
             low = n.lower()
-            if low.endswith(".zip") or low.startswith("~$") or n == "运行日志.txt":
-                continue
+            if low.endswith(".zip") or low.startswith("~$") or n in ("运行日志.txt", UNASSIGNED):
+                continue   # 「请核对_无归属」是给用户自己核对的，不跟着整包发出去
             members.append(os.path.join(root, n))
     if not members:
         return None
@@ -425,6 +432,24 @@ def _make_bundle(output_path, column, log_fn=None):
     if log_fn:
         log_fn(f"📦 已打成一个总包：{os.path.basename(path)}（{len(members)} 个文件）")
     return path
+
+
+def _result_warnings(summary, column):
+    """拆完之后必须告诉用户的几件事（v3.0）：没写分组的行、被拦下的隐藏内容、只拆出 1 组。"""
+    out = []
+    if summary.get("unassigned"):
+        out.append(f"有 {summary['unassigned']} 行没写「{column}」，没分进任何一组，"
+                   f"放在结果目录的 {UNASSIGNED} 里（一个源 sheet 一页），请用户核对后补上再拆或手动发")
+    hidden = []
+    if summary.get("hidden_sheets"):
+        hidden.append(f"{summary['hidden_sheets']} 个隐藏的 sheet 没发出")
+    if summary.get("hidden_cols"):
+        hidden.append(f"{summary['hidden_cols']} 个隐藏列的内容已清空（仍隐藏）")
+    if hidden:
+        out.append("源表里有隐藏内容：" + "，".join(hidden) + "；用户确认要一起发时加 --keep-hidden 重拆")
+    if summary.get("groups") == 1 and not summary.get("stopped"):
+        out.append(f"只拆出了 1 组：每一行的「{column}」都一样，可能选错了拆分字段，跟用户确认一下")
+    return out
 
 
 def _human_message(summary, column, files, output_path, opened, stopped, bundle=None):
@@ -448,6 +473,10 @@ def _human_message(summary, column, files, output_path, opened, stopped, bundle=
         problems.append(f"{summary['failed_files']} 个文件读取失败")
     if summary.get("failed_saves"):
         problems.append(f"{summary['failed_saves']} 个文件保存失败（可能被 Excel 占用）")
+    if summary.get("unassigned"):
+        problems.append(f"{summary['unassigned']} 行没写「{column}」，放在 {UNASSIGNED} 里请核对")
+    if summary.get("hidden_sheets") or summary.get("hidden_cols"):
+        problems.append("源表里隐藏的 sheet / 列没有发出去")
     if problems:
         msg += "⚠ " + "，".join(problems) + "，详情见日志。"
     if bundle:
