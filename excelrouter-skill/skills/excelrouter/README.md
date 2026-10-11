@@ -98,7 +98,7 @@ pip install -r requirements-pdf.txt    # 要做文件加密分发（PDF / Word /
 不想用命令行、或者要给不会装 Python 的同事用，有免费的 Windows 桌面版：
 选表格 → 选字段 → 点开始，解压双击即用，MIT 开源，数据同样不出本机。
 
-- 直接下载（点开即下，免安装免注册，约 52 MB）：
+- 直接下载（点开即下，免安装免注册，约 29 MB）：
   <https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip>
 - 介绍与使用说明：<https://marsandsea.github.io/ExcelRouter/>
 - 源码与反馈：<https://github.com/MarsandSea/ExcelRouter>

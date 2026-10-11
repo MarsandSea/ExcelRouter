@@ -10,7 +10,7 @@
 
 [![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows-1E7F4B?style=for-the-badge)](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
 
-点上面的按钮**直接开始下载**（Windows 免安装版，约 52 MB，不用注册、不用装 Python）。
+点上面的按钮**直接开始下载**（Windows 免安装版，约 29 MB，不用注册、不用装 Python）。
 国内网络慢？走 **[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)**，在附件里选文件名带 `win64.zip` 的那个。
 国内镜像仓库：**[gitee.com/Marsandsea/Excelrouter](https://gitee.com/Marsandsea/Excelrouter)**（与 GitHub 同步，国内直连）
 
@@ -168,7 +168,7 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
 
 普通用户不用挑文件，点这一个链接就开始下载：
 
-### 👉 [下载 ExcelRouter（Windows 免安装版，约 52 MB）](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
+### 👉 [下载 ExcelRouter（Windows 免安装版，约 29 MB）](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
 
 下载得到 `ExcelRouter-Windows.zip`，解压到任意文件夹，双击里面的 `ExcelRouter.exe` 即可使用。
 **不需要安装 Python，不需要注册，不需要联网。**
