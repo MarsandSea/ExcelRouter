@@ -96,6 +96,7 @@ def list_mapping_columns(xlsx_path):
     wb = load_workbook(xlsx_path, read_only=True, data_only=True)
     try:
         ws = wb.worksheets[0]
+        ws.reset_dimensions()   # 有的程序生成的表把尺寸写错（如 A1:A1），不重置只读模式会少读行列
         for row in ws.iter_rows(min_row=1, max_row=1, values_only=True):
             return [soft_clean(v) for v in row if soft_clean(v)]
         return []
@@ -133,6 +134,7 @@ def read_mapping(xlsx_path, grid_col, password_col, receiver_col="", need_passwo
     wb = load_workbook(xlsx_path, read_only=True, data_only=True)
     try:
         ws = wb.worksheets[0]
+        ws.reset_dimensions()
         header = None
         idx = {}
         rows, warnings = [], []

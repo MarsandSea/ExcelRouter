@@ -89,6 +89,8 @@ def detect_uncalculated_formulas(work_path, max_rows=200):
             if sn not in wb_v.sheetnames:
                 continue
             ws_f, ws_v = wb_f[sn], wb_v[sn]
+            ws_f.reset_dimensions()     # 尺寸写错的表，不重置只读模式会少读行列
+            ws_v.reset_dimensions()
             count = 0
             for row_f, row_v in zip(ws_f.iter_rows(), ws_v.iter_rows()):
                 for cf, cv in zip(row_f, row_v):

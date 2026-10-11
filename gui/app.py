@@ -1249,11 +1249,15 @@ class App(_RootBase):
             try:
                 from core.pdf_dist import list_mapping_columns
                 cols = list_mapping_columns(p)
-                # 顺带数网格行数（分发预览「N 个网格 × M 个文件」用）；清单是小表，直接全读
+                # 顺带数网格行数（分发预览「N 个网格 × M 个文件」用）；清单是小表，直接全读。
+                # 逐行数有内容的行：只读模式的 max_row 来自文件里写的尺寸，程序生成的表常写错
                 from openpyxl import load_workbook
                 wb = load_workbook(p, read_only=True)
                 try:
-                    n_rows = max(0, (wb.worksheets[0].max_row or 1) - 1)
+                    ws = wb.worksheets[0]
+                    ws.reset_dimensions()
+                    n_rows = sum(1 for row in ws.iter_rows(min_row=2, values_only=True)
+                                 if any(v is not None and str(v).strip() for v in row))
                 finally:
                     wb.close()
             except Exception:

@@ -3,6 +3,8 @@
 水印文字用例统一用 ASCII 网格名——CI（GitHub Windows runner）字体环境
 不可控，避免与中文字体探测耦合；中文水印在本机冒烟里验证。
 """
+import os
+
 import openpyxl
 import pytest
 from fpdf import FPDF
@@ -514,3 +516,35 @@ def test_find_cjk_font_real_kylin_layout(tmp_path, monkeypatch):
     # 黑体不在时退到仿宋，而不是直接放弃（魏碑始终不该被选中）
     (tmp_path / "cesi" / "CESI_HT_GB18030.TTF").unlink()
     assert pdf_dist._find_cjk_font_posix() == str(tmp_path / "wps-office" / "FZFSK.TTF")
+
+
+def _break_dimension(path):
+    """把 sheet1 记录的尺寸改成 A1:A1（有的程序生成的表就是这样），只读模式不重置就只读得到 A1。"""
+    import re
+    import zipfile
+    tmp = str(path) + ".tmp"
+    with zipfile.ZipFile(path) as zi, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in zi.infolist():
+            data = zi.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = re.sub(rb'<dimension ref="[^"]*"', b'<dimension ref="A1:A1"', data)
+            zo.writestr(item, data)
+    os.replace(tmp, path)
+
+
+def test_mapping_with_wrong_dimension(tmp_path):
+    from openpyxl import Workbook
+
+    from core.pdf_dist import list_mapping_columns, read_mapping
+    p = tmp_path / "清单.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["网格", "密码", "接收人"])
+    ws.append(["城东", "001234", "张三"])
+    ws.append(["城西", "556677", "李四"])
+    wb.save(p)
+    _break_dimension(p)
+    assert list_mapping_columns(str(p)) == ["网格", "密码", "接收人"]
+    rows, _warn = read_mapping(str(p), "网格", "密码", "接收人")
+    assert [(r["grid"], r["password"], r["receiver"]) for r in rows] == [
+        ("城东", "001234", "张三"), ("城西", "556677", "李四")]
