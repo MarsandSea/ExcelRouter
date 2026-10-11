@@ -213,3 +213,103 @@ if __name__ == "__main__" and "--update" in sys.argv:
                 json.dump(snap, f, ensure_ascii=False, indent=1)
                 f.write("\n")
             print("wrote", n)
+
+
+# ---------- 问题编码（v3.0）----------
+
+def _issues(name, tmp):
+    tmp.mkdir(parents=True, exist_ok=True)
+    cfg, _ = SCENARIOS[name](tmp)
+    _ctx, _res, report = collect._inspect(cfg, lambda m: None, None, None)
+    return {p["name"]: [{k: v for k, v in i.items() if k != "why" or i["code"] == "empty"} for i in p["issues"]]
+            for p in report["people"]}
+
+
+def test_issue_codes_files_mixed(tmp_path):
+    got = _issues("files_mixed", tmp_path)
+    assert got["张三"] == [] and got["王五"] == [{"code": "missing"}]
+    assert got["李四"][0] == {"code": "blank", "col": "走访日期", "count": 9, "rows": [3, 5, 6, 8, 9, 10, 11, 12, 13]}
+    assert got["赵六"] == [{"code": "empty", "why": "header_only"}]
+    assert got["孙八"] == [{"code": "empty", "why": "no_fill"}]
+    assert got["周九"] == [{"code": "unreadable", "file": "周九.et"}]
+    assert got["吴十"] == [{"code": "header_mismatch", "sheet": "走访"}]
+    assert got["郑一"] == [{"code": "old_version", "file": "郑一.xlsx", "newest": "郑一(2).xlsx"}]
+    assert got["钱二"] == [{"code": "same_as", "file": "钱二.xlsx", "other": "张三 - 副本.xlsx"}]
+    assert got["陈七"] == [{"code": "blank", "col": "走访结果", "count": 1, "rows": [3], "sheet": "回访"}]
+
+
+def test_issue_codes_changes_and_rows_mode(tmp_path):
+    got = _issues("changes", tmp_path / "a")
+    assert got["张三"] == [{"code": "rows_lost", "count": 1}]
+    assert got["李四"] == [{"code": "rows_changed", "count": 2, "rows": [3, 4], "cols": ["客户名称", "客户经理"]}]
+    assert got["赵六"] == [{"code": "rows_added", "count": 2}]
+    assert got["钱八"] == [{"code": "col_deleted", "cols": ["客户名称"]}]
+    assert got["郑十"] == [{"code": "no_col", "col": "走访结果", "count": 4}]
+    assert got["王五"] == []
+    got = _issues("rows_mode", tmp_path / "b")
+    assert got["中区"] == [{"code": "not_in_total"}] and got["南区"] == [{"code": "empty", "why": "no_fill"}]
+
+
+def test_every_code_has_text_and_status():
+    sample = {"col": "列", "count": 2, "rows": [3, 4], "cols": ["甲"], "sheet": "表", "file": "a.xlsx",
+              "why": "原因", "newest": "b.xlsx", "other": "c.xlsx"}
+    for code in collect.ISSUE_STATUS:
+        assert collect.issue_text(dict(sample, code=code)), code
+    assert set(collect.ISSUE_TEXT) == set(collect.ISSUE_STATUS) == set(collect.ISSUE_NAG)
+    assert not collect.ISSUE_NAG["same_as"] and collect.ISSUE_NAG["blank"]
+
+
+def _round_book(path, blank_rows, secret=None):
+    rows = _full(6)
+    for r in blank_rows:
+        rows[r - 2][2] = None
+    if secret:
+        rows[0][4] = secret
+    _book(path, rows)
+
+
+def test_result_json_and_round_compare(tmp_path):
+    src = tmp_path / "收"
+    src.mkdir()
+    secret = "不该出现的单元格内容XYZ"
+    _round_book(src / "东城.xlsx", [2, 3, 4, 5, 6], secret)
+    _round_book(src / "西城.xlsx", [4])
+    cfg = {"input_path": str(src), "collect_expect": "东城、西城、南城", "collect_required": "走访日期"}
+    logs = []
+    out = collect.check_collect(cfg, logs.append)
+    summary = json.loads(next(m for m in logs if m.startswith("[SUMMARY]"))[len("[SUMMARY] "):])
+    assert summary["result"] == os.path.join(out, collect.RESULT_NAME)
+    with open(summary["result"], encoding="utf-8") as f:
+        text = f.read()
+    data = json.loads(text)
+    assert data["version"] == 1 and data["counts"]["partial"] == 2
+    east = next(p for p in data["people"] if p["name"] == "东城")
+    assert east["issues"] == [{"code": "blank", "col": "走访日期", "count": 5, "rows": [2, 3, 4, 5, 6]}]
+    with open(os.path.join(out, collect.ROUNDS_NAME), encoding="utf-8") as f:
+        rounds_text = f.read()
+    assert secret not in text and secret not in rounds_text and "客户1" not in text
+    assert json.loads(rounds_text)["rounds"][-1]["issues"] == {"东城": {"blank": 5}, "西城": {"blank": 1}}
+
+    _round_book(src / "东城.xlsx", [3], secret)          # 第二轮：东城还差 1 行，西城改好了，南城新交
+    _round_book(src / "西城.xlsx", [])
+    _round_book(src / "南城.xlsx", [])
+    collect.check_collect(cfg, lambda m: None)
+    with open(os.path.join(out, collect.NOTICE_NAME), encoding="utf-8-sig") as f:
+        notice = f.read()
+    assert "比上次：\n  新交：南城\n  改好了：西城\n  还差：东城 漏填 5 格 → 1 格\n" in notice
+
+
+def test_old_rounds_without_issues_only_show_new(tmp_path):
+    src = tmp_path / "收"
+    src.mkdir()
+    _round_book(src / "东城.xlsx", [3])
+    _round_book(src / "西城.xlsx", [])
+    out = src / collect.RESULT_DIR
+    out.mkdir()
+    (out / collect.ROUNDS_NAME).write_text(json.dumps({"rounds": [{"time": "x", "submitted": ["西城"], "ok": []}]},
+                                                      ensure_ascii=False), encoding="utf-8")
+    collect.check_collect({"input_path": str(src), "collect_expect": "东城、西城", "collect_required": "走访日期"},
+                          lambda m: None)
+    with open(out / collect.NOTICE_NAME, encoding="utf-8-sig") as f:
+        notice = f.read()
+    assert "比上次新交：东城。" in notice and "改好了" not in notice and "还差" not in notice

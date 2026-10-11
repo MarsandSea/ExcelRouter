@@ -8,7 +8,8 @@ Copyright (c) 2026 AbeLin · MIT License
     最后一个 sheet「汇总说明」列出每个来源合了几行、哪些没合进去、为什么。不需要名单。
   · 查收（check_collect）：收回几份就查一次，几秒出结果，不合并。按应交名单逐人列出
     未交 / 交了空表 / 有漏填（哪一列、第几行）/ 和下发时不一样（少了行、改了不该改的格子）/ 合格，
-    写「回收进度.xlsx」「回收通报.txt」，并记下这一轮，下一轮能说出「比上次新交」了谁。
+    写「回收进度.xlsx」「回收通报.txt」「回收结果.json」（逐人的问题编码，见 ISSUE_STATUS），
+    并记下这一轮，下一轮能说出新交了谁、谁改好了、谁还差。
   · 查收后汇总（run_collect）：只合交了的表，「来源」写交表人，漏填的格子标浅红，
     「汇总说明」逐人列出状态和行数。
 
@@ -55,6 +56,7 @@ RECORD_NAME = "下发记录.json"
 PROGRESS_NAME = "回收进度.xlsx"
 NOTICE_NAME = "回收通报.txt"
 ROUNDS_NAME = "回收记录.json"
+RESULT_NAME = "回收结果.json"
 RESULT_DIR = "汇总结果"
 CLAIM_LABELS = ("填报对象", "下发对象", "填报单位", "填报人")       # 「填报说明」sheet 里写明这份表是谁的
 LIST_WORDS = ("应交名单", "发送清单", "分发清单")                   # 文件名含这些字的是名单，不是交回来的表
@@ -603,8 +605,85 @@ def _blank_text(b):
     return f"{b['col']} 漏 {b['count']} 行（{_rows_text(b['rows'], b['count'])}）"
 
 
+# 问题编码：每个人的问题先记成 {"code": 编码, ...}（只有列名、文件名、行号、个数，不含单元格的值），
+# 状态、通报文字、旧字段 blanks / changes / notes 都由它推出来。编码定下来以后只加不改——
+# 回收结果.json、回收记录.json 和技能都按编码认问题。
+ISSUE_STATUS = {
+    "missing": ST_MISSING, "not_in_total": ST_MISSING,
+    "empty": ST_EMPTY,
+    "blank": ST_PARTIAL, "no_col": ST_PARTIAL,
+    "col_deleted": ST_CHANGED, "rows_lost": ST_CHANGED, "rows_added": ST_CHANGED, "rows_changed": ST_CHANGED,
+    "header_mismatch": ST_BAD, "unreadable": ST_BAD, "no_header": ST_BAD,
+    "old_version": None, "same_as": None,          # 只注明，不影响状态
+}
+ISSUE_NAG = {c: st is not None for c, st in ISSUE_STATUS.items()}    # 要不要催（只注明的不催）
+_BLANK_CODES = ("blank", "no_col")
+_CHANGE_CODES = ("col_deleted", "rows_lost", "rows_added", "rows_changed")
+_NOTE_CODES = ("not_in_total", "old_version", "same_as", "unreadable", "no_header", "header_mismatch")
+
+
+def _quoted(cols):
+    return "、".join(f"「{c}」" for c in cols)
+
+
+ISSUE_TEXT = {
+    "missing": lambda i: "还没收到你的表",
+    "not_in_total": lambda i: "表里没有这个名字的行",
+    "empty": lambda i: "只有表头，没填数据" if i.get("why") == "header_only" else "该填的列一格都没填",
+    "blank": lambda i: _blank_text(i),
+    "no_col": lambda i: _blank_text(dict(i, no_col=True)),
+    "col_deleted": lambda i: "删了" + _quoted(i["cols"]) + "列",
+    "rows_lost": lambda i: f"少了 {i['count']} 行",
+    "rows_added": lambda i: f"多了 {i['count']} 行",
+    "rows_changed": lambda i: f"{_rows_text(i['rows'], i['count'])}和下发时不一样"
+                              + (f"（改了{_quoted(i['cols'])}）" if i.get("cols") else ""),
+    "header_mismatch": lambda i: f"「{i['sheet']}」表头和别人的对不上，没法查",
+    "unreadable": lambda i: f"「{i['file']}」打不开：{i['why']}",
+    "no_header": lambda i: f"「{i['file']}」认不出表头",
+    "old_version": lambda i: f"「{i['file']}」是同一份表的旧版本，按最新的「{i['newest']}」查",
+    "same_as": lambda i: f"「{i['file']}」和「{i['other']}」内容完全一样，请核对是否交错了表",
+}
+
+
+def issue_text(i):
+    """一个问题的说明文字。多 sheet 时漏填、改动类问题前面带「sheet·」。"""
+    fn = ISSUE_TEXT.get(i["code"])
+    text = fn(i) if fn else i["code"]
+    if i["code"] in _BLANK_CODES + _CHANGE_CODES and i.get("sheet"):
+        if i["code"] in _BLANK_CODES:
+            return fn(dict(i, col=f"{i['sheet']}·{i['col']}"))
+        return f"{i['sheet']}·{text}"
+    return text
+
+
+def issue_counts(issues):
+    """{编码: 个数}：漏填、行数类按格数 / 行数算，其余每条算 1。回收记录.json 每轮按人存这个。"""
+    out = {}
+    for i in issues:
+        out[i["code"]] = out.get(i["code"], 0) + (i.get("count") or 1)
+    return out
+
+
+def _derive(p):
+    """由 p["issues"] 推出状态和旧字段 blanks / changes / notes（内部技能和界面还在读旧字段）。"""
+    issues = p["issues"]
+    p["blanks"] = [{"col": (f"{i['sheet']}·" if i.get("sheet") else "") + i["col"], "count": i["count"],
+                    "rows": i.get("rows", []), **({"no_col": True} if i["code"] == "no_col" else {})}
+                   for i in issues if i["code"] in _BLANK_CODES]
+    p["changes"] = [issue_text(i) for i in issues if i["code"] in _CHANGE_CODES]
+    notes = [issue_text(i) for i in issues if i["code"] in _NOTE_CODES]
+    if not notes and any(i["code"] == "empty" and i.get("why") == "header_only" for i in issues):
+        notes = [issue_text({"code": "empty", "why": "header_only"})]
+    p["notes"] = notes
+    # 打不开 / 认不出表头的那份：这个人别的表能查时只注明，全都查不了才算「表头对不上（没法查）」
+    flags = {ISSUE_STATUS.get(i["code"]) for i in issues
+             if not (i["code"] in ("unreadable", "no_header") and p["rows"])} - {None, ST_MISSING}
+    p["flags"] = sorted(flags, key=_RANK.get)
+    p["status"] = p["flags"][0] if p["flags"] else ST_OK
+
+
 def _diff(fp, base, names, lock_names):
-    """和下发时的指纹比：返回说明列表，如「少了 1 行」「第 7 行和下发时不一样（客户名称）」。"""
+    """和下发时的指纹比：返回问题列表（col_deleted / rows_lost / rows_added / rows_changed）。"""
     out = []
     pool = Counter(base.get("row_fp", []))
     new_rows = []
@@ -616,24 +695,24 @@ def _diff(fp, base, names, lock_names):
     lost = sum(pool.values())
     gone = [lock_names.get(k, k) for k in base.get("col_fp", {}) if k not in names]
     if gone:
-        out.append("删了" + "、".join(f"「{c}」" for c in gone) + "列")
+        out.append({"code": "col_deleted", "cols": gone})
     if lost > len(new_rows):
-        out.append(f"少了 {lost - len(new_rows)} 行")
+        out.append({"code": "rows_lost", "count": lost - len(new_rows)})
     elif len(new_rows) > lost:
-        out.append(f"多了 {len(new_rows) - lost} 行")
+        out.append({"code": "rows_added", "count": len(new_rows) - lost})
     if new_rows and lost and not gone:
         cols = []
         if len(fp["rows"]) == base.get("rows"):
             cols = [lock_names.get(k, k) for k, v in base.get("col_fp", {}).items() if fp["cols"].get(k) != v]
-        what = "（改了" + "、".join(f"「{c}」" for c in cols) + "）" if cols else ""
-        out.append(f"{_rows_text(new_rows)}和下发时不一样{what}")
+        out.append({"code": "rows_changed", "count": len(new_rows), "rows": new_rows[:BLANK_KEEP], "cols": cols})
     return out
 
 
 def analyze(files, res, expect=(), wanted=(), record=None, by=None, rows_mode=False):
     """逐人判定交表情况，返回报告 dict：
 
-      people  [{name, status, flags, files, rows, blanks: [{col, count, rows, no_col?}], changes, notes, time}]
+      people  [{name, status, flags, files, rows, issues: [{code, ...}], blanks: [{col, count, rows, no_col?}],
+                changes, notes, time}]——issues 见 ISSUE_STATUS；blanks / changes / notes 由 issues 推出来
       extra   名单外的文件（或总表里名单外的分组）；dupes / errors；required 该填的列（列名）；
       unknown_required 指定了却在表头里找不到的列；mode files|rows
     """
@@ -698,34 +777,34 @@ def analyze(files, res, expect=(), wanted=(), record=None, by=None, rows_mode=Fa
     rec_groups = record.get("groups", {})
     errs = {e["idx"]: e["error"] for e in res["errors"] if "idx" in e}
     for name in names:
-        p = {"name": name, "status": ST_MISSING, "flags": [], "files": [], "rows": 0, "blanks": [],
+        p = {"name": name, "status": ST_MISSING, "flags": [], "files": [], "rows": 0, "issues": [], "blanks": [],
              "changes": [], "notes": [], "time": ""}
         if rows_mode:
             pairs = by_owner.get(name, [])
             if not pairs:
-                p["notes"].append("表里没有这个名字的行")
+                p["issues"].append({"code": "not_in_total"})
         else:
             idxs = owners_files.get(name, [])
-            chosen = _newest(files, idxs, p["notes"])
+            chosen = _newest(files, idxs, p["issues"])
             p["files"] = [files[i][1] for i in chosen]
             p["time"] = _mtime(files, chosen)
             pairs = [pr for i in chosen for pr in items_by_file.get(i, [])]
             for i in chosen:
                 o = dupe_of.get(i, i)
                 if o != i and o is not None:
-                    p["notes"].append(f"「{files[i][1]}」和「{files[o][1]}」内容完全一样，请核对是否交错了表")
+                    p["issues"].append({"code": "same_as", "file": files[i][1], "other": files[o][1]})
                 if o in errs:
-                    p["notes"].append(f"「{files[i][1]}」打不开：{errs[o]}")
+                    p["issues"].append({"code": "unreadable", "file": files[i][1], "why": errs[o]})
                 elif not items_by_file.get(i) and o not in res["empty_idx"]:
-                    p["notes"].append(f"「{files[i][1]}」认不出表头")
+                    p["issues"].append({"code": "no_header", "file": files[i][1]})
         _judge(p, pairs, chosen_count=len(p["files"]) or len(pairs), rec=rec_groups.get(name),
                lock_names=lock_names)
         report["people"].append(p)
     return report
 
 
-def _newest(files, idxs, notes):
-    """同一个人交了几次同一份表（「副本」「(2)」）只查最新的；不同的表都查。"""
+def _newest(files, idxs, issues):
+    """同一个人交了几次同一份表（「副本」「(2)」）只查最新的；不同的表都查。旧版本记进 issues（old_version）。"""
     by_base = {}
     for i in idxs:
         by_base.setdefault(_base_stem(files[i][1]), []).append(i)
@@ -734,7 +813,7 @@ def _newest(files, idxs, notes):
         group.sort(key=lambda i: _safe_mtime(files[i][0]))
         chosen.append(group[-1])
         for i in group[:-1]:
-            notes.append(f"「{files[i][1]}」是同一份表的旧版本，按最新的「{files[group[-1]][1]}」查")
+            issues.append({"code": "old_version", "file": files[i][1], "newest": files[group[-1]][1]})
     return sorted(chosen)
 
 
@@ -751,51 +830,49 @@ def _mtime(files, idxs):
 
 
 def _judge(p, pairs, chosen_count, rec, lock_names):
-    """根据这个人的各个 sheet 定状态：空表 / 有漏填 / 有改动 / 表头对不上 / 合格。"""
+    """根据这个人的各个 sheet 记下问题（p["issues"]），再推出状态：空表 / 有漏填 / 有改动 / 表头对不上 / 合格。"""
+    issues = p["issues"]
     if not chosen_count:
+        if not any(i["code"] == "not_in_total" for i in issues):
+            issues.insert(0, {"code": "missing"})
+        _derive(p)
+        p["status"] = ST_MISSING
         return
     good = [(it, g) for it, g in pairs if not it["mismatch"]]
     multi = len(good) > 1
     filled_any = False
     for it, _g in pairs:
         if it["mismatch"]:
-            p["notes"].append(f"「{it['sheet']}」表头和别人的对不上，没法查")
-            p["flags"].append(ST_BAD)
+            issues.append({"code": "header_mismatch", "sheet": it["sheet"]})
+    found = []                                   # 漏填、改动类问题（按 sheet 顺序）
     for it, g in good:
         p["rows"] += it["rows"]
         tn = dict(zip(g["template"]["keys"], g["template"]["names"]))
         req = g.get("required", [])
         if not req or any(it["filled"].get(k, 0) for k in req):
             filled_any = True
-        prefix = f"{it['sheet']}·" if multi else ""
+        where = {"sheet": it["sheet"]} if multi else {}
         for k in req:
             if k not in it["filled"]:
-                p["blanks"].append({"col": prefix + tn[k], "count": it["rows"], "rows": [], "no_col": True})
+                found.append({"code": "no_col", "col": tn[k], "count": it["rows"], **where})
             elif it["filled"][k] < it["rows"]:
-                p["blanks"].append({"col": prefix + tn[k], "count": it["rows"] - it["filled"][k],
-                                    "rows": it["blank_rows"].get(k, [])})
+                found.append({"code": "blank", "col": tn[k], "count": it["rows"] - it["filled"][k],
+                              "rows": it["blank_rows"].get(k, []), **where})
         if rec and it.get("fp"):
             sheets = rec.get("sheets", {})
             base = sheets.get(it["sheet"]) or (next(iter(sheets.values())) if len(sheets) == 1 else None)
             if base:
-                diff = _diff(it["fp"], base, set(it["filled"]), lock_names)
-                p["changes"] += [prefix + d for d in diff]
-    if not good and not p["flags"]:
-        p["flags"].append(ST_EMPTY)              # 只有表头 / 认不出表头 / 打不开
-        if not pairs and not p["notes"]:
-            p["notes"].append("只有表头，没填数据")
+                found += [dict(d, **where) for d in _diff(it["fp"], base, set(it["filled"]), lock_names)]
+    has_bad = any(i["code"] == "header_mismatch" for i in issues)
+    if not good and not has_bad:
+        # 只有表头 / 认不出表头 / 打不开：打不开、认不出表头的算「表头对不上（没法查）」，不再记空表
+        if not any(i["code"] in ("unreadable", "no_header") for i in issues):
+            issues.append({"code": "empty", "why": "header_only" if not pairs else "no_fill"})
     elif good and not filled_any:
-        p["flags"].append(ST_EMPTY)
-        p["blanks"] = []                         # 一格没填，不必逐列列出
-    else:
-        if p["blanks"]:
-            p["flags"].append(ST_PARTIAL)
-    if p["changes"]:
-        p["flags"].append(ST_CHANGED)
-    if not good and any("打不开" in n or "认不出表头" in n for n in p["notes"]) and ST_EMPTY in p["flags"]:
-        p["flags"] = [ST_BAD]
-    p["flags"] = sorted(set(p["flags"]), key=_RANK.get)
-    p["status"] = p["flags"][0] if p["flags"] else ST_OK
+        issues.append({"code": "empty", "why": "no_fill"})
+        found = [i for i in found if i["code"] not in _BLANK_CODES]      # 一格没填，不必逐列列出
+    issues += found
+    _derive(p)
 
 
 # ---------- 通报、进度表 ----------
@@ -875,9 +952,17 @@ def notice_text(report, title, due="", now=None, has_fill=False):
     if report["extra"]:
         what = "名单外的分组" if report["mode"] == "rows" else "名单外的文件"
         lines.append(f"{what}（{len(report['extra'])}）：" + "、".join(report["extra"]))
-    if report["errors"] and not any("打不开" in n for p in people for n in p["notes"]):
+    if report["errors"] and not any(i["code"] == "unreadable" for p in people for i in p.get("issues", ())):
         lines.append(f"读不了的文件（{len(report['errors'])}）：" + "；".join(report["errors"]))
-    if report.get("new"):
+    if report.get("fixed") or report.get("still"):
+        lines.append("比上次：")
+        if report.get("new"):
+            lines.append("  新交：" + "、".join(report["new"]))
+        if report.get("fixed"):
+            lines.append("  改好了：" + "、".join(report["fixed"]))
+        if report.get("still"):
+            lines.append("  还差：" + "、".join(report["still"]))
+    elif report.get("new"):
         lines.append("比上次新交：" + "、".join(report["new"]) + "。")
     todo = [p for p in people if p["status"] != ST_OK]
     if todo:
@@ -955,6 +1040,50 @@ def _save_book(wb, path, now):
         return alt
     finally:
         wb.close()
+
+
+def result_data(report, title, due="", now=None):
+    """回收结果.json 的内容：逐人的状态和问题清单（只有名字、列名、文件名、行号、个数和编码，不含单元格的值）。
+
+    给技能和内部版回答追问用（「东城还差什么」「只给有漏填的人发催办」），不用回去解析通报文字。
+    """
+    now = now or datetime.datetime.now()
+    return {"version": 1, "title": title, "time": now.isoformat(timespec="seconds"), "due": due,
+            "counts": counts(report), "required": report["required"],
+            "people": [{"name": p["name"], "status": p["status"], "flags": p["flags"], "files": p["files"],
+                        "rows": p["rows"], "issues": p.get("issues", [])} for p in report["people"]],
+            "extra": report["extra"]}
+
+
+def _round_issues(report):
+    """这一轮按人记问题的编码和个数（不记行号）。未交的不记——下一轮交了算「新交」，不算「改好了」。"""
+    out = {}
+    for p in report["people"]:
+        got = issue_counts([i for i in p.get("issues", ())
+                            if ISSUE_NAG.get(i["code"]) and ISSUE_STATUS[i["code"]] != ST_MISSING])
+        if got:
+            out[p["name"]] = got
+    return out
+
+
+def _round_diff(prev, report):
+    """和上一轮比：(改好了的人, 还差的人及漏填变化)。上一轮没记问题（旧版写的记录）时返回 ([], [])。"""
+    before = prev.get("issues")
+    if not isinstance(before, dict):
+        return [], []
+    fixed, still = [], []
+    for p in report["people"]:
+        old = before.get(p["name"])
+        if not old:
+            continue
+        if p["status"] == ST_OK:
+            fixed.append(p["name"])
+        elif p["status"] != ST_MISSING:
+            now = issue_counts([i for i in p.get("issues", ()) if i["code"] in _BLANK_CODES])
+            a = sum(v for k, v in old.items() if k in _BLANK_CODES)
+            b = sum(now.values())
+            still.append(f"{p['name']} 漏填 {a} 格 → {b} 格" if a and b and a != b else p["name"])
+    return fixed, still
 
 
 def _load_rounds(out_dir):
@@ -1232,6 +1361,7 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     if rounds:
         before = set(rounds[-1].get("submitted", []))
         report["new"] = [n for n in submitted if n not in before]
+        report["fixed"], report["still"] = _round_diff(rounds[-1], report)
     has_fill = bool(ctx["record"] and ctx["record"].get("fill_columns"))
     text = notice_text(report, ctx["title"], ctx["due"], now, has_fill)
     notice = os.path.join(out_dir, NOTICE_NAME)
@@ -1249,8 +1379,15 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     except Exception as e:
         log(f"⚠️ 进度表没存成：{e}")
         progress = ""
+    result = os.path.join(out_dir, RESULT_NAME)
+    try:
+        with open(result, "w", encoding="utf-8") as f:
+            json.dump(result_data(report, ctx["title"], ctx["due"], now), f, ensure_ascii=False, indent=1)
+    except OSError as e:
+        log(f"⚠️ 回收结果.json 没写成：{e}")
+        result = ""
     rounds.append({"time": now.isoformat(timespec="seconds"), "submitted": submitted,
-                   "ok": [p["name"] for p in people if p["status"] == ST_OK]})
+                   "ok": [p["name"] for p in people if p["status"] == ST_OK], "issues": _round_issues(report)})
     _save_rounds(out_dir, rounds)
     if progress_fn:
         progress_fn(1.0)
@@ -1258,7 +1395,7 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     for line in text.rstrip("\n").split("\n"):
         log(line)
     log(f"\n📁 进度表：{progress}" if progress else "")
-    summary.update(counts(report), notice=notice, progress=progress, title=ctx["title"])
+    summary.update(counts(report), notice=notice, progress=progress, title=ctx["title"], result=result)
     log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
     return out_dir
 

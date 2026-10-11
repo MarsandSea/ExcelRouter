@@ -120,12 +120,21 @@ def main():
     tail.append(f"通报已存为「{em.NOTICE_NAME}」，逐人状态在「{em.PROGRESS_NAME}」（未交标红、有问题标橙、合格标绿），"
                 f"都在：{out_dir}" + ("（已为你打开）" if opened else ""))
     files = [p for p in (got.get("progress"), got.get("notice")) if p]
+    people = []
+    if got.get("result"):
+        try:
+            with open(got["result"], encoding="utf-8") as f:
+                people = json.load(f).get("people", [])
+        except (OSError, ValueError):
+            pass
     emit({"ok": True, "notice": notice, "message": notice + "\n\n" + "\n".join(tail),
           "counts": {k: got.get(k) for k in ("expected", "submitted", "ok", "missing", "empty", "partial",
                                              "changed", "bad", "extra")},
+          "people": people, "result_file": got.get("result") or "",
           "files": files, "output_dir": out_dir, "warnings": g["warnings"], "opened": opened,
           "next": "把 message 原样告诉用户（通报可以直接复制发群，逐人催办可单独发给本人）。"
-                  "用户说补齐了就再运行一次本命令（会写出「比上次新交」）；要汇总交了的表，"
+                  "用户追问某个人还差什么、只要有某类问题的人时，直接按 people（每人的 status 和 issues 编码）回答，"
+                  "不用重新运行。用户说补齐了就再运行一次本命令（会写出新交、改好了、还差）；要汇总交了的表，"
                   "运行 er_merge.py --input 同一个路径 --checked，并带上同样的 --expect / --required / --by / --record。"})
 
 
