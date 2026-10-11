@@ -25,7 +25,8 @@ Excel 智能拆分工具 - 核心拆分逻辑
 【跨文件合并】同一个取值若出现在多个源文件里，会**追加合并到同一个输出文件**
 （config['merge_across_files']，默认 False，界面上叫「跨文件合并汇总」），从根本上修掉旧版「同名文件互相覆盖」的 bug。
 实现：输出工作簿在内存里按取值累积、最后统一保存；第一个产生该取值的源文件定义表头/格式，
-后续文件按列位置追加。
+后续文件按列名对齐追加（v3.0 起；旧版按列位置，列顺序不同的表会错位）：列的顺序不同、多几列少几列都能对上，
+对上的列名不到一半的不硬合，单独放进「{sheet}_2」，见 _OutputBook.place。
 
 【读表】v3.0 起只用 openpyxl：每个源文件完整加载一次（data_only=True，值和格式都从这一份取），
 .xls 用 xlrd 读成内存工作簿，不再落临时文件；每一行都按【原始 Excel 行号】处理，按取值一次分好桶。
@@ -59,7 +60,8 @@ from core.utils import soft_clean, apply_alias, is_skip_value, safe_filename
 # 表头识别在 core/xlio.py（汇总也用它）；这里照旧导出原名，collect / 技能 / 测试都按 splitter 的名字调用
 from core.xlio import resolve_header_row
 from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
-from core.xlio import _head_limit, _iter_sheets_ro, cell_value, key_value, open_book, put, zip_folder
+from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, key_value, match,
+                       open_book, put, zip_folder)
 
 warnings.filterwarnings('ignore')
 
@@ -270,13 +272,18 @@ def _sheet_heads(file_path, config):
     """只读方式逐 sheet 产出 (sheet 名, 表头行号或 -1, 列名, 表头附近的行, 其余行的迭代器)。
 
     表头只在前几行里找；数据行先是「表头附近的行」里表头之后的部分，再接着从迭代器里取。
+    调用方中途不读了（break / return）也会关掉源文件。
     """
     limit = _head_limit(config)
-    for sn, it in _iter_sheets_ro(file_path):
-        head = _trim_tail(_key_row(r) for r in islice(it, limit))
-        h = resolve_header_row(head, config)
-        names = _header_names(head[h - 1]) if 0 < h <= len(head) else []
-        yield sn, h, names, head, it
+    sheets = _iter_sheets_ro(file_path)
+    try:
+        for sn, it in sheets:
+            head = _trim_tail(_key_row(r) for r in islice(it, limit))
+            h = resolve_header_row(head, config)
+            names = _header_names(head[h - 1]) if 0 < h <= len(head) else []
+            yield sn, h, names, head, it
+    finally:
+        sheets.close()
 
 
 def sheet_headers(file_path, config):
@@ -295,20 +302,68 @@ def list_columns(file_path, config, log_fn=None):
 
 def list_values(file_path, config, column, log_fn=None):
     """返回某列去重、归并、去跳过值后的取值列表（供 GUI「只拆这些值」多选）。"""
+    return scan_values(file_path, config, column)[0]
+
+
+def scan_values(file_path, config, column):
+    """读一遍文件，返回 (取值列表, 这个文件的模板)。取值同 list_values。
+
+    模板是第一个含这一列的 sheet 的列名（多行表头时空着的往上找，同跨文件对齐），交给 template_groups
+    看一批表是不是同一种模板；文件里没有这一列时为 None。GUI「扫描全部分组」用它，一遍读完两样。
+    """
     alias = config.get('value_alias_map', {})
     skip = config.get('skip_values', [])
-    values = set()
+    values, tpl = set(), None
     for _sn, h, names, head, it in _sheet_heads(file_path, config):
         if not 0 < h <= len(head):
             continue
         ci = _find_col(names, column)
         if ci is None:
             continue
+        if tpl is None:
+            tpl = col_names(head, h)
         for row in chain(head[h:], it):
             nv = apply_alias(key_value(row[ci]) if ci < len(row) else None, alias)
             if not is_skip_value(nv, skip):
                 values.add(nv)
-    return sorted(values)
+    return sorted(values), tpl
+
+
+def template_groups(pairs):
+    """按表头给一批文件分组：[(文件, 列名或 None)] → [{'names': 列名, 'files': [文件, ...]}]，文件多的组在前。
+
+    列名一样（不计顺序；比法同跨文件对齐，只看字母数字汉字）就是同一种模板。列名为 None 的文件
+    （读不了、没有拆分字段）不计入。跨文件合并现在按列名对齐，几种模板也能合，但用户该知道表其实不一样。
+    """
+    groups = {}
+    for f, names in pairs:
+        if names is None:
+            continue
+        sig = frozenset(k for k in col_keys(names) if not k.startswith('#'))
+        g = groups.get(sig)
+        if g is None:
+            groups[sig] = {'names': list(names), 'files': [f]}
+        else:
+            g['files'].append(f)
+    return sorted(groups.values(), key=lambda g: -len(g['files']))
+
+
+def _quote(names, k=4):
+    return "".join(f"「{n}」" for n in names[:k]) + ("等" if len(names) > k else "")
+
+
+def template_lines(groups):
+    """几种模板 → 说明行：每种几个表、举一个表名，和最多的那种比多了 / 少了哪些列。"""
+    main = {k: n for k, n in zip(col_keys(groups[0]['names']), groups[0]['names']) if not k.startswith('#')}
+    lines = []
+    for g in groups:
+        mine = {k: n for k, n in zip(col_keys(g['names']), g['names']) if not k.startswith('#')}
+        more = [n for k, n in mine.items() if k not in main]
+        less = [n for k, n in main.items() if k not in mine]
+        diff = "；".join(([f"多{_quote(more)}"] if more else []) + ([f"少{_quote(less)}"] if less else []))
+        lines.append(f"  · {len(g['files'])} 个和「{os.path.basename(g['files'][0])}」一样"
+                     + (f"：{diff}" if diff else ""))
+    return lines
 
 
 # =====================================================
@@ -354,6 +409,20 @@ def _write_header(ws_out, header_cells, merges, widths):
     for col_letter, width in widths.items():
         if width is not None:
             ws_out.column_dimensions[col_letter].width = width
+
+
+def _copy_header_cell(ws_src, h_src, c, ws_out, h_out, d, name):
+    """跨文件按列名对齐时，来源多出来的一列：在输出表头行第 d 列写上列名，格式和列宽照来源第 c 列。"""
+    dst = ws_out.cell(row=h_out, column=d)
+    put(dst, name)
+    src = ws_src.cell(row=h_src, column=c)
+    if not isinstance(src, MergedCell) and src.has_style:
+        dst.font, dst.fill = copy(src.font), copy(src.fill)
+        dst.border, dst.alignment = copy(src.border), copy(src.alignment)
+        dst.number_format = src.number_format
+    dim = ws_src.column_dimensions.get(get_column_letter(c))
+    if dim is not None and dim.width is not None:
+        ws_out.column_dimensions[get_column_letter(d)].width = dim.width
 
 
 # =====================================================
@@ -411,7 +480,7 @@ class _OutputBook:
         self.save_path = save_path
         self.wb = Workbook()
         self.wb.remove(self.wb.active)
-        self.sheets = {}        # sheet_name -> {'ws':, 'next_row':, 'ncols':}
+        self.sheets = {}        # sheet_name -> {'ws':, 'next_row':, 'keys':, 'names':, 'h':, 'base':}（后四项见 place）
         self._used_titles = set()
 
     def get_or_create_sheet(self, sheet_name, h_idx, header_cells, merges, widths):
@@ -423,6 +492,68 @@ class _OutputBook:
             info = {'ws': ws, 'next_row': h_idx + 1}
             self.sheets[sheet_name] = info
         return info
+
+    def place(self, sheet_name, h_idx, header, keys, names, ws_src):
+        """给一个来源 sheet 找输出 sheet，返回 (sheet 信息, 列映射或 None, 换到的 sheet 名或 None, 对齐说明或 None)。
+
+        · 还没有同名 sheet：用这个来源的表头建一个；
+        · 同名 sheet 的列键和这个来源完全一样：照原样按位置追加（列映射为 None）；
+        · 列不完全一样、但这个来源的列名有一半以上在输出里：按列名对齐，缺的列留空，多出的列加在最后；
+          各列位置其实没变（只是有的表多几列、少几列）时列映射仍为 None，照原样按位置写；
+        · 对上的列名不到一半：不硬合，换到「{sheet}_2」（被占用又对不上就 _3…）。拆分丢行就是丢数据，
+          所以不能像汇总那样整个不合。
+        keys / names 是这个来源 sheet 每一列的列键和列名（没有列名的列，列键按位置记成「#列号」）。
+        """
+        name, i = sheet_name, 1
+        while True:
+            info = self.sheets.get(name)
+            moved = name if i > 1 else None
+            if info is None:
+                info = self.get_or_create_sheet(name, h_idx, *header)
+                info.update(keys=list(keys), names=list(names), h=h_idx, base=len(keys))
+                return info, None, moved, None
+            out_keys = info.get('keys')
+            if out_keys is None or out_keys == list(keys) or all(k.startswith('#') for k in keys):
+                return info, None, moved, None
+            if not match(out_keys, keys)[1]:
+                col_map, detail = self._align(info, keys, names, ws_src, h_idx)
+                if all(d == c for c, d in enumerate(col_map, start=1)):
+                    col_map = None
+                return info, col_map, moved, detail
+            i += 1
+            name = f"{sheet_name}_{i}"
+
+    @staticmethod
+    def _align(info, keys, names, ws_src, h_src):
+        """按列名把来源的每一列对到输出 sheet 的列上：返回 (列映射, 说明或 None)。
+
+        列映射第 c-1 项是来源第 c 列要写到的输出列号。来源多出的列加在输出的最后，
+        有列名的照来源写上表头（格式、列宽也照来源）。说明里是：比建这个 sheet 的那个表少了哪些列、
+        多了哪些列，已有的列顺序变没变；都没有时为 None。
+        """
+        out_keys, out_names = info['keys'], info['names']
+        pos = {k: c for c, k in enumerate(out_keys, start=1)}
+        old = len(out_keys)
+        ws_out, h_out = info['ws'], info['h']
+        col_map, extra = [], []
+        for c, k in enumerate(keys, start=1):
+            d = pos.get(k)
+            if d is None:
+                out_keys.append(k)
+                out_names.append(names[c - 1])
+                d = pos[k] = len(out_keys)
+                if not k.startswith('#'):
+                    _copy_header_cell(ws_src, h_src, c, ws_out, h_out, d, names[c - 1])
+                    extra.append(names[c - 1])
+            col_map.append(d)
+        have, base = set(keys), info.get('base', old)
+        # 少的列只和建 sheet 的那个表比：别的表多出来、加在后面的列，这个表没有是自然的，不算少
+        missing = [n for k, n in zip(out_keys[:base], out_names[:base]) if not k.startswith('#') and k not in have]
+        named = [d for k, d in zip(keys, col_map) if not k.startswith('#') and d <= old]
+        reordered = named != sorted(named)
+        if not (missing or extra or reordered):
+            return col_map, None
+        return col_map, {'missing': missing, 'extra': extra, 'reordered': reordered}
 
     def save(self):
         """落盘。无任何 sheet 时不保存，返回 False。"""
@@ -451,7 +582,7 @@ class _Rows:
 
 
 def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache,
-                 heartbeat=None, formula_ws=None):
+                 heartbeat=None, formula_ws=None, col_map=None):
     """把选中的数据行追加到输出 sheet 的当前游标下。
 
     rows_df.index 是这些行在源表里的【原始 0 基行号】，excel_row = index + 1（只用 .index 和 len()，
@@ -460,6 +591,7 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
     写值一律走 put：源表里以「=」开头的文字照样是文字，不会变成能执行的公式。
     formula_ws 非 None 时（keep_formulas 开启且 preserve 有效），对每个公式单元格尝试
     「同行安全平移」：能平移则覆盖为新公式，不能则保留已写入的缓存数值（见 _safe_translate）。
+    col_map 非 None 时（跨文件按列名对齐），源表第 c 列写到输出第 col_map[c-1] 列；这时调用方不传 formula_ws。
     heartbeat(n) 每写入一批行回调一次，用于向界面报进度并让出 GIL（保持界面响应）。
     """
     ws_out = sheet_info['ws']
@@ -469,15 +601,18 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
     # 级操作更贵，若仍按固定 200 行让一次 GIL，两次让出之间工作线程霸占 GIL 的时间会随列数
     # 线性变长，表现为列数越多界面越卡（甚至处理详情面板都打不开）。目标约 4000 格/次让出。
     batch = max(20, 4000 // max(1, src_max_col))
+    cols = [(c, c if col_map is None else col_map[c - 1]) for c in range(1, src_max_col + 1)]
+    if col_map is not None:
+        formula_ws = None       # 列换了位置：同行公式按列字母引用，平移过去会算错，落成数值
 
     if ws_src is not None:
         for offset, src_idx in enumerate(rows_df.index):
             excel_row = int(src_idx) + 1
             out_row = start + offset
             if preserve:
-                for c in range(1, src_max_col + 1):
+                for c, d in cols:
                     src_cell = ws_src.cell(row=excel_row, column=c)
-                    dst = ws_out.cell(row=out_row, column=c)
+                    dst = ws_out.cell(row=out_row, column=d)
                     put(dst, src_cell.value)
                     if not isinstance(src_cell, MergedCell):
                         try:
@@ -496,10 +631,10 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
                                 dst.value = translated
                             # 不安全：dst.value 保持上面已写入的缓存数值，不覆盖
             else:
-                for c in range(1, src_max_col + 1):
+                for c, d in cols:
                     v = cell_value(ws_src.cell(row=excel_row, column=c))
                     if v is not None and v != "":
-                        put(ws_out.cell(row=out_row, column=c), v)
+                        put(ws_out.cell(row=out_row, column=d), v)
             if heartbeat and (offset + 1) % batch == 0:
                 heartbeat(batch)
     if heartbeat and n % batch:
@@ -555,6 +690,26 @@ def _person_key_path(output_root, primary, person, src_stem, merge):
 # =====================================================
 # 单文件处理
 # =====================================================
+
+def _align_lines(sn, notes):
+    """一个来源 sheet 跨文件按列名对齐的情况 → 日志行。notes：{情况: 涉及几个输出文件}。"""
+    lines = []
+    for nk, n in notes.items():
+        if nk == 'formula':
+            lines.append(f"  ⚠️ sheet「{sn}」的列和前面的表位置不一样，这部分行的公式落成了数值"
+                         f"（公式按列字母引用，换了位置会算错；涉及 {n} 个输出文件）")
+            continue
+        moved, missing, extra, reordered = nk
+        parts = (["列的顺序不一样"] if reordered else []) + \
+                ([f"少{_quote(missing)}（留空）"] if missing else []) + \
+                ([f"多{_quote(extra)}（加在最后）"] if extra else [])
+        if moved:
+            head = f"  ⚠️ sheet「{sn}」和前面同名 sheet 的列名大半对不上，没有硬合，单独放进「{moved}」"
+        else:
+            head = f"  ℹ️ sheet「{sn}」和前面同名 sheet 的列不完全一样，已按列名对齐"
+        lines.append(head + (f"：{'；'.join(parts)}" if parts else "") + f"（涉及 {n} 个输出文件）")
+    return lines
+
 
 def _last_data_row(ws):
     """最后一行有内容的行号；尾部只有格式、没有内容的行不算（和旧版 pandas 读表的口径一样）。整页空返回 0。"""
@@ -651,6 +806,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         # ---------- 逐 sheet 识别表头 ----------
         limit = _head_limit(config)
         sheets = []        # [(sheet 名, ws, 表头行号, 最后一行有内容的行号, 表头行的列名)]
+        cols = {}          # sheet 名 -> (每一列的列键, 列名)：跨文件合并时按列名对齐（见 _OutputBook.place）
         for ws in wb_src.worksheets:
             last = _last_data_row(ws)
             head = [_key_row(r) for r in ws.iter_rows(min_row=1, max_row=min(last, limit),
@@ -658,6 +814,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             h = resolve_header_row(head, config)
             if h != -1 and h <= last and h <= len(head):
                 sheets.append((ws.title, ws, h, last, _header_names(head[h - 1])))
+                names_full = col_names(head, h)
+                names_full += [""] * (ws.max_column - len(names_full))
+                cols[ws.title] = (col_keys(names_full), names_full)
             else:
                 if stats is not None:
                     stats["skipped_sheets"] += 1
@@ -700,6 +859,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 last_hb_log = rows_written
                 log_fn(f"    …已拆分写入 {rows_written} 行")
 
+        notes = {}         # 这个 sheet 跨文件对齐的情况 -> 涉及几个输出文件；拆完一个 sheet 合成几行日志
+
         def emit(key, save_path, sheet_name, h_idx, rows, ws_src, src_max_col, formula_ws):
             nonlocal total_rows
             if len(rows) == 0 or sheet_name not in header_meta:
@@ -710,20 +871,24 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 used = {os.path.normcase(os.path.abspath(o.save_path)) for o in outputs.values()}
                 ob = _OutputBook(_dedupe_path(save_path, used))
                 outputs[key] = ob
-            cells, merges_, widths = header_meta[sheet_name]
-            sinfo = ob.get_or_create_sheet(sheet_name, h_idx, cells, merges_, widths)
-            first_cols = sinfo.setdefault('ncols', src_max_col)
-            if first_cols != src_max_col and log_fn:
-                log_fn(f"  ⚠️ 列数与首个来源不一致（{first_cols}→{src_max_col}），"
-                       f"按列位置合并可能错位：sheet「{sheet_name}」")
+            keys_, names_ = cols[sheet_name]
+            sinfo, col_map, moved, detail = ob.place(sheet_name, h_idx, header_meta[sheet_name],
+                                                     keys_, names_, ws_src)
+            if moved or detail:
+                d = detail or {}
+                nk = (moved, tuple(d.get('missing', ())), tuple(d.get('extra', ())), bool(d.get('reordered')))
+                notes[nk] = notes.get(nk, 0) + 1
+            if col_map is not None and formula_ws is not None:
+                notes['formula'] = notes.get('formula', 0) + 1     # _append_rows 会把这批行的公式落成数值
             _append_rows(sinfo, rows, preserve_ok, ws_src, src_max_col, style_cache,
-                         heartbeat=heartbeat, formula_ws=formula_ws)
+                         heartbeat=heartbeat, formula_ws=formula_ws, col_map=col_map)
             total_rows += len(rows)
             touched_keys.add(key)
 
         # ---------- 逐 sheet 拆分 ----------
         contains = bool(selected_set) and not exact       # 包含匹配：一行可以落进几个分组
         n_sheets = max(1, len(sheets))
+        tpl = None         # 这个文件的模板：第一个含拆分字段的 sheet 的列名（见 template_groups）
         for si, (sn, ws, h, last, names) in enumerate(sheets):
             if stop_flag and stop_flag():
                 break
@@ -735,6 +900,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     log_fn(f"  ⚠️ sheet「{sn}」第 {h} 行（识别出的表头行）里没找到拆分字段"
                            f"「{split_column}」，已跳过该 sheet")
                 continue
+            if tpl is None:
+                tpl = cols[sn][1]
             pcol_idx = _find_col(names, person_column) if do_person else None
             if last <= h:
                 continue
@@ -776,6 +943,16 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                         k2, p2 = _person_key_path(output_root, pval, person, src_stem, merge)
                         emit(k2, p2, sn, h, _Rows([h + j for j in per[person]]), ws, src_max_col, formula_ws)
 
+            if notes:
+                if stats is not None and any(nk != 'formula' and nk[0] for nk in notes):
+                    stats["unaligned"] = stats.get("unaligned", 0) + 1
+                if log_fn:
+                    for line in _align_lines(sn, notes):
+                        log_fn(line)
+                notes.clear()
+
+        if stats is not None and tpl is not None:
+            stats.setdefault("templates", []).append((rel_path, tpl))
         if log_fn and total_rows:
             log_fn(f"  ✅ 本文件命中 {total_rows} 行 → 分入 {len(touched_keys)} 个输出文件")
         return total_rows
@@ -868,7 +1045,7 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
     outputs = {}
     grand_total = 0
     stopped = False
-    stats = {"skipped_sheets": 0, "failed_files": 0}   # 供收尾 [SUMMARY] 行汇总
+    stats = {"skipped_sheets": 0, "failed_files": 0, "unaligned": 0}   # 供收尾 [SUMMARY] 行汇总
     for i, (fp, rp) in enumerate(tasks):
         if stop_flag and stop_flag():
             _log("⛔ 已停止")
@@ -895,6 +1072,18 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
             stats["failed_files"] += 1
             _log(f"  ❌ 处理失败：{e}")
         _tick(1.0)
+
+    # ---------- 跨文件合并时，提醒这批表其实有几种模板 ----------
+    merge = config.get('merge_across_files', True)
+    groups = template_groups(stats.get("templates", [])) if merge and not single_file else []
+    if len(groups) > 1:
+        _log(f"\n📋 这 {sum(len(g['files']) for g in groups)} 个表其实是 {len(groups)} 种模板"
+             f"（含拆分字段的 sheet 列名不完全一样），跨文件合并已按列名对齐：")
+        for line in template_lines(groups):
+            _log(line)
+        if stats["unaligned"]:
+            _log(f"  其中 {stats['unaligned']} 个 sheet 和同名 sheet 的列名大半对不上，没有硬合，"
+                 f"各自单独放进了「sheet 名_2」，见上面的 ⚠️")
 
     # ---------- 统一保存所有输出文件 ----------
     n_out = len(outputs)
@@ -974,7 +1163,10 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         "failed_saves": failed_saves,
         "stopped": stopped,
         "output": output_path,
+        "unaligned": stats["unaligned"],      # v3.0：列名对不上、单独放进「{sheet}_2」的来源 sheet 数
     }
+    if groups:
+        summary["templates"] = len(groups)    # v3.0：跨文件合并时，这批表有几种模板
     if issued:
         summary["issued"] = True      # 写了下发记录：GUI 据此提示「收回来后用回收汇总查」
     _log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")

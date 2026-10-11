@@ -292,6 +292,7 @@ class App(_RootBase):
         self._values_scope = "sample"  # 取值来源：sample / all（已全量扫描）
         self._scan_all_token = 0      # 全量取值扫描序号：防过期结果回填
         self._scanning_all = False    # 全量取值扫描进行中
+        self._tpl_kinds = (0, 0)      # 全量扫描看出的 (几种模板, 几个表)；不止一种时取值摘要里提一句
         self._bulk_sync = False       # 全选/清空批量改勾选：合并成一次同步
         # 「已限定名单」是一个**显式状态**，不能靠「是否全勾」反推：样本表里恰好
         # 就是用户要的那几组时，全勾既可能是「不筛选」也可能是「只要这几组」。
@@ -760,6 +761,12 @@ class App(_RootBase):
             self._values_status.configure(
                 text=self._values_status.cget("text") + f"　🔒 只拆其中 {len(sel)} 组",
                 text_color=C_OK)
+        kinds, nfiles = self._tpl_kinds
+        if self._values_scope == "all" and kinds > 1:
+            # v3.0：读遍全部表时顺便看出的——表其实不是同一套模板，跨文件合并时用户该心里有数
+            self._values_status.configure(
+                text=self._values_status.cget("text")
+                     + f"　·　这 {nfiles} 个表其实是 {kinds} 种模板（详见处理详情）")
         # 「扫描全部」只要还在抽样态就一直可用：已限定名单的用户也可能想核对全量
         if from_sample:
             self._scanall_btn.pack(side="left", padx=(6, 0))
@@ -792,7 +799,7 @@ class App(_RootBase):
         self._values_status.configure(text="正在读取全部表格的分组…", text_color=C_MUTED)
 
         def work():
-            from core.splitter import list_values
+            from core.splitter import scan_values, template_groups, template_lines
             # 文件清单的过滤规则与 run_split / _scan_input 保持一致，
             # 否则「扫描出的分组」和「真正拆出的分组」又会对不上
             out_abs = os.path.normcase(os.path.abspath(out_now)) if out_now else None
@@ -808,17 +815,22 @@ class App(_RootBase):
                     if (lf.endswith(('.xlsx', '.xls')) and not fn.startswith('~$')
                             and not lf.endswith('__tmp__.xlsx')):
                         targets.append(os.path.join(root, fn))
-            vals, failed = set(), 0
+            vals, failed, pairs = set(), 0, []
             for i, fp in enumerate(targets, 1):
                 if token != self._scan_all_token:
                     return          # 用户换了输入/字段，本轮结果已作废
                 try:
-                    vals.update(list_values(fp, cfg, col))
+                    v, names = scan_values(fp, cfg, col)     # 一遍读出分组和这个表的模板
+                    vals.update(v)
+                    pairs.append((fp, names))
                 except Exception as e:
                     failed += 1
                     self._ui_q.put(("log", f"⚠ 读取「{os.path.basename(fp)}」的分组失败：{e}"))
                 self._ui_q.put(("scanall_prog", (token, i, len(targets))))
-            self._ui_q.put(("scanall", (token, col, sorted(vals), len(targets), failed)))
+            groups = template_groups(pairs)
+            tpl = (len(groups), sum(len(g["files"]) for g in groups),
+                   template_lines(groups) if len(groups) > 1 else [])
+            self._ui_q.put(("scanall", (token, col, sorted(vals), len(targets), failed, tpl)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -831,15 +843,23 @@ class App(_RootBase):
 
     def _on_scan_all(self, payload):
         """全量扫描回填：此后摘要行显示的是全量结论，不再带抽样警告。"""
-        token, col, vals, nfiles, failed = payload
+        token, col, vals, nfiles, failed, (kinds, ngrouped, tpl_lines) = payload
         self._scanning_all = False
         self._scanall_btn.configure(state="normal")
         if token != self._scan_all_token or col != self._split_var.get():
             return
         self._values_scope = "all"
+        self._tpl_kinds = (kinds, ngrouped)
         self._set_values(vals)
         note = f"（其中 {failed} 个读取失败，见上面的 ⚠）" if failed else ""
         self._log(f"✓ 已读遍 {nfiles} 个表：「{col}」共有 {len(vals)} 个分组{note}")
+        if kinds > 1:
+            self._log(f"📋 这 {ngrouped} 个表其实是 {kinds} 种模板（含「{col}」的 sheet 列名不完全一样）：")
+            for line in tpl_lines:
+                self._log(line)
+            self._log("  勾了「跨文件合并汇总」时按列名对齐；列名大半对不上的表单独放进「sheet 名_2」，不会错位"
+                      if self._merge_var.get() else
+                      "  没勾「跨文件合并汇总」，各表各拆，不受影响")
 
     def _pick_template(self):
         """手动指定样本表 —— 字段下拉和分组清单都从它读取。"""
@@ -1047,7 +1067,8 @@ class App(_RootBase):
             opts, text="保留公式（收件人可见计算过程，仅同行公式，需选「标准」速度）",
             variable=self._keep_formula_var)
         self._keep_formula_box.grid(row=1, column=0, columnspan=4, padx=8, pady=(0, 4), sticky="w")
-        ctk.CTkLabel(opts, text="提示：「跨文件合并汇总」会把所有结果留在内存里最后统一写盘，宽表 + 大批量时明显更吃内存；默认的「按原表各自拆分」更稳。",
+        ctk.CTkLabel(opts, text="提示：「跨文件合并汇总」把各表的同名 sheet 按列名合到一起（列顺序不同也对得上），"
+                                "所有结果留在内存里最后统一写盘，宽表 + 大批量时明显更吃内存；默认的「按原表各自拆分」更稳。",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED,
                      wraplength=560, justify="left").grid(
             row=2, column=0, columnspan=4, padx=8, pady=(0, 6), sticky="w")

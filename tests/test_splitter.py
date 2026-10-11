@@ -311,16 +311,25 @@ def test_skip_leftover_temp_file(two_books):
     assert os.path.exists(os.path.join(res, "销售部.xlsx"))       # 正常文件照常处理
 
 
-def test_column_mismatch_warns(tmp_path):
-    """F7：同一取值跨文件合并、列数不一致时给出预警（不阻断）。"""
+def test_column_mismatch_aligns_by_name(tmp_path):
+    """F7（v3.0 起按列名对齐）：B 多一列「备注」加在最后、表头照抄；C 少「城市」，金额仍进金额列，城市留空。"""
     inp = tmp_path / "in"; out = tmp_path / "out"
     inp.mkdir(); out.mkdir()
     _make_book_custom(inp / "A.xlsx", HEADERS, [["001", "张三", "销售部", "北京", 100]])
     _make_book_custom(inp / "B.xlsx", HEADERS + ["备注"],
                       [["002", "李四", "销售部", "上海", 200, "x"]])      # 多一列
+    _make_book_custom(inp / "C.xlsx", ["工号", "姓名", "部门", "金额"],
+                      [["003", "王五", "销售部", 300]])                   # 少一列
     logs = []
-    run_split(_base_cfg(str(inp), str(out)), log_fn=logs.append)
-    assert any("列数" in m for m in logs), logs
+    res = run_split(_base_cfg(str(inp), str(out)), log_fn=logs.append)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert [c.value for c in ws[2]] == HEADERS + ["备注"]
+    assert [c.value for c in ws[3]] == ["001", "张三", "销售部", "北京", 100, None]
+    assert [c.value for c in ws[4]] == ["002", "李四", "销售部", "上海", 200, "x"]
+    assert [c.value for c in ws[5]] == ["003", "王五", "销售部", None, 300, None]
+    assert any("多「备注」（加在最后）" in m for m in logs), logs
+    assert any("少「城市」（留空）" in m for m in logs), logs
+    assert not any("列数" in m for m in logs)                             # 旧的「按列位置合并可能错位」不再出现
 
 
 def test_zip_bundles_summary_with_person(two_books):
@@ -627,3 +636,141 @@ def test_numeric_header_names_read_like_text():
     assert names == ["2026", "部门", "", ""]
     assert _find_col(names, "2026") == 0
     assert _find_col(names, "部") == 1
+
+
+# ---------- v3.0：跨文件合并按列名对齐 ----------
+
+REORDERED = ["姓名", "工号", "部门", "金额", "城市"]
+
+
+def _summary(logs):
+    import json
+    return json.loads([m for m in logs if m.startswith("[SUMMARY] ")][0][len("[SUMMARY] "):])
+
+
+def _values(ws, row):
+    return [c.value for c in ws[row]]
+
+
+@pytest.mark.parametrize("preserve", [True, False])
+def test_merge_aligns_reordered_columns(tmp_path, preserve):
+    """B 的列顺序和 A 不一样：旧版按位置追加，姓名落进工号列；现在每个值进它自己的列。"""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _make_book_custom(inp / "A.xlsx", HEADERS, [["001", "张三", "销售部", "北京", 100]])
+    _make_book_custom(inp / "B.xlsx", REORDERED, [["李四", "002", "销售部", 200, "上海"]])
+    logs = []
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out"), preserve_format=preserve), log_fn=logs.append)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert _values(ws, 2) == HEADERS
+    assert _values(ws, 3) == ["001", "张三", "销售部", "北京", 100]
+    assert _values(ws, 4) == ["002", "李四", "销售部", "上海", 200]
+    assert any("已按列名对齐：列的顺序不一样" in m for m in logs), logs
+    s = _summary(logs)
+    assert s["unaligned"] == 0 and s["templates"] == 1         # 列一样、只是顺序不同，算同一种模板
+
+
+def test_merge_unaligned_goes_to_own_sheet(tmp_path):
+    """对上的列名不到一半：不硬合，这个来源的行放进「Sheet1_2」，用它自己的表头；一行不丢。"""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _make_book_custom(inp / "A.xlsx", HEADERS, [["001", "张三", "销售部", "北京", 100]])
+    _make_book_custom(inp / "B.xlsx", ["编号", "名称", "部门", "地址", "数值"],
+                      [["X1", "甲", "销售部", "广州", 7], ["X2", "乙", "技术部", "深圳", 8]])
+    logs = []
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out")), log_fn=logs.append)
+    wb = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))
+    assert wb.sheetnames == ["Sheet1", "Sheet1_2"]
+    assert _values(wb["Sheet1"], 3) == ["001", "张三", "销售部", "北京", 100]
+    assert wb["Sheet1"].max_row == 3
+    assert _values(wb["Sheet1_2"], 2) == ["编号", "名称", "部门", "地址", "数值"]
+    assert _values(wb["Sheet1_2"], 3) == ["X1", "甲", "销售部", "广州", 7]
+    tech = openpyxl.load_workbook(os.path.join(res, "技术部.xlsx"))
+    assert tech.sheetnames == ["Sheet1"]                      # 技术部只有 B 的行：用 B 的表头建，不用挪
+    assert any("单独放进「Sheet1_2」" in m for m in logs), logs
+    assert any("2 种模板" in m for m in logs), logs
+    s = _summary(logs)
+    assert s["unaligned"] == 1 and s["templates"] == 2 and s["rows"] == 3
+
+
+def test_merge_same_template_reports_nothing(two_books):
+    """同一套模板：没有对齐日志，摘要里 1 种模板、0 个没对上。"""
+    inp, out = two_books
+    logs = []
+    run_split(_base_cfg(inp, out), log_fn=logs.append)
+    assert not any("按列名对齐" in m or "模板" in m for m in logs), logs
+    s = _summary(logs)
+    assert s["unaligned"] == 0 and s["templates"] == 1
+
+
+def test_no_merge_has_no_template_note(tmp_path):
+    """不跨文件合并时各表各拆，模板不一样也不用提醒。"""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _make_book_custom(inp / "A.xlsx", HEADERS, [["001", "张三", "销售部", "北京", 100]])
+    _make_book_custom(inp / "B.xlsx", ["编号", "部门"], [["X1", "销售部"]])
+    logs = []
+    run_split(_base_cfg(str(inp), str(tmp_path / "out"), merge_across_files=False), log_fn=logs.append)
+    assert not any("模板" in m for m in logs)
+    assert "templates" not in _summary(logs)
+
+
+def test_to_person_merge_aligns_columns(tmp_path):
+    """到人（merge=True）也按列名对齐：张三在两个列顺序不同的表里，合进一张表、各列对得上。"""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _make_book_custom(inp / "A.xlsx", HEADERS, [["001", "张三", "销售部", "北京", 100]])
+    _make_book_custom(inp / "B.xlsx", REORDERED, [["张三", "001", "销售部", 200, "上海"]])
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out"), to_person=True, person_column="姓名"),
+                    log_fn=lambda m: None)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部", "到人", "张三.xlsx")).active
+    assert _values(ws, 3) == ["001", "张三", "销售部", "北京", 100]
+    assert _values(ws, 4) == ["001", "张三", "销售部", "上海", 200]
+
+
+def _formula_book(path, headers, rows):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(headers)
+    for r in rows:
+        ws.append(r)
+    wb.save(path)
+
+
+def test_keep_formulas_dropped_only_when_columns_move(tmp_path):
+    """保留公式 + 跨文件合并：列位置没变的表照样保留同行公式；列换了位置的表落成数值，并在日志里说明。"""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _formula_book(inp / "A.xlsx", ["部门", "单价", "数量", "金额"], [["销售部", 2, 3, "=B2*C2"]])
+    _formula_book(inp / "B.xlsx", ["部门", "单价", "数量", "金额", "备注"], [["销售部", 4, 5, "=B2*C2", "多一列"]])
+    _formula_book(inp / "C.xlsx", ["部门", "数量", "单价", "金额"], [["销售部", 6, 7, "=C2*B2"]])
+    logs = []
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out"), header_mode="row", header_row=1,
+                              keep_formulas=True), log_fn=logs.append)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert _values(ws, 1) == ["部门", "单价", "数量", "金额", "备注"]
+    assert (ws["D2"].value, ws["D2"].data_type) == ("=B2*C2", "f")    # A：原位
+    assert (ws["D3"].value, ws["D3"].data_type) == ("=B3*C3", "f")    # B：只是多一列，位置没变
+    assert ws["E3"].value == "多一列"
+    assert (ws["B4"].value, ws["C4"].value) == (7, 6)                # C：单价、数量按列名换回来
+    assert ws["D4"].data_type != "f"                                 # 公式按列字母引用，换了位置不能留
+    assert any("公式落成了数值" in m for m in logs), logs
+
+
+def test_scan_values_and_template_groups(tmp_path):
+    """scan_values 一遍读出取值和模板；template_groups 不计列顺序分组，template_lines 说出多了 / 少了哪些列。"""
+    from core.splitter import scan_values, template_groups, template_lines
+    a, b, c = tmp_path / "A.xlsx", tmp_path / "B.xlsx", tmp_path / "C.xlsx"
+    _make_book_custom(a, HEADERS, [["001", "张三", "销售部", "北京", 100]])
+    _make_book_custom(b, REORDERED, [["李四", "002", "技术部", 200, "上海"]])
+    _make_book_custom(c, HEADERS[:4] + ["备注"], [["003", "王五", "销售部", "广州", "x"]])
+    cfg = {"header_mode": "auto"}
+    vals, tpl = scan_values(str(a), cfg, "部门")
+    assert vals == ["销售部"] and tpl == HEADERS
+    assert scan_values(str(a), cfg, "不存在的列") == ([], None)
+    pairs = [(str(p), scan_values(str(p), cfg, "部门")[1]) for p in (a, b, c)] + [("坏文件.xlsx", None)]
+    groups = template_groups(pairs)
+    assert [len(g["files"]) for g in groups] == [2, 1]               # A、B 只是顺序不同，算一种
+    lines = template_lines(groups)
+    assert lines[0] == "  · 2 个和「A.xlsx」一样"
+    assert lines[1] == "  · 1 个和「C.xlsx」一样：多「备注」；少「金额」"
