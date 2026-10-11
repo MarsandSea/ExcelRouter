@@ -152,3 +152,36 @@ python scripts/er_pdf_dist.py --make-template 网格密码表.xlsx
 python scripts/er_pdf_dist.py --mapping 网格密码表.xlsx --grid-col 网格 --random-password
 # 返回 JSON 的 mapping_with_passwords 就是新清单路径，password_col 告诉你密码列叫什么
 ```
+
+## 汇总："各单位交上来的表合成一张总表"
+
+```bash
+python scripts/er_merge.py --input 九月报表/ --open
+```
+结果在 `九月报表/汇总结果/汇总_九月报表_{月日时分}.xlsx`。列顺序不同按列名对齐；各表的合计行不合；
+合不进去的表（.et、网页格式的 xls、加了密码的、表头对不上的）在返回的 `message` 里逐个说明。
+返回 `done: false` 时原样再跑一次同一条命令，接着合。
+
+## 汇总："一个文件里 12 个月的 sheet 合成一张"
+
+```bash
+python scripts/er_merge.py --input 全年考勤.xlsx --open
+```
+「来源」列写 sheet 名（1月、2月……）；隐藏的 sheet（下拉选项之类）不合。表头不在前 20 行时加 `--header-row N`。
+
+## 查收："收回来的表查一下谁没交、谁漏填"
+
+```bash
+python scripts/er_check.py --input 九月收表/ --expect "城区、东城、西城、南城"     --required "走访日期、走访结果" --due "10月15日 18:00"
+# 补齐后再查一次，通报里会写「比上次新交」了谁
+# 查完只合交了的表，「来源」写交表人：
+python scripts/er_merge.py --input 九月收表/ --checked --expect "城区、东城、西城、南城"     --required "走访日期、走访结果" --open
+```
+名单也可以不在命令里写：文件夹里放一张文件名含「应交名单」的表，或用 ExcelRouter 拆分下发时
+生成的「下发记录.json」（放在文件夹或上一层），脚本会自己找。
+
+## 查收："大家在同一张总表里各填各行"
+
+```bash
+python scripts/er_check.py --input 走访登记总表.xlsx --by 网格 --expect "网格一、网格二、网格三"
+```

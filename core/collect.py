@@ -73,12 +73,49 @@ MAX_CELLS = 600_000
 ST_MISSING, ST_EMPTY, ST_PARTIAL, ST_CHANGED, ST_BAD, ST_OK = "未交", "空表", "有漏填", "有改动", "表头对不上", "合格"
 EXTRA = "名单外"
 _RANK = {ST_MISSING: 0, ST_EMPTY: 1, ST_PARTIAL: 2, ST_CHANGED: 3, ST_BAD: 4, ST_OK: 5}
+TABLE_EXTS = (".xlsx", ".xlsm", ".xls")
+# 收回来的文件里常见、但读不了的格式：照样算「交了」（不然通报会把交了的人写成未交），原因写成人话
+OTHER_EXTS = {".et": "是 WPS 表格自己的格式（.et）", ".ett": "是 WPS 表格模板（.ett）",
+              ".csv": "是 CSV 文本", ".xlsb": "是二进制工作簿（.xlsb）", ".ods": "是 OpenDocument 表格（.ods）",
+              ".numbers": "是苹果 Numbers 表格"}
 _STATUS_COLOR = {ST_MISSING: "FFC7CE", ST_EMPTY: "FFC7CE", ST_PARTIAL: "FFEB9C", ST_CHANGED: "FFEB9C",
                  ST_BAD: "FFEB9C", ST_OK: "C6EFCE"}
 _MASK = (1 << 64) - 1
 
 
 # ---------- 读表 ----------
+
+def unreadable(path):
+    """读不了的文件返回人话原因（带上怎么办），读得了返回 ""。只看扩展名和文件头几百字节。
+
+    不先判断的话，用户和通报里看到的是「File is not a zip file」「Expected BOF record」这类原话。
+    """
+    ext = os.path.splitext(path)[1].lower()
+    save_as = "请用 Excel 或 WPS 打开后另存为 .xlsx"
+    if ext in OTHER_EXTS:
+        return f"{OTHER_EXTS[ext]}，{save_as}"
+    try:
+        with open(path, "rb") as f:
+            head = f.read(512)
+    except OSError as e:
+        return f"读取失败：{e}"
+    if not head:
+        return "是空文件"
+    if ext in (".xlsx", ".xlsm"):
+        if head.startswith(b"\xd0\xcf\x11\xe0"):
+            return "设置了打开口令（或其实是 .xls 改了扩展名），请去掉口令、另存为 .xlsx"
+        if not head.startswith(b"PK"):
+            return "不是完整的 Excel 文件（可能没下载完或已损坏），请重新另存一份"
+    elif ext == ".xls":
+        low = head.lstrip(b"\xef\xbb\xbf \r\n\t").lower()
+        if low.startswith((b"<", b"mime-version")) or b"<html" in low or b"<table" in low:
+            return f"其实是网页格式（很多系统「导出 Excel」导出的就是这种），{save_as}"
+        if head.startswith(b"PK"):
+            return "其实是 .xlsx 格式却叫 .xls，把扩展名改成 .xlsx 即可"
+        if not head.startswith(b"\xd0\xcf\x11\xe0"):
+            return f"不是有效的 Excel 文件，{save_as}"
+    return ""
+
 
 def _nonempty(row):
     return any(soft_clean(v) != "" for v in row)
@@ -397,6 +434,11 @@ def scan(files, cfg, deadline=None, log=None, by=None, fp_keys=None, stop=None, 
             break
         if progress:
             progress(i / max(1, len(files)))
+        why = unreadable(path)
+        if why:
+            res["errors"].append({"file": rel, "idx": i, "error": why})
+            res["files_scanned"] = i + 1
+            continue
         try:
             fh = file_hash(path)
         except OSError as e:
@@ -1283,7 +1325,11 @@ def _write_send_list(output_path, groups, saved):
 # ---------- 对外入口：查收 / 汇总（签名与 run_split 一致） ----------
 
 def returned_files(input_path, output_root):
-    """回收文件夹里的表：[(绝对路径, 相对路径)]，以及名单表的路径。跳过结果目录、锁文件和名单表。"""
+    """回收文件夹里的表：[(绝对路径, 相对路径)]，以及名单表的路径。跳过结果目录、锁文件和名单表。
+
+    .et / .csv 这类读不了的文件也算进来：它们是有人交了的表，扫描时按 unreadable() 记成读不了，
+    通报里写成「打不开：是 WPS 表格自己的格式…」，而不是把交了的人写成未交。
+    """
     if os.path.isfile(input_path):
         return [(input_path, os.path.basename(input_path))], []
     out_abs = os.path.normcase(os.path.abspath(output_root)) if output_root else ""
@@ -1293,7 +1339,8 @@ def returned_files(input_path, output_root):
             out_abs and os.path.normcase(os.path.abspath(os.path.join(root, d))).startswith(out_abs)))
         for f in sorted(names):
             lf = f.lower()
-            if not lf.endswith((".xlsx", ".xls")) or f.startswith("~$") or lf.endswith("__tmp__.xlsx"):
+            if (not lf.endswith(TABLE_EXTS + tuple(OTHER_EXTS)) or f.startswith("~$")
+                    or lf.endswith("__tmp__.xlsx")):
                 continue
             stem = os.path.splitext(f)[0]
             path = os.path.join(root, f)
@@ -1674,6 +1721,11 @@ def merge_step(st, files, cfg, mode, required=None, until=None, log=None, progre
 
 def _merge_file(wb, st, path, rel, cfg, mode, required, log, labels):
     """把一个源文件的各 sheet 并进结果工作簿；读不了只记进 errors，不影响其余文件。"""
+    why = unreadable(path)
+    if why:
+        st["errors"].append({"file": rel, "error": why})
+        log(f"  读不了：{why}")
+        return
     try:
         fh = file_hash(path)
     except OSError as e:
@@ -1708,7 +1760,7 @@ def _merge_file(wb, st, path, rel, cfg, mode, required, log, labels):
                 header_only = True
         if header_only and not usable:
             st["sources"].append({"file": rel, "sheet": "", "rows": 0, "totals": 0, "status": "只有表头，没填数据"})
-        style_cache = {"f": {}, "fl": {}, "b": {}, "a": {}}
+        style_cache = {}     # 按源文件作用域，见 splitter._copy_cell_style
         for sn, rows, ws, h in usable:
             _merge_sheet(wb, st, rel, sn, rows, ws, h, mode, len(usable) > 1, style_cache,
                          set(required.get(group_key(mode, sn), ())), labels.get(rel))
@@ -1771,11 +1823,7 @@ def _merge_sheet(wb, st, rel, sn, rows, ws_src, h, mode, multi_sheet, style_cach
             cell.value = src.value
             if src.has_style:
                 try:
-                    cell.font = sp._cached_copy(src.font, style_cache["f"])
-                    cell.fill = sp._cached_copy(src.fill, style_cache["fl"])
-                    cell.border = sp._cached_copy(src.border, style_cache["b"])
-                    cell.alignment = sp._cached_copy(src.alignment, style_cache["a"])
-                    cell.number_format = src.number_format
+                    sp._copy_cell_style(src, cell, style_cache)
                 except Exception:
                     pass
             if c in check and soft_clean(src.value) == "":

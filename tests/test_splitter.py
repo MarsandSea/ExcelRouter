@@ -481,3 +481,40 @@ def test_walk_skips_tmp_file_case_insensitively(tmp_path):
     names = {p.name for p in out.rglob("*.xlsx")}
     assert not any("不该出现的部门" in n for n in names), names
     assert not (out / "不该出现的部门").exists()
+
+
+def _many_styles_book(path, n=300):
+    """每行一种颜色组合、隔行换部门：专测「格式照原样」不是碰巧对的。"""
+    colors = ["FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF"]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["部门", "姓名", "金额"])
+    for i in range(n):
+        ws.append(["A" if i % 2 else "B", f"人{i}", i])
+        for c in ws[ws.max_row]:
+            c.fill = PatternFill("solid", fgColor=colors[i % 6])
+            c.font = Font(bold=i % 3 == 0, color=colors[(i + 2) % 6])
+    wb.save(path)
+
+
+def _style_sig(c):
+    return c.fill.fgColor.rgb, c.font.bold, c.font.color.rgb if c.font.color else None
+
+
+def test_preserve_format_copies_each_cells_own_style(tmp_path):
+    """回归：旧版按 id(cell.font) 缓存样式，cell.font 每次都是新的临时对象，地址被复用时会
+    取到别的格子的样式——实测 900 个格子里约 20 个填充色 / 字体错了。"""
+    src = tmp_path / "src.xlsx"
+    _many_styles_book(src)
+    cfg = {"input_path": str(src), "output_path": str(tmp_path / "out"), "split_column": "部门",
+           "header_mode": "auto", "preserve_format": True, "make_zip": False, "merge_across_files": False,
+           "skip_values": [""], "exact_match": True, "selected_values": []}
+    out = run_split(cfg, log_fn=lambda m: None)
+    ws_src = openpyxl.load_workbook(src).active
+    for dept, parity in (("A", 1), ("B", 0)):
+        path = next(os.path.join(d, f) for d, _, fs in os.walk(out) for f in fs if f.startswith(dept))
+        ws = openpyxl.load_workbook(path).active
+        src_rows = [r for r in range(2, 302) if (r - 2) % 2 == parity]
+        for k, r in enumerate(src_rows):
+            for c in (1, 2, 3):
+                assert _style_sig(ws.cell(k + 2, c)) == _style_sig(ws_src.cell(r, c)), (dept, r, c)

@@ -148,6 +148,7 @@ _PIP_MIRRORS = (
 _PIP_MIRROR = _PIP_MIRRORS[0]  # 报错提示里给用户手动用的那个
 
 _EXCEL_DEPS = (("pandas", "pandas"), ("openpyxl", "openpyxl"), ("xlrd", "xlrd"))
+_LITE_DEPS = (("openpyxl", "openpyxl"), ("xlrd", "xlrd"))   # 汇总 / 查收：core/collect.py 不用 pandas
 _PDF_DEPS = (("pypdf", "pypdf"), ("fpdf", "fpdf2"), ("cryptography", "cryptography"))
 # 给 Word / Excel / PPT 加密才要（也写在 requirements-pdf.txt 里）；只发 PDF 时不检查，
 # 免得内网装不上它的用户每次跑 PDF 分发都去试一次安装
@@ -163,20 +164,21 @@ def _missing(deps):
 _INSTALL_BUDGET = 95
 
 
-def _pip_install(req_file):
+def _pip_install(req_file, packages=None):
     """用**当前解释器**装依赖（不用裸 pip：多个 Python 并存时 pip 常装到别的环境里，
     装完照样报缺——WorkBuddy 就自带一个独立的 Python）。
 
-    返回 "ok" / "timeout" / "fail"。
+    返回 "ok" / "timeout" / "fail"。packages 给了就只装这几个包（版本要求照 req_file 里写的）。
 
     **国内镜像优先**：用户几乎都在国内，直连 pypi.org 下 pandas+numpy 实测两分钟都没装完、
     被宿主杀掉；用户若自己配过 pip 源（pip.ini / PIP_INDEX_URL）就尊重他的配置。
     两轮共用一个总时限，超时不算失败：已下载的包在 pip 缓存里，再跑一次会快很多。"""
     import subprocess
     import time
+    target = ["-r", req_file] if not packages else _pinned(req_file, packages)
     base = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
             "--no-warn-script-location", "--prefer-binary", "--timeout", "15", "--retries", "1",
-            "-q", "-r", req_file]
+            "-q"] + target
     user_index = bool(os.environ.get("PIP_INDEX_URL")) or _has_pip_config()
     rounds = [[]] if user_index else [["-i", m] for m in _PIP_MIRRORS] + [[]]
     deadline = time.time() + _INSTALL_BUDGET
@@ -195,6 +197,22 @@ def _pip_install(req_file):
     return "fail"
 
 
+def _pinned(req_file, packages):
+    """从 requirements 文件里取这几个包的版本要求（如 openpyxl>=3.1.0），取不到就只写包名。"""
+    import re
+    specs = {}
+    try:
+        with open(req_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                m = re.match(r"^([A-Za-z0-9_.-]+)", line)
+                if m:
+                    specs[m.group(1).lower()] = line
+    except OSError:
+        pass
+    return [specs.get(p.lower(), p) for p in packages]
+
+
 def _has_pip_config():
     """用户是否给 pip 配过源（有就别拿镜像覆盖他的选择，可能是公司内网源）。"""
     import subprocess
@@ -206,7 +224,7 @@ def _has_pip_config():
     return "index-url" in out
 
 
-def ensure_deps(need_pdf=False, need_office=False):
+def ensure_deps(need_pdf=False, need_office=False, lite=False):
     """缺依赖就自动装上（首次使用），装不上再报人话错误。
 
     **必须在 import pandas / core.* 之前调用**——否则缺包时 Python 直接甩
@@ -215,39 +233,50 @@ def ensure_deps(need_pdf=False, need_office=False):
     为什么默认自动装：用户的诉求是「把表拆了」，不是「配环境」。首次使用卡在
     pip 上是这个技能最大的流失点；装的只是 requirements*.txt 里声明的包。
     不想自动装（内网、受管环境）就设环境变量 ER_NO_AUTO_INSTALL=1。
+
+    lite=True：汇总 / 查收只用 openpyxl + xlrd（core/collect.py 不导入 pandas），
+    只检查、只装这两个——几秒钟装完，不用为了合几张表先等 pandas + numpy 下载一分钟。
     """
+    if lite:
+        _install_group(_LITE_DEPS, "requirements.txt", only=True)
+        return
     groups = [(_EXCEL_DEPS, "requirements.txt")]
     if need_pdf:
         groups.append((_PDF_DEPS, "requirements-pdf.txt"))
     if need_office:
         groups.append((_OFFICE_DEPS, "requirements-pdf.txt"))
     for deps, req in groups:
-        missing = _missing(deps)
-        # cryptography 缺失只是加密降级（AES-256 → RC4-128），不值得为它阻塞
-        hard = [m for m in missing if m != "cryptography"]
-        if not missing:
-            continue
-        req_path = os.path.join(_SKILL_DIR, req)
-        auto = os.environ.get("ER_NO_AUTO_INSTALL") != "1"
-        if auto:
-            eprint(f"首次使用，正在自动安装依赖：{', '.join(missing)}（约 1 分钟，只装一次）…")
-            status = _pip_install(req_path)
-            importlib.invalidate_caches()  # 否则刚装好的包在本进程里仍然 find_spec 不到
-            if not [m for m in _missing(deps) if m != "cryptography"]:
-                eprint("✅ 依赖安装完成")
-                continue
-            if status == "timeout":
-                emit_error(
-                    "首次使用正在安装运行依赖，网络较慢还没装完（已下载的部分会保留）。"
-                    "直接再运行一次同一条命令即可接着装，通常第二次很快。",
-                    retry=True, installing=missing)
-        if hard:
+        _install_group(deps, req)
+
+
+def _install_group(deps, req, only=False):
+    """检查一组依赖，缺了就装；装不上 emit_error 退出。only=True 时只装缺的那几个包，不装整份 req。"""
+    missing = _missing(deps)
+    # cryptography 缺失只是加密降级（AES-256 → RC4-128），不值得为它阻塞
+    hard = [m for m in missing if m != "cryptography"]
+    if not missing:
+        return
+    req_path = os.path.join(_SKILL_DIR, req)
+    auto = os.environ.get("ER_NO_AUTO_INSTALL") != "1"
+    if auto:
+        eprint(f"首次使用，正在自动安装依赖：{', '.join(missing)}（{'几秒钟' if only else '约 1 分钟'}，只装一次）…")
+        status = _pip_install(req_path, missing if only else None)
+        importlib.invalidate_caches()  # 否则刚装好的包在本进程里仍然 find_spec 不到
+        if not [m for m in _missing(deps) if m != "cryptography"]:
+            eprint("✅ 依赖安装完成")
+            return
+        if status == "timeout":
             emit_error(
-                f"缺少运行依赖：{', '.join(hard)}"
-                f"{'，自动安装没成功' if auto else '（ER_NO_AUTO_INSTALL=1，未自动安装）'}。请手动运行："
-                f' "{sys.executable}" -m pip install -r "{req_path}"'
-                f"（网络慢可在末尾加 -i {_PIP_MIRROR}）",
-                missing=hard)
+                "首次使用正在安装运行依赖，网络较慢还没装完（已下载的部分会保留）。"
+                "直接再运行一次同一条命令即可接着装，通常第二次很快。",
+                retry=True, installing=missing)
+    if hard:
+        how = f'"{sys.executable}" -m pip install ' + (" ".join(hard) if only else f'-r "{req_path}"')
+        emit_error(
+            f"缺少运行依赖：{', '.join(hard)}"
+            f"{'，自动安装没成功' if auto else '（ER_NO_AUTO_INSTALL=1，未自动安装）'}。请手动运行："
+            f" {how}（网络慢可在末尾加 -i {_PIP_MIRROR}）",
+            missing=hard)
 
 
 # 旧名字保留给外部调用方

@@ -266,12 +266,37 @@ class _Ticker:
 # 样式缓存（保留格式模式提速的关键）
 # =====================================================
 
-def _cached_copy(style_obj, cache):
-    """按源样式对象的 id 缓存复制结果，避免对相同样式重复 copy()。
+def _copy_cell_style(src, dst, cache):
+    """把 src 单元格的格式（字体、填充、边框、对齐、数字格式）复制到 dst，按「源单元格的样式编号」缓存。
 
-    真实表格里大量单元格共享同一套样式，openpyxl 内部会复用同一个样式对象（id 相同）。
-    缓存后每种样式只 copy 一次，逐行复制也很快。注意：缓存按「单个源文件」作用域使用，
-    源文件关闭后弃用，避免不同文件的样式对象 id 复用导致取到旧样式。
+    src._style 是源工作簿里的样式编号数组（字体第几个、填充第几个……），同一个源文件里
+    编号相同 = 格式相同；dst 第一次拿到这套格式后，它在目标工作簿里的编号数组也就定了，
+    之后同样格式的格子直接套用这个数组，不再逐项复制、比较样式对象（快一个数量级）。
+    缓存键带上目标工作簿本身（同一个源文件会写进多个输出工作簿，编号各不相同）。
+    缓存按「单个源文件」作用域使用：换源文件就换一个新 dict。
+
+    ⚠️ 历史 bug（v2.10.0 及以前）：旧的 _cached_copy 用 id(src.font) 当键，但 src.font 每次访问
+    都返回一个新的临时代理对象——大多数时候缓存不命中（慢），代理被回收后地址被下一个复用时
+    又会命中别的格子的样式，实测 900 个格子里有 11～20 个填充色 / 字体被复制错。别改回按 id 缓存。
+    """
+    key = (dst.parent.parent, tuple(src._style))
+    arr = cache.get(key)
+    if arr is None:
+        dst.font = copy(src.font)
+        dst.fill = copy(src.fill)
+        dst.border = copy(src.border)
+        dst.alignment = copy(src.alignment)
+        dst.number_format = src.number_format
+        cache[key] = copy(dst._style)
+    else:
+        dst._style = copy(arr)
+
+
+def _cached_copy(style_obj, cache):
+    """（已弃用，保留给外部调用方）按 id 缓存复制样式对象。
+
+    不要再用：style_obj 若是 cell.font 这类每次新建的代理对象，id 会被复用而取到别的样式，
+    见 _copy_cell_style 的说明。
     """
     k = id(style_obj)
     cached = cache.get(k)
@@ -550,11 +575,7 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
                 if not isinstance(src_cell, MergedCell):
                     try:
                         if src_cell.has_style:
-                            dst.font          = _cached_copy(src_cell.font, style_cache['f'])
-                            dst.fill          = _cached_copy(src_cell.fill, style_cache['fl'])
-                            dst.border        = _cached_copy(src_cell.border, style_cache['b'])
-                            dst.alignment     = _cached_copy(src_cell.alignment, style_cache['a'])
-                            dst.number_format = src_cell.number_format
+                            _copy_cell_style(src_cell, dst, style_cache)
                     except Exception:
                         pass
                 if formula_ws is not None:
@@ -748,7 +769,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         tick(0.55)
 
         # 每个源文件一套样式缓存（源工作簿存活期间 id 稳定）
-        style_cache = {'f': {}, 'fl': {}, 'b': {}, 'a': {}}
+        style_cache = {}   # 按源文件作用域，见 _copy_cell_style
         total_rows = 0
         touched_keys = set()
         rows_written = 0

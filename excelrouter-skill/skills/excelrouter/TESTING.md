@@ -25,6 +25,8 @@ pytest -q tests/
 | `er_inspect.py` | 自动识别非首行表头；列出字段取值并过滤合计行；目录输入的文件计数；文件不存在时返回人话报错 |
 | `er_split.py` | 缺 `--by` 时友好报错；`--dry-run` 不写盘；按字段产出预期目录；`--merge` 跨文件合并成单文件；`--values` 只拆指定取值 |
 | `er_pdf_dist.py` | 读取映射清单列名；按网格加密并生成清单（断言产物 PDF 确实 `is_encrypted`）；缺列名时友好报错；xlsx 加打开密码后能用对的密码解开；只加水印不要密码列；老格式 / Office 加水印 / 两项全关在开跑前报错（Office 两条要 vendor 同步到 v2.10 才跑，之前自动跳过） |
+| `er_merge.py` | 文件夹合成一张（按列名对齐调过顺序的列、合计行不合、副本只合一份、名单表不当报错）；一个文件的多个 sheet 合成一张（隐藏 sheet 不合）；表多时分几次续做、最后不留半成品；中途表格有改动从头合；混着旧拆分结果时拦下；合回拆分结果时跳过重复的「到人」；不加载 pandas；`--checked` 只合交了的表、「来源」写交表人 |
+| `er_check.py` | 通报里有应交 / 未交 / 漏填到行号 / 截止时间、逐人催办；输入单个文件没给 `--by` 时报错；交了 .et / 网页格式 xls / 加密码 xlsx 的人不写成「未交」（要 vendor 同步到带 `unreadable()` 的内核才跑） |
 | `_common.py` | Windows 上在导入 numpy **之前**自动把 OpenBLAS 线程数限制为 1（绕开内存分配崩溃）；用户自己设过该变量时不覆盖 |
 
 另有针对拆分算法与 PDF 分发内部逻辑的单元测试，见上游仓库
@@ -35,6 +37,7 @@ pytest -q tests/
 依赖分成两份，按需安装，不必一次装全：
 
 - `requirements.txt` —— **只做 Excel 拆分时只需要这 3 个**：`openpyxl`、`pandas`、`xlrd`
+  （汇总、查收只用 `openpyxl` 和 `xlrd`，脚本首次运行只装这两个）
 - `requirements-pdf.txt` —— 做文件加密分发时另外装：`pypdf`、`fpdf2`、`cryptography`、
   `msoffcrypto-tool`（最后这个只有给 Word / Excel / PPT 加密才用到）
 

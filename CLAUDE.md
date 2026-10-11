@@ -11,7 +11,22 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.10.0**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+当前版本 **v2.10.1**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+
+> **v2.10.1：保留格式的样式缓存 bug + 读不了的文件算交了 + 技能接入汇总 / 查收（2026-10-11）**。
+> ① **真 bug（拆分、汇总都中）**：旧 `_cached_copy` 用 `id(src.font)` 当缓存键，但 `cell.font` 每次访问都返回
+> 新的临时代理对象——多数时候不命中（慢：汇总约 1.5k 格/秒），代理被回收、地址复用时又**命中别的格子的样式**，
+> 实测 900 格里 11～20 格填充色 / 字体被复制错。改为 `splitter._copy_cell_style`：按源单元格的样式编号数组
+> （`src._style`）+ 目标工作簿缓存，命中后直接套用目标的编号数组。汇总提速约 4 倍（50 表×400 行×15 列 200 秒→50 秒）。
+> 回归用例 `test_preserve_format_copies_each_cells_own_style` / `test_merge_copies_each_cells_own_style`，**别改回按 id 缓存**。
+> ② `collect.unreadable()`：.et / .csv / 网页格式的「xls」/ 加了打开口令的 xlsx 照样算「交了」，扫描和合并时原因写人话；
+> 旧版只收 .xlsx / .xls，交了 .et 的人被写进「未交」发到群里，其余的在催办里显示「File is not a zip file」原话。
+> 同时收 .xlsm。`returned_files` 因此会多数出这些文件（GUI 计数跟着变，属预期）。
+> ③ 技能新增 `er_merge.py`（普通汇总 / `--checked` 只合交了的，宿主 120 秒掐命令所以每次约 100 秒存进度，
+> **原样再跑接着合**）、`er_check.py`（查收通报）、`_gather.py`（收文件前的人话体检：WeChat「(1)」「副本」、.et、
+> 假 xls、加密、混着旧拆分结果、拆分结果里重复的「到人」）。汇总 / 查收 `ensure_deps(lite=True)` 只装 openpyxl + xlrd。
+> ④ `publish-skill.yml`：打 tag 时版本以 tag 为准——v2.10.0 发版时 SKILL.md 还写着 2.9.3，按重复版本发布被市场拒收，
+> 被 continue-on-error 吞掉，市场上一直停在 2.9.3。技能显示名改为「Excel拆分合并、表格拆分汇总、PDF加密分发 — ExcelRouter」。
 
 > **v2.10.0：下发 → 查收通报 → 汇总闭环（2026-10）**。新增 `core/collect.py`（**纯 openpyxl，不导入
 > pandas**——内部 MobileWork 技能会原样带上这个文件，那边的 Python 加载 pandas 不可靠；测试

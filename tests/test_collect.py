@@ -420,3 +420,63 @@ def test_merge_tables_one_file_sheets(tmp_path):
     assert rows == [("姓名", "金额", "来源"), ("甲", 1, "1月"), ("乙", 2, "2月")]
     assert any("把 2 个 sheet 合成了一张" in m for m in logs)
     assert os.path.dirname(out) == str(tmp_path / collect.RESULT_DIR)
+
+
+def test_unreadable_files_count_as_submitted_with_plain_reason(tmp_path):
+    """交了 .et / 网页格式的 .xls / 加了口令的 .xlsx：通报里不能写成「未交」，原因要是人话。
+
+    回归：旧版只收 .xlsx / .xls，交了 .et 的人被写进「未交」发到群里；
+    其余两种在催办里显示「Expected BOF record」「File is not a zip file」原话。
+    """
+    src = tmp_path / "收表"
+    src.mkdir()
+    _book(src / "张三.xlsx", _full(3))
+    (src / "李四.et").write_bytes(b"\xd0\xcf\x11\xe0fake")
+    (src / "王五.xls").write_text("<html><table><tr><td>客户名称</td></tr></table></html>", encoding="utf-8")
+    (src / "赵六.xlsx").write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1encrypted")
+    _book(src / "孙八.xlsm", _full(2))
+    cfg = {"input_path": str(src), "collect_expect": "张三、李四、王五、赵六、孙八"}
+    out, summary, _logs = _run(cfg)
+    assert summary["missing"] == 0 and summary["submitted"] == 5
+    text = _notice(out)
+    assert "未交" not in text
+    assert "WPS 表格自己的格式" in text and "网页格式" in text and "打开口令" in text
+    assert "BOF" not in text and "zip" not in text
+    people, _report = _people(cfg)
+    assert people["孙八"]["status"] == ST_OK          # .xlsm 照常能查
+
+
+def test_merge_tables_reports_unreadable_in_words(tmp_path):
+    src = tmp_path / "报表"
+    src.mkdir()
+    _book(src / "a.xlsx", _full(2))
+    (src / "b.et").write_bytes(b"\xd0\xcf\x11\xe0fake")
+    logs = []
+    out = collect.merge_tables({"input_path": str(src)}, logs.append)
+    assert out
+    summary = json.loads(next(m for m in logs if m.startswith("[SUMMARY]"))[len("[SUMMARY] "):])
+    assert summary["rows"] == 2 and summary["failed_files"] == 1
+    assert "WPS 表格自己的格式" in summary["report_text"]
+
+
+def test_merge_copies_each_cells_own_style(tmp_path):
+    """回归：与拆分同一个样式缓存 bug（按 id(cell.font) 缓存会取到别的格子的样式）。"""
+    from openpyxl.styles import Font, PatternFill
+    colors = ["FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF"]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["姓名", "金额"])
+    for i in range(300):
+        ws.append([f"人{i}", i])
+        for c in ws[ws.max_row]:
+            c.fill = PatternFill("solid", fgColor=colors[i % 6])
+            c.font = Font(bold=i % 3 == 0, color=colors[(i + 2) % 6])
+    src = tmp_path / "src.xlsx"
+    wb.save(src)
+    out = collect.merge_tables({"input_path": str(src)})
+    a, b = openpyxl.load_workbook(src).active, openpyxl.load_workbook(out).worksheets[0]
+
+    def sig(c):
+        return c.fill.fgColor.rgb, c.font.bold, c.font.color.rgb
+
+    assert all(sig(a.cell(r, c)) == sig(b.cell(r, c)) for r in range(2, 302) for c in (1, 2))

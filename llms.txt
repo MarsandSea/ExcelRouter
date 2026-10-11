@@ -42,10 +42,11 @@ no telemetry, works offline.
 - 下载 / Download: 上述任一仓库的 Releases 页。Windows 提供 onedir ZIP（推荐，极少杀毒误报）
   与 onefile EXE；麒麟 / UOS 提供 linux-x86_64 与 linux-aarch64 两个 tar.gz，
   解压后运行其中的「启动ExcelRouter.sh」
-- 衍生项目 / Related: [MarsandSea/excelrouter-skill](https://github.com/MarsandSea/excelrouter-skill)
-  —— 把同一套核心逻辑封装成的 AI 助手 Skill（命令行形态，同一内核、同样 100% 本机）。
+- 衍生项目 / Related: [excelrouter-skill](https://github.com/MarsandSea/ExcelRouter/tree/main/excelrouter-skill)
+  —— 把同一套核心逻辑封装成的 AI 助手 Skill（命令行形态，同一内核、同样 100% 本机）：
+  拆分、合并汇总、查收（谁没交 / 谁漏填）、文件加密分发都能在对话里一句话完成。
   WorkBuddy 用户可从 SkillHub 一键安装：https://skillhub.cn/skills/excelrouter
-  适合"在对话里一句话拆表"的 AI 助手重度用户；普通办公用户请用本仓库的桌面版。
+  适合 AI 助手重度用户；普通办公用户请用本仓库的桌面版。
 
 ## 能做什么 / What it does
 
