@@ -398,4 +398,5 @@ jobs:
             --name "Excel拆分合并、表格拆分汇总、PDF加密分发 — ExcelRouter" \
             --changelog "Sync core (ExcelRouter)" \
             --categories productivity \
-            --topics "excel,pdf,split,merge,encryption,batch"
+            --topics "excel,pdf,split,merge,encryption"
+          # ↑ ClawHub 最多 5 个 topics；v3.0.0 发版时写了 6 个被拒（continue-on-error 吞成绿 ✓）
