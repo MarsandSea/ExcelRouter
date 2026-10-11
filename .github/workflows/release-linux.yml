@@ -217,3 +217,12 @@ jobs:
             --data-urlencode "name=$name" \
             --data-urlencode "body=$body" >/dev/null
           echo "Gitee 发行版已更新：$name"
+
+  # 麒麟包每版约 115MB，传完复查 Gitee 容量，快满时开 Issue 提醒
+  gitee-quota:
+    needs: publish
+    if: always() && inputs.publish
+    uses: ./.github/workflows/gitee-quota.yml
+    secrets: inherit
+    permissions:
+      issues: write

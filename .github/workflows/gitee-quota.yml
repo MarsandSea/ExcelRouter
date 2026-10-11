@@ -1,0 +1,70 @@
+# Copyright (c) 2026 AbeLin · MIT License
+#
+# Gitee 附件容量检查：统计所有发行版附件总量，快满时开一个 Issue 并 @ 维护者提醒。
+#
+# 为什么要提醒：Gitee 社区版附件总容量只有 1GB，满了以后 release.yml 的 Gitee 上传
+# （continue-on-error）会**静默失败**——国内用户下不到新版，而维护者毫无察觉。
+# Actions 里的黄色 warning 没人会去翻，Issue 会走 GitHub 通知 / 邮件，才算真的「提示到人」。
+#
+# 被 release.yml / release-linux.yml / prune-gitee-attachments.yml 在上传或清理之后调用，
+# 也可以在 Actions 页手动跑。用量回到安全线以下时自动关闭提醒 Issue。
+name: Gitee 附件容量检查
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: 统计用量，快满时提醒
+        shell: bash
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # 官方口径是 1GB，按 1000MB 保守算
+          CAP_MB: 1000
+          # 一个完整版本（Windows 三件 ~155MB + 麒麟双架构 ~115MB）约 270MB，
+          # 剩余不够再发一版就提醒，留一点余量
+          WARN_FREE_MB: 300
+          TITLE: "Gitee 附件空间快满了"
+        run: |
+          set -euo pipefail
+          [ -n "$GITEE_TOKEN" ] || { echo "::error::缺少 secrets.GITEE"; exit 1; }
+          API=https://gitee.com/api/v5/repos/Marsandsea/Excelrouter
+
+          curl -sS --fail "$API/releases?access_token=$GITEE_TOKEN&per_page=100" \
+            | jq -r 'sort_by(.created_at) | reverse | .[] | "\(.id) \(.tag_name)"' > releases.txt
+          total=0
+          table="| 版本 | 附件占用 |"$'\n'"|---|---|"
+          while read -r rid tag; do
+            bytes=$(curl -sS --fail "$API/releases/$rid/attach_files?access_token=$GITEE_TOKEN&per_page=100" </dev/null \
+                    | jq '[.[].size // 0] | add // 0')
+            total=$(( total + bytes ))
+            if (( bytes > 0 )); then table+=$'\n'"| $tag | $(( bytes / 1048576 ))MB |"; fi
+          done < releases.txt
+
+          used=$(( total / 1048576 )); free=$(( CAP_MB - used ))
+          line="Gitee 附件已用 ${used}MB / ${CAP_MB}MB，剩余 ${free}MB（提醒线：剩余 < ${WARN_FREE_MB}MB）"
+          echo "$line"
+          { echo "### $line"; echo; echo "$table"; } >> "$GITHUB_STEP_SUMMARY"
+
+          num=$(gh issue list --state open --search "\"$TITLE\" in:title" --json number -q '.[0].number // empty')
+          if (( free < WARN_FREE_MB )); then
+            echo "::warning::$line"
+            prune="https://github.com/$GH_REPO/actions/workflows/prune-gitee-attachments.yml"
+            body="@MarsandSea $line"$'\n\n'"再发一个完整版本（约 270MB）可能就传不上 Gitee 了——上传失败不会报红，国内用户会下不到新版。"$'\n\n'"**处理**：到 [清理 Gitee 旧附件]($prune) 点 Run workflow，先保持勾选「只列出、不删除」看清单，再取消勾选真删（约定保留最近 2 个版本）。清理后会自动复查，用量回到安全线以下时本 Issue 自动关闭。"$'\n\n'"$table"$'\n\n'"<sub>由 [容量检查]($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID) 自动生成</sub>"
+            if [ -n "$num" ]; then
+              gh issue comment "$num" --body "$body"
+              echo "已在 #$num 追加提醒"
+            else
+              gh issue create --title "$TITLE" --body "$body"
+            fi
+          elif [ -n "$num" ]; then
+            gh issue close "$num" --comment "已复查：$line。空间够用，自动关闭。"
+            echo "已关闭提醒 #$num"
+          fi

@@ -63,3 +63,12 @@ jobs:
           verb=$([ "$DRY_RUN" = "true" ] && echo "将释放" || echo "已释放")
           echo "共 $count 个附件，$verb $(( total / 1048576 ))MB"
           echo "### Gitee 附件清理：$count 个，$verb $(( total / 1048576 ))MB（dry_run=$DRY_RUN）" >> "$GITHUB_STEP_SUMMARY"
+
+  # 真删之后复查一次：回到安全线以下会自动关闭「快满了」的提醒 Issue
+  quota:
+    needs: prune
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/gitee-quota.yml
+    secrets: inherit
+    permissions:
+      issues: write

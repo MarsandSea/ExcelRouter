@@ -165,3 +165,12 @@ jobs:
             }
             Write-Host "Uploaded $f`: $resp"
           }
+
+  # Gitee 上传是 continue-on-error，空间满了会静默失败——发完复查容量，快满时开 Issue 提醒
+  gitee-quota:
+    needs: build-and-release
+    if: always()
+    uses: ./.github/workflows/gitee-quota.yml
+    secrets: inherit
+    permissions:
+      issues: write
