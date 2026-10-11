@@ -1,4 +1,5 @@
 """core/splitter.py 的集成测试：表头识别、列枚举、跨文件合并、二级拆分、格式保留。"""
+import datetime
 import os
 
 import openpyxl
@@ -84,6 +85,52 @@ def _base_cfg(inp, out, **over):
 def test_detect_header_row_auto():
     rows = [["月度报表", None, None], ["工号", "姓名", "部门"], ["001", "张三", "销售部"]]
     assert detect_header_row_auto(rows) == 2
+
+
+_D1, _D2 = datetime.datetime(2026, 10, 1), datetime.datetime(2026, 10, 2)
+_DATED_HEAD = ["日期", "姓名", "部门", "备注", "金额"]
+
+
+@pytest.mark.parametrize("rows, want", [
+    # 合计行只填了金额：最后一条数据行下面「全是数字」，曾被当成表头
+    ([_DATED_HEAD, [_D1, "张三", "销售部", "走访", 100], [_D2, "李四", "技术部", "回访", 200],
+      [None, None, None, None, 300]], 1),
+    # 表头上面有大标题
+    ([["2026年10月走访明细"], _DATED_HEAD, [_D1, "张三", "销售部", "走访", 100],
+      [None, None, None, None, 100]], 2),
+    # 日期存成文字
+    ([_DATED_HEAD, ["2026-10-01", "张三", "销售部", "走访", 100], ["2026-10-02", "李四", "技术部", "回访", 200],
+      [None, None, None, None, 300]], 1),
+    # 合计行带「合计」二字（原来就对，守住）
+    ([_DATED_HEAD, [_D1, "张三", "销售部", "走访", 100], [_D2, "李四", "技术部", "回访", 200],
+      ["合计", None, None, None, 300]], 1),
+])
+def test_detect_header_with_dates_and_sparse_total(rows, want):
+    assert detect_header_row_auto(rows) == want
+
+
+def test_detect_header_still_skips_blank_row_after_header():
+    """表头下面隔一行空行再接数据，照样认得出（原有行为）。"""
+    rows = [["工号", "姓名", "部门", "金额"], [None, None, None, None],
+            ["001", "张三", "销售部", 100], ["002", "李四", "技术部", 200]]
+    assert detect_header_row_auto(rows) == 1
+
+
+def test_split_dated_sheet_with_sparse_total(tmp_path):
+    """日期列 + 底部只填金额的合计行：整张表曾因认错表头被跳过，一行都没拆出来。"""
+    inp, out = tmp_path / "走访.xlsx", tmp_path / "out"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for r in [_DATED_HEAD, [_D1, "张三", "销售部", "走访", 100], [_D2, "李四", "技术部", "回访", 200],
+              [None, None, None, None, 300]]:
+        ws.append(r)
+    wb.save(inp)
+    logs = []
+    res = run_split(_base_cfg(str(inp), str(out), make_zip=False), log_fn=logs.append)
+    assert sorted(f for f in os.listdir(res) if f.endswith(".xlsx")) == ["技术部.xlsx", "销售部.xlsx"], logs
+    ws_out = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert [c.value for c in ws_out[1]] == _DATED_HEAD
+    assert ws_out.cell(row=2, column=2).value == "张三"
 
 
 def test_resolve_header_modes():

@@ -64,11 +64,15 @@ def detect_header_row_auto(rows, max_scan=15):
         # 归零，导致真正的表头因为"看起来不像后面跟数据"而在打分上输给深处某行数据行
         # （尤其像点名表这种大多列是姓名/工号/日期的宽表，数据行本身就有一半以上"看起来不像数字"）。
         # 跳过空行往下找最近的非空行来判断，最多向下看 3 行。
+        # 分母取「本行、下一行」里非空格更多的那个：下一行比本行稀疏时（比如表尾只填了金额的合计行），
+        # 它只能证明本行一小部分列下面跟着数字。旧算法按下一行自己的格数算，那行唯一的数字就让
+        # 最后一条数据行拿满分；日期列又不算数字，数据行看着和表头一样像文字，整张表的表头就被认成
+        # 最后一条数据行，按它找不到拆分字段，整个 sheet 被跳过。
         data_hint = 0.0
         for look in range(r + 1, min(r + 4, len(rows))):
             nxt = [c for c in rows[look] if soft_clean(c) != ""]
             if nxt:
-                data_hint = sum(1 for c in nxt if _looks_numeric(c)) / len(nxt)
+                data_hint = sum(1 for c in nxt if _looks_numeric(c)) / max(len(nxt), n)
                 break
         score = n * (0.5 + 0.5 * str_ratio) + n * 0.3 * data_hint
         if score > best_score:
