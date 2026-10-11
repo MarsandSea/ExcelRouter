@@ -40,7 +40,9 @@ import time
 T_START = time.time()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import bootstrap, emit, emit_error, ensure_deps, eprint, open_folder  # noqa: E402
+from _common import (  # noqa: E402
+    add_recipe_args, apply_recipe_args, bootstrap, emit, emit_error, ensure_deps, eprint, open_folder, save_recipe_from,
+)
 
 bootstrap()
 ensure_deps(lite=True)  # 汇总只要 openpyxl + xlrd；必须排在 core import 之前
@@ -73,7 +75,16 @@ def main():
                     help="文件夹里混着以前的拆分结果目录时也照样合（默认拦下，免得行数翻倍）")
     ap.add_argument("--restart", action="store_true", help="丢掉上次没做完的进度，从头合")
     ap.add_argument("--budget", type=float, default=BUDGET, help=argparse.SUPPRESS)   # 测试用
+    add_recipe_args(ap)
     args = ap.parse_args()
+    recipe, recipe_notes, _extra = apply_recipe_args(ap, args, "collect", {
+        "collect_check": ("checked", lambda v, s: v),
+        "collect_expect": ("expect", lambda v, s: v),
+        "collect_required": ("required", lambda v, s: v),
+        "collect_by": ("by", lambda v, s: v),
+        "collect_title": ("title", lambda v, s: v),
+        "header_row": ("header_row", lambda v, s: v if s.get("header_mode") == "row" else 0),
+    })
 
     src = os.path.abspath(args.input)
     if not os.path.exists(src):
@@ -149,7 +160,9 @@ def main():
     if not output:
         emit_error("这些表里没有能合并的数据。" + ("\n" + msg if msg else ""),
                    problems=state["pre_problems"])
+    saved = save_recipe_from(args, dict(cfg, collect_check=args.checked), "collect", input_name=src)
     emit({"ok": True, "done": True, "output": output, "output_dir": out_dir, "files": [output],
+          "recipe": recipe["name"] if recipe else "", "recipe_notes": recipe_notes, "recipe_saved": saved,
           "summary": {"mode": state["mode"], "sources": len({s["file"] for s in merged}), "sheets_merged": len(merged),
                       "result_sheets": len(st["sheets"]), "rows": rows, "rows_written": written,
                       "not_merged": len([s for s in st["sources"] if s["status"] != "合并"]),

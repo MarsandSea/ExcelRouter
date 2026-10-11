@@ -549,3 +549,42 @@ def test_split_reports_unassigned_rows_and_keeps_them_out_of_bundle(tmp_path):
     import zipfile
     with zipfile.ZipFile(obj["bundle_zip"]) as zf:
         assert not any("请核对" in n for n in zf.namelist())
+
+
+# ---------- 方案（v3.0）：--recipe / --save-recipe ----------
+
+def test_split_save_and_apply_recipe(two_books, tmp_path):
+    inp, out = two_books
+    rec = str(tmp_path / "按部门.json")
+    code, obj, err = _run("er_split.py", "--input", inp, "--output", out, "--by", "部门", "--no-zip",
+                          "--merge", "--save-recipe", rec)
+    assert code == 0, err
+    assert obj["recipe_saved"] == rec
+    with open(rec, encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["mode"] == "excel" and data["settings"]["split_column"] == "部门"
+    assert data["settings"]["merge_across_files"] is True and data["settings"]["make_zip"] is False
+    assert inp not in json.dumps(data, ensure_ascii=False)        # 路径不进方案（只留表名提示）
+
+    out2 = str(tmp_path / "out2")
+    code, obj, err = _run("er_split.py", "--input", inp, "--output", out2, "--recipe", rec)
+    assert code == 0, err
+    assert obj["recipe"] == "按部门" and obj["split_column_resolved"] == "部门"
+    assert obj["summary"]["groups"] == 2 and not obj["bundle_zip"]          # 方案里的 make_zip=False 生效
+
+    out3 = str(tmp_path / "out3")                                            # 命令行明确给的参数优先
+    code, obj, err = _run("er_split.py", "--input", inp, "--output", out3, "--recipe", rec, "--by", "城市")
+    assert code == 0, err
+    assert obj["split_column_resolved"] == "城市"
+
+
+def test_recipe_mode_mismatch_and_broken_file(two_books, tmp_path):
+    inp, out = two_books
+    rec = tmp_path / "拆分.json"
+    _run("er_split.py", "--input", inp, "--output", out, "--by", "部门", "--no-zip", "--save-recipe", str(rec))
+    code, obj, _ = _run("er_check.py", "--input", inp, "--recipe", str(rec))
+    assert code == 1 and "不能用来做" in obj["error"]
+    bad = tmp_path / "坏.json"
+    bad.write_text("{", encoding="utf-8")
+    code, obj, _ = _run("er_split.py", "--input", inp, "--output", out, "--recipe", str(bad))
+    assert code == 1 and "方案用不了" in obj["error"]

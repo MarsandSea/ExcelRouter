@@ -40,7 +40,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
-    bootstrap, build_config, emit, emit_error, ensure_deps, eprint, list_outputs, open_folder,
+    add_recipe_args, apply_recipe_args, bootstrap, build_config, emit, emit_error, ensure_deps, eprint, list_outputs,
+    open_folder, save_recipe_from,
 )
 
 bootstrap()
@@ -97,7 +98,18 @@ def main():
     ap.add_argument("--open", action="store_true",
                      help="分发完在文件管理器里打开结果目录。AI 在用户本机运行时应总是加上")
     ap.add_argument("--font", default="", help="手动指定水印字体 .ttf/.otf/.ttc 路径（覆盖自动探测）")
+    add_recipe_args(ap)
     args = ap.parse_args()
+    recipe, recipe_notes, _extra = apply_recipe_args(ap, args, "pdf", {
+        "pdf_grid_column": ("grid_col", lambda v, s: v),
+        "pdf_password_column": ("password_col", lambda v, s: v),
+        "pdf_receiver_column": ("receiver_col", lambda v, s: v),
+        "pdf_encrypt": ("no_encrypt", lambda v, s: not v),
+        "pdf_watermark": ("no_watermark", lambda v, s: not v),
+        "pdf_watermark_text": ("watermark_text", lambda v, s: v),
+        "pdf_watermark_opacity": ("opacity", lambda v, s: v),
+        "pdf_watermark_angle": ("angle", lambda v, s: v),
+    })
 
     # ---- 起步：生成映射清单模板（唯一不需要已有文件的分支，所以排在所有存在性检查之前）----
     if args.make_template:
@@ -247,7 +259,9 @@ def main():
     if encrypt:
         eprint(f"⚠ {MANIFEST_NAME} 含明文密码，请只发给需要核对密码的管理者，不要和加密文件一起群发出去")
         msg += f"\n⚠ 「{MANIFEST_NAME}」里是明文密码，只给核对密码的管理者，不要和文件一起发出去。"
+    saved = save_recipe_from(args, config, "pdf", input_name=args.mapping)
     emit({"ok": True, "output_path": output_root, "manifest": manifest,
+          "recipe": recipe["name"] if recipe else "", "recipe_notes": recipe_notes, "recipe_saved": saved,
           "encrypted": encrypt, "watermarked": watermark and has_pdf,
           "files_total": len(files), "files": files[:10], "opened": opened, "message": msg})
 

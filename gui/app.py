@@ -26,6 +26,7 @@ import webbrowser
 from typing import Any
 
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from gui.platform_compat import (
@@ -189,6 +190,9 @@ FALLBACK_CONFIG = {
     "collect_record": "",
     "fill_columns": "",       # 拆分时让对方填写的列（选填）：标黄、其余列锁定、写下发记录
     "due": "",
+    # ── 方案（v3.0）：最近打开 / 存过的方案文件路径，跑完后「存成方案」的提示点过不再提示 ──
+    "recent_recipes": [],
+    "recipe_tip_off": False,
     # ── 界面个性化（v2.7）──
     "window_geometry": "",     # 上次关闭时的窗口大小位置；空 = 按屏幕自适应
     "ui_scale": 100,           # 界面缩放百分比（大字号=115），重启后生效
@@ -300,7 +304,8 @@ class App(_RootBase):
         # 早先靠勾选数反推，用户点完「只拆这 N 组」再随手取消一个又勾回来，
         # 名单就被悄悄清空、退回拆全部——正是这次要修的名实不符。**别改回反推。**
         self._values_locked = False
-        self._lock_btn = None         # 勾选面板里的「只拆这 N 组」按钮（面板开着才有）
+        self._lock_btn = None
+        self._recipe_active = None     # 套用过的方案：方案里的字段在表里找不到时只提醒，不自动换成推荐列         # 勾选面板里的「只拆这 N 组」按钮（面板开着才有）
         self._values_hint = None      # 勾选面板里的提示文字（随锁定/抽样状态变）
         self._warn_count = 0          # 本轮运行日志里 ⚠ 行数（完成后给「处理详情」打角标）
         self._last_summary = None     # core 收尾的 [SUMMARY] JSON（完成摘要用）
@@ -613,8 +618,10 @@ class App(_RootBase):
         return "还没有选择文件（也可以把路径粘贴到上面的输入框）"
 
     def _on_drop_input(self, event):
-        """Excel 模式拖放：接受单个 Excel 文件或文件夹（多个文件时取第一个所在项）。"""
+        """Excel 模式拖放：接受单个 Excel 文件或文件夹（多个文件时取第一个所在项）；拖进方案文件就打开方案。"""
         paths = self._parse_drop_paths(getattr(event, "data", ""))
+        if self._drop_recipe(paths):
+            return
         target = next((p for p in paths
                        if os.path.isdir(p) or p.lower().endswith((".xlsx", ".xls"))), None)
         if target is None:
@@ -1445,8 +1452,18 @@ class App(_RootBase):
 
     def _on_drop_collect(self, event):
         paths = self._parse_drop_paths(getattr(event, "data", ""))
+        if self._drop_recipe(paths):
+            return
+        rec = next((p for p in paths if p.lower().endswith(".json")), None)
+        if rec:                                    # 不是方案的 .json：当下发记录用
+            self._col_rec_var.set(os.path.normpath(rec))
+            self._col_check_var.set(True)
+            self._on_check_toggle()
+            self._col_scanned = None
+            self._scan_collect()
+            return
         target = next((p for p in paths
-                       if os.path.isdir(p) or p.lower().endswith((".xlsx", ".xls"))), None)
+                       if os.path.isdir(p) or p.lower().endswith((".xlsx", ".xlsm", ".xls"))), None)
         if target is None:
             self._col_in_status.configure(text="⚠ 请拖入装表格的文件夹，或一个 Excel 文件", text_color=C_WARN)
             return
@@ -1842,6 +1859,227 @@ class App(_RootBase):
                                          font=ctk.CTkFont(size=12, weight="bold"),
                                          text_color=C_OK, anchor="w", justify="left")
         self._summary_lbl.grid(row=0, column=0, padx=14, pady=8, sticky="w")
+        # 跑完后的小提示：这次的设置存成方案，下个月一键套用（v3.0）
+        self._recipe_tip = ctk.CTkFrame(card, fg_color="transparent")
+        self._recipe_tip.grid(row=8, column=0, padx=8, pady=(0, 6), sticky="w")
+        _flat_button(self._recipe_tip, text="📋 把这次的设置存成方案，下个月一键用", width=260, anchor="w",
+                     command=self._save_recipe).pack(side="left")
+        _flat_button(self._recipe_tip, text="不再提示", width=70, command=self._recipe_tip_never).pack(side="left")
+        self._recipe_tip.grid_remove()
+
+    # ── 方案（v3.0）：把一次设置存成小文件，下个月一键套用、发给同事也能用 ──
+    def _recipe_dir(self):
+        from core.recipe import RECIPE_DIR
+        return os.path.join(_app_dir(), RECIPE_DIR)
+
+    def _recipe_menu(self):
+        """页脚「📋 方案」：存为方案 / 打开方案 / 最近用过的。"""
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="存为方案…", command=self._save_recipe)
+        menu.add_command(label="打开方案…", command=self._open_recipe)
+        recent = [p for p in self.cfg.get("recent_recipes", []) if isinstance(p, str) and os.path.isfile(p)]
+        if recent:
+            menu.add_separator()
+            for p in recent:
+                menu.add_command(label=os.path.splitext(os.path.basename(p))[0],
+                                 command=lambda p=p: self._apply_recipe(p))
+        btn = self._recipe_btn
+        try:
+            menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() - 4 - 22 * (len(recent) + 3))
+        finally:
+            menu.grab_release()
+
+    def _remember_recipe(self, path=None, tip_off=None):
+        """最近用过的方案（最多 5 个）和「不再提示」写进配置文件；不动上次成功运行记下的其余设置。"""
+        from core.recipe import RECENT_MAX
+        if path:
+            path = os.path.normpath(path)
+            recent = [path] + [p for p in self.cfg.get("recent_recipes", []) if os.path.normpath(p) != path]
+            self.cfg["recent_recipes"] = recent[:RECENT_MAX]
+        if tip_off is not None:
+            self.cfg["recipe_tip_off"] = tip_off
+        try:
+            saved = load_config()
+            saved["recent_recipes"] = self.cfg.get("recent_recipes", [])
+            saved["recipe_tip_off"] = self.cfg.get("recipe_tip_off", False)
+            save_config(saved)
+        except Exception:
+            pass
+
+    def _recipe_input_name(self):
+        if self._mode == "collect":
+            return self._col_in_var.get().strip()
+        if self._mode == "pdf":
+            return self._pdf_map_var.get().strip()
+        return self._input_var.get().strip()
+
+    def _save_recipe(self):
+        from core import recipe as R
+        cfg = self._collect_config()
+        base = os.path.basename(os.path.normpath(self._recipe_input_name())) if self._recipe_input_name() else ""
+        default = os.path.splitext(base)[0] or R.MODE_NAMES[self._mode]
+        os.makedirs(self._recipe_dir(), exist_ok=True)
+        path = filedialog.asksaveasfilename(title="存为方案", initialdir=self._recipe_dir(),
+                                            initialfile=R.recipe_filename(default),
+                                            defaultextension=".json", filetypes=[("方案", "*.json")])
+        if not path:
+            return
+        name = os.path.splitext(os.path.basename(path))[0]
+        cols = self._columns if self._mode == "excel" else None
+        try:
+            rec = R.make_recipe(cfg, self._mode, name, columns=cols, input_name=self._recipe_input_name(),
+                                app=APP_VERSION)
+            R.save_recipe(rec, path)
+        except Exception as e:
+            messagebox.showerror("没存成", f"方案没存成：{e}")
+            return
+        self._remember_recipe(path)
+        self._recipe_tip.grid_remove()
+        tip = ""
+        if rec["settings"].get("collect_expect"):
+            from core.collect import split_names
+            tip = f"（里面有应交名单 {len(split_names(rec['settings']['collect_expect']))} 个，发给同事前确认可以给对方看）"
+        self._log(f"📋 已存为方案「{name}」：{R.summary(rec)}。文件在：{path}")
+        self._run_status.configure(text=f"📋 已存为方案「{name}」，下次点「📋 方案」就能一键套用{tip}",
+                                   text_color=C_OK)
+
+    def _open_recipe(self):
+        path = filedialog.askopenfilename(title="打开方案", initialdir=self._recipe_dir()
+                                          if os.path.isdir(self._recipe_dir()) else None,
+                                          filetypes=[("方案", "*.json")])
+        if path:
+            self._apply_recipe(path)
+
+    def _drop_recipe(self, paths):
+        """拖进来的是方案文件就打开它，返回 True；不是方案的 .json（如下发记录）返回 False。"""
+        from core.recipe import is_recipe
+        p = next((p for p in paths if p.lower().endswith(".json") and is_recipe(p)), None)
+        if p:
+            self._apply_recipe(p)
+            return True
+        return False
+
+    def _apply_recipe(self, path):
+        """套用方案：切到对应模式、填好各个控件；已经选了表就当场比一比列对不对得上。路径不动，截止时间清空。"""
+        from core import recipe as R
+        if self._running:
+            messagebox.showinfo("正在运行", "等这一轮跑完再套用方案")
+            return
+        try:
+            rec, warns = R.load_recipe(path)
+        except R.RecipeError as e:
+            messagebox.showerror("方案打不开", str(e))
+            return
+        new, _changed, notes = R.apply_recipe(self._collect_config(), rec)
+        self.cfg.update(new)
+        self._fill_from_recipe(rec["settings"], rec["mode"])
+        self._recipe_active = rec
+        self._mode = rec["mode"]
+        self._mode_seg.set(MODE_LABELS[self._mode])
+        self._apply_mode()
+        self._remember_recipe(path)
+        self._log(f"📋 已套用方案「{rec['name']}」（{R.MODE_NAMES[rec['mode']]}）：{R.summary(rec)}")
+        for w in warns + notes:
+            self._log(f"  ℹ️ {w}")
+        msg = f"📋 已套用方案「{rec['name']}」"
+        if rec["mode"] == "excel" and self._columns:
+            self._on_columns(self._columns)          # 已经选了表：当场检查方案里的字段在不在
+        elif rec["mode"] == "excel":
+            msg += "：现在选这个月的表格就行"
+        elif rec["mode"] == "collect":
+            msg += "：选收回来的文件夹，截止时间请重新填"
+            p = self._col_in_var.get().strip()
+            if p and os.path.exists(p):
+                self._col_scanned = None
+                self._scan_collect()
+        else:
+            msg += "：选这次要分发的文件和清单"
+        self._run_status.configure(text=msg, text_color=C_OK)
+
+    def _fill_from_recipe(self, st, mode):
+        """把方案里的设置填进各个控件（只填方案里有的键）。"""
+        def has(k):
+            return k in st
+        if mode == "excel":
+            if has("split_column"):
+                self._split_var.set(st["split_column"] or COL_PLACEHOLDER)
+            if has("person_column"):
+                self._pcol_var.set(st["person_column"] or COL_PLACEHOLDER)
+            if has("to_person"):
+                self._person_var.set(st["to_person"])
+                self._update_person_state()
+            if has("selected_values"):
+                self._selvals_var.set(", ".join(st["selected_values"]))
+                self._values_locked = bool(st["selected_values"])
+            for k, var in (("grid_keys", self._grid_keys_var), ("id_keys", self._id_keys_var),
+                           ("person_file_filter", self._pfilter_var), ("skip_values", self._skip_var)):
+                if has(k):
+                    var.set(", ".join(st[k]))
+            for k, var in (("make_zip", self._zip_var), ("merge_across_files", self._merge_var),
+                           ("exact_match", self._exact_var), ("keep_hidden", self._keep_hidden_var)):
+                if has(k):
+                    var.set(st[k])
+            if has("preserve_format"):
+                label = SPEED_STD if st["preserve_format"] else SPEED_FAST
+                self._speed_seg.set(label)
+                self._on_speed_change(label)
+            if has("keep_formulas") and self._preserve_var.get():
+                self._keep_formula_var.set(st["keep_formulas"])
+            if has("value_alias_map"):
+                self._alias_box.delete("1.0", "end")
+                if st["value_alias_map"]:
+                    self._alias_box.insert("1.0", json.dumps(st["value_alias_map"], ensure_ascii=False, indent=2))
+            if has("fill_columns"):
+                self._fill_var.set(st["fill_columns"])
+            self._due_var.set("")
+        if mode in ("excel", "collect"):
+            if has("header_mode"):
+                label = {"auto": "自动", "row": "指定行号", "keyword": "关键词"}[st["header_mode"]]
+                self._header_seg.set(label)
+                self._on_header_mode(label)
+            if has("header_row"):
+                self._hrow_var.set(str(st["header_row"]))
+        if mode == "collect":
+            for k, var in (("collect_expect", self._col_expect_var), ("collect_required", self._col_req_var),
+                           ("collect_by", self._col_by_var), ("collect_title", self._col_title_var)):
+                if has(k):
+                    var.set(st[k])
+            self._col_due_var.set("")
+            self._col_rec_var.set("")
+            if has("collect_check"):
+                self._col_check_var.set(st["collect_check"])
+                self._on_check_toggle()
+        if mode == "pdf":
+            for k, var in (("pdf_grid_column", self._pdfgrid_var), ("pdf_password_column", self._pdfpwd_var)):
+                if has(k):
+                    var.set(st[k] or PDF_COL_PLACEHOLDER)
+            for k, var in (("pdf_encrypt", self._pdfenc_var), ("pdf_watermark", self._pdfwm_var)):
+                if has(k):
+                    var.set(st[k])
+            if not self._pdfenc_var.get() and not self._pdfwm_var.get():
+                self._pdfenc_var.set(True)
+            if has("pdf_watermark_text"):
+                self._pdfwmtext_var.set(st["pdf_watermark_text"])
+
+    def _offer_recipe(self, cfg):
+        """成功跑完一次：结果区出现「存成方案」的小链接。当前设置已经是最近某个方案、或点过「不再提示」时不出现。"""
+        from core import recipe as R
+        mode = cfg.get("ui_mode", "excel")
+        if self.cfg.get("recipe_tip_off") or mode not in R.RECIPE_KEYS:
+            return
+        mine = R.make_recipe(cfg, mode, "x")["settings"]
+        for p in self.cfg.get("recent_recipes", []):
+            try:
+                rec, _w = R.load_recipe(p)
+            except (R.RecipeError, TypeError):
+                continue
+            if rec["mode"] == mode and rec["settings"] == mine:
+                return
+        self._recipe_tip.grid()
+
+    def _recipe_tip_never(self):
+        self._recipe_tip.grid_remove()
+        self._remember_recipe(tip_off=True)
 
     def _on_speed_change(self, label):
         """速度模式 → preserve_format，并联动「保留公式」（它必须先有保留格式）。"""
@@ -1882,6 +2120,8 @@ class App(_RootBase):
         self._copylog_btn.grid_remove()      # 只在失败时出现（配合反馈问卷降低求助门槛）
         right = ctk.CTkFrame(bar, fg_color="transparent")
         right.grid(row=0, column=2, sticky="e")
+        self._recipe_btn = _flat_button(right, text="📋 方案", width=70, command=self._recipe_menu)
+        self._recipe_btn.pack(side="left")
         _flat_button(right, text="❓ 常见问题", width=90,
                      command=lambda: webbrowser.open(FAQ_URL)).pack(side="left")
         _flat_button(right, text="💬 反馈建议", width=90,
@@ -2104,13 +2344,23 @@ class App(_RootBase):
         self._columns = cols
         if cols:
             self._split_menu.configure(values=cols)
-            if self._split_var.get() not in cols:
+            rec = self._recipe_active if (self._recipe_active or {}).get("mode") == "excel" else None
+            if self._split_var.get() not in cols and not (rec and rec["settings"].get("split_column")):
                 self._split_var.set(self._recommend_split(cols))
             self._pcol_menu.configure(values=cols)
-            if self._pcol_var.get() not in cols:
+            if self._pcol_var.get() not in cols and not (rec and rec["settings"].get("person_column")):
                 self._pcol_var.set(self._recommend_person(cols))
             src = f"（来自「{tpl_name}」）" if tpl_name else ""
-            self._set_scan_status(f"✓ 识别到 {len(cols)} 个字段{src}，确认下拉框选的对不对", C_OK)
+            warns = []
+            if rec:
+                from core.recipe import check_columns
+                warns = check_columns(rec, cols)
+            if rec and warns:
+                self._set_scan_status("⚠ " + "；".join(warns) + "。请在下拉框里改选，或换一张表", C_WARN)
+                for w in warns:
+                    self._log(f"⚠️ 方案「{rec['name']}」：{w}")
+            else:
+                self._set_scan_status(f"✓ 识别到 {len(cols)} 个字段{src}，确认下拉框选的对不对", C_OK)
             self._on_split_col_change(None)   # 字段已定 → 自动枚举取值（v2.7 取值预览）
         else:
             self._warn_scan_failed()
@@ -2258,6 +2508,8 @@ class App(_RootBase):
             "ui_scale": self.cfg.get("ui_scale", 100),
             "window_geometry": self.cfg.get("window_geometry", ""),
             "appearance_mode": self.cfg.get("appearance_mode", "system"),
+            "recent_recipes": self.cfg.get("recent_recipes", []),
+            "recipe_tip_off": self.cfg.get("recipe_tip_off", False),
             "header_mode": mode_map.get(self._header_seg.get(), "auto"),
             "header_row":  header_row,
             "grid_keys":   self._split_list(self._grid_keys_var.get()),
@@ -2387,6 +2639,7 @@ class App(_RootBase):
         self._last_summary = None
         self._summary_lbl.configure(text="")
         self._summary_banner.grid_remove()
+        self._recipe_tip.grid_remove()
         self._copylog_btn.grid_remove()
         self._log_btn.configure(text=self._log_btn_text())
         self._start_btn.configure(state="disabled", text=busy_text)
@@ -2731,7 +2984,10 @@ class App(_RootBase):
         self._stop_indeterminate()
         self._progress.set(1 if output_path else 0)
         if cfg.get("ui_mode") == "collect":
-            return self._on_collect_done(cfg, output_path)
+            self._on_collect_done(cfg, output_path)
+            if output_path and not self._stop_flag:
+                self._offer_recipe(cfg)
+            return
         if output_path:
             self._last_output = output_path
             self._open_btn.grid()
@@ -2742,6 +2998,7 @@ class App(_RootBase):
                 self._run_status.configure(text="✅ 分发完成！结果已保存" if is_pdf else "✅ 拆分完成！结果已保存",
                                            text_color=C_OK)
                 self._log("💬 用得顺手或踩了坑？点「反馈建议」匿名告诉作者（1 分钟）。")
+                self._offer_recipe(cfg)
             self._render_summary(output_path, is_pdf)
             from core.collect import RECORD_NAME
             rec = os.path.join(output_path, RECORD_NAME)

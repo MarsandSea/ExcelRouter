@@ -50,8 +50,8 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
-    bootstrap, build_config, default_output_for, emit, emit_error, ensure_deps, eprint,
-    list_outputs, match_column, open_folder, sheet_headers,
+    _join, add_recipe_args, apply_recipe_args, bootstrap, build_config, default_output_for, emit, emit_error,
+    ensure_deps, eprint, list_outputs, match_column, open_folder, save_recipe_from, sheet_headers,
 )
 
 bootstrap()
@@ -114,7 +114,29 @@ def main():
     ap.add_argument("--include-old-results", action="store_true",
                      help="输入文件夹里有以前的拆分结果目录时也照样拆（默认拦下来，免得旧结果被重复拆）")
     ap.add_argument("--dry-run", action="store_true", help="只解析配置并打印，不实际拆分、不写盘")
+    add_recipe_args(ap)
     args = ap.parse_args()
+    if args.recipe and args.config:
+        emit_error("--recipe 和 --config 二选一")
+    recipe, recipe_notes, recipe_extra = apply_recipe_args(ap, args, "excel", {
+        "split_column": ("split_column", lambda v, s: v or None),
+        "selected_values": ("values", _join),
+        "person_column": ("person_column", lambda v, s: (v or None) if s.get("to_person") else None),
+        "person_file_filter": ("person_filter", _join),
+        "make_zip": ("no_zip", lambda v, s: not v),
+        "merge_across_files": ("merge", lambda v, s: v),
+        "preserve_format": ("fast", lambda v, s: not v),
+        "keep_formulas": ("keep_formulas", lambda v, s: v),
+        "keep_hidden": ("keep_hidden", lambda v, s: v),
+        "exact_match": ("fuzzy_match", lambda v, s: not v),
+        "header_mode": ("header_mode", lambda v, s: v),
+        "header_row": ("header_row", lambda v, s: v),
+        "grid_keys": ("grid_keys", _join),
+        "id_keys": ("id_keys", _join),
+        "skip_values": ("skip_values", _join),
+        "value_alias_map": ("alias_json", lambda v, s: json.dumps(v, ensure_ascii=False) if v else ""),
+    })
+    recipe_extra.pop("to_person", None)          # 跟着 person_column 走
 
     if not args.output:
         args.output = default_output_for(args.input)
@@ -178,6 +200,9 @@ def main():
             value_alias_map=alias_map or None,
         )
 
+    config.update(recipe_extra)                     # 方案里没有对应参数的设置（如填写列）
+    if recipe:
+        eprint(f"📋 套用方案「{recipe['name']}」")
     if not os.path.exists(config["input_path"]):
         emit_error(f"找不到输入路径：{config['input_path']}")
         return
@@ -297,6 +322,7 @@ def main():
     for w in after:
         eprint(f"⚠ {w}")
 
+    saved = save_recipe_from(args, config, "excel", input_name=config["input_path"])
     files = list_outputs(output_path)
     if bundle:  # 「拿去发」的那一个文件排第一，AI 先 present 它
         files = [bundle] + [f for f in files if f != bundle]
@@ -311,6 +337,7 @@ def main():
                                     state["stopped"], bundle),
           "warnings": warnings,
           "opened": opened,
+          "recipe": recipe["name"] if recipe else "", "recipe_notes": recipe_notes, "recipe_saved": saved,
           "person_split_by": ("wrapper" if need_wrapper_person
                               else ("vendor" if person_map else None)),
           "person_files": person_count if need_wrapper_person else None,

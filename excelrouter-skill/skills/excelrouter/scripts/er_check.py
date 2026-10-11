@@ -33,7 +33,9 @@ import time
 T_START = time.time()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import bootstrap, emit, emit_error, ensure_deps, eprint, open_folder  # noqa: E402
+from _common import (  # noqa: E402
+    add_recipe_args, apply_recipe_args, bootstrap, emit, emit_error, ensure_deps, eprint, open_folder, save_recipe_from,
+)
 
 bootstrap()
 ensure_deps(lite=True)  # 查收只要 openpyxl + xlrd；必须排在 core import 之前
@@ -59,7 +61,15 @@ def main():
     ap.add_argument("--output", default="", help="通报和进度表放哪个文件夹。不填 = 输入旁边的「汇总结果」")
     ap.add_argument("--open", action="store_true", help="查完打开结果文件夹")
     ap.add_argument("--budget", type=float, default=BUDGET, help=argparse.SUPPRESS)   # 测试用
+    add_recipe_args(ap)
     args = ap.parse_args()
+    recipe, recipe_notes, _extra = apply_recipe_args(ap, args, "collect", {
+        "collect_expect": ("expect", lambda v, s: v),
+        "collect_required": ("required", lambda v, s: v),
+        "collect_by": ("by", lambda v, s: v),
+        "collect_title": ("title", lambda v, s: v),
+        "header_row": ("header_row", lambda v, s: v if s.get("header_mode") == "row" else 0),
+    })
 
     src = os.path.abspath(args.input)
     if not os.path.exists(src):
@@ -120,6 +130,9 @@ def main():
     tail.append(f"通报已存为「{em.NOTICE_NAME}」，逐人状态在「{em.PROGRESS_NAME}」（未交标红、有问题标橙、合格标绿），"
                 f"都在：{out_dir}" + ("（已为你打开）" if opened else ""))
     files = [p for p in (got.get("progress"), got.get("notice")) if p]
+    saved = save_recipe_from(args, dict(cfg, collect_check=True), "collect", input_name=src)
+    if saved:
+        tail.append(f"这次的设置存成了方案：{saved}（下次加 --recipe 这个文件就行）")
     people = []
     if got.get("result"):
         try:
@@ -131,6 +144,7 @@ def main():
           "counts": {k: got.get(k) for k in ("expected", "submitted", "ok", "missing", "empty", "partial",
                                              "invalid", "changed", "bad", "extra")},
           "people": people, "result_file": got.get("result") or "",
+          "recipe": recipe["name"] if recipe else "", "recipe_notes": recipe_notes, "recipe_saved": saved,
           "files": files, "output_dir": out_dir, "warnings": g["warnings"], "opened": opened,
           "next": "把 message 原样告诉用户（通报可以直接复制发群，逐人催办可单独发给本人）。"
                   "用户追问某个人还差什么、只要有某类问题的人时，直接按 people（每人的 status 和 issues 编码）回答，"

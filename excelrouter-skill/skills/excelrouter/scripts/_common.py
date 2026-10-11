@@ -110,6 +110,68 @@ def emit_error(message, **extra):
     sys.exit(1)
 
 
+# ---------- 方案（v3.0）：桌面版「📋 方案」存的小 JSON，技能也能读、能存，格式只有一份 ----------
+
+def add_recipe_args(ap):
+    ap.add_argument("--recipe", default="", help="套用一个方案文件（桌面版「📋 方案」存的 .json）；命令行明确给的参数优先")
+    ap.add_argument("--save-recipe", default="", help="把这次实际用的设置存成方案文件（.json 路径）")
+
+
+def _explicit_dests(ap, argv):
+    """命令行上明确写了的参数（方案不能覆盖它们）。"""
+    out = set()
+    for action in ap._actions:
+        for opt in action.option_strings:
+            if any(a == opt or a.startswith(opt + "=") for a in argv):
+                out.add(action.dest)
+    return out
+
+
+def apply_recipe_args(ap, args, mode, argmap, argv=None):
+    """--recipe：把方案里的设置填进还没在命令行上写的参数。返回 (方案, 说明, 没有对应参数的设置)。
+
+    argmap：{方案里的键: (参数 dest, 转换函数(值, 全部设置) -> 参数值)}。模式对不上、文件坏了直接报错退出。
+    """
+    if not getattr(args, "recipe", ""):
+        return None, [], {}
+    from core import recipe as R
+    try:
+        rec, notes = R.load_recipe(os.path.abspath(args.recipe), mode=mode)
+    except R.RecipeError as e:
+        emit_error(f"方案用不了：{e}")
+    explicit = _explicit_dests(ap, sys.argv[1:] if argv is None else argv)
+    extra = {}
+    for k, v in rec["settings"].items():
+        if k in argmap:
+            dest, conv = argmap[k]
+            if dest not in explicit:
+                setattr(args, dest, conv(v, rec["settings"]))
+        else:
+            extra[k] = v
+    return rec, notes, extra
+
+
+def save_recipe_from(args, config, mode, columns=None, input_name=""):
+    """--save-recipe：把这次实际用的设置存成方案，返回路径（没要求存时返回 ""）。"""
+    if not getattr(args, "save_recipe", ""):
+        return ""
+    from core import recipe as R
+    path = os.path.abspath(args.save_recipe)
+    if not path.lower().endswith(".json"):
+        path += ".json"
+    name = os.path.splitext(os.path.basename(path))[0]
+    try:
+        R.save_recipe(R.make_recipe(config, mode, name, columns=columns, input_name=input_name), path)
+    except Exception as e:
+        eprint(f"⚠️ 方案没存成：{e}")
+        return ""
+    return path
+
+
+def _join(v, _s=None):
+    return ",".join(str(x) for x in v)
+
+
 def eprint(msg):
     """日志/进度输出到 stderr，不污染 stdout 的结果 JSON。"""
     print(msg, file=sys.stderr, flush=True)
