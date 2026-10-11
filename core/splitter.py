@@ -60,8 +60,8 @@ from core.utils import soft_clean, apply_alias, is_skip_value, safe_filename
 # 表头识别在 core/xlio.py（汇总也用它）；这里照旧导出原名，collect / 技能 / 测试都按 splitter 的名字调用
 from core.xlio import resolve_header_row
 from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
-from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, key_value, match,
-                       open_book, put, zip_folder)
+from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, hidden_info, key_value,
+                       match, open_book, put, zip_folder)
 
 warnings.filterwarnings('ignore')
 
@@ -268,16 +268,27 @@ def _find_col(names, column):
     return None
 
 
+def _hidden_sheets(file_path, config):
+    """不发出的隐藏 sheet 名集合：keep_hidden 打开时为空。"""
+    if config.get('keep_hidden', False):
+        return set()
+    return {sn for sn, (state, _cols) in hidden_info(file_path).items() if state != "visible"}
+
+
 def _sheet_heads(file_path, config):
     """只读方式逐 sheet 产出 (sheet 名, 表头行号或 -1, 列名, 表头附近的行, 其余行的迭代器)。
 
     表头只在前几行里找；数据行先是「表头附近的行」里表头之后的部分，再接着从迭代器里取。
+    隐藏的 sheet 不拆，这里也不列出来（keep_hidden 打开时照常列出）。
     调用方中途不读了（break / return）也会关掉源文件。
     """
     limit = _head_limit(config)
+    hidden = _hidden_sheets(file_path, config)
     sheets = _iter_sheets_ro(file_path)
     try:
         for sn, it in sheets:
+            if sn in hidden:
+                continue
             head = _trim_tail(_key_row(r) for r in islice(it, limit))
             h = resolve_header_row(head, config)
             names = _header_names(head[h - 1]) if 0 < h <= len(head) else []
@@ -711,6 +722,29 @@ def _align_lines(sn, notes):
     return lines
 
 
+def _clear_hidden(ws, h, hcols):
+    """把内存里源 sheet 隐藏列从表头行起的值清空（源文件不落盘，不受影响），复制出去的产出里就没有这些内容。
+
+    表头上方的标题行不动；跨到可见列的合并单元格（如大标题）不清，免得把看得见的内容一起清掉。
+    与内部版 er_lite 的同名函数同一规则。
+    """
+    keep = {(mr.min_row, mr.min_col) for mr in ws.merged_cells.ranges
+            if any(c not in hcols for c in range(mr.min_col, mr.max_col + 1))}
+    for r in range(h, ws.max_row + 1):
+        for c in hcols:
+            cell = ws._cells.get((r, c))
+            if cell is not None and not isinstance(cell, MergedCell) and (r, c) not in keep:
+                cell.value = None
+
+
+def _hidden_data_rows(ws, h, last):
+    """表头以下、有内容的隐藏行（多半是筛选掉的）有几行。.xls 读成的内存工作簿没有行属性，算 0。"""
+    hid = {r for r, dim in list(ws.row_dimensions.items()) if dim.hidden and h < r <= last}
+    if not hid:
+        return 0
+    return len({r for (r, _c), cell in ws._cells.items() if r in hid and cell.value not in (None, "")})
+
+
 def _last_data_row(ws):
     """最后一行有内容的行号；尾部只有格式、没有内容的行不算（和旧版 pandas 读表的口径一样）。整页空返回 0。"""
     last = 0
@@ -749,6 +783,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     alias           = config.get('value_alias_map', {})
     skip            = config.get('skip_values', [])
     merge           = config.get('merge_across_files', True)
+    keep_hidden     = config.get('keep_hidden', False)
     selected = [v for v in (apply_alias(x, alias) for x in config.get('selected_values', [])) if v]
     selected_set = set(selected)
 
@@ -805,9 +840,25 @@ def process_file(file_path, rel_path, output_root, config, outputs,
 
         # ---------- 逐 sheet 识别表头 ----------
         limit = _head_limit(config)
+        hid = hidden_info(file_path)     # {sheet 名: (状态, {隐藏列号})}，xlsx 和 xls 同一套规则
         sheets = []        # [(sheet 名, ws, 表头行号, 最后一行有内容的行号, 表头行的列名)]
         cols = {}          # sheet 名 -> (每一列的列键, 列名)：跨文件合并时按列名对齐（见 _OutputBook.place）
+        tpl_names = {}     # sheet 名 -> 完整列名（含隐藏列）：给 template_groups 比模板用
+        hidden_cols = {}   # sheet 名 -> {隐藏列号}：产出里这些列照样隐藏；没开 keep_hidden 时内容清空
+        hidden_skipped = 0
         for ws in wb_src.worksheets:
+            state, hcols = hid.get(ws.title, ("visible", set()))
+            if state != "visible":
+                if stats is not None:
+                    stats["hidden_sheets"] = stats.get("hidden_sheets", 0) + 1
+                if not keep_hidden:
+                    hidden_skipped += 1
+                    if log_fn:
+                        log_fn(f"  🙈 sheet「{ws.title}」是隐藏的，没有发出"
+                               f"（要发出，打开「隐藏的 sheet 和列也照样发出」）")
+                    continue
+                if log_fn:
+                    log_fn(f"  🙈 sheet「{ws.title}」是隐藏的，照样发出（产出里能看见）")
             last = _last_data_row(ws)
             head = [_key_row(r) for r in ws.iter_rows(min_row=1, max_row=min(last, limit),
                                                        values_only=True)] if last else []
@@ -816,22 +867,72 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 sheets.append((ws.title, ws, h, last, _header_names(head[h - 1])))
                 names_full = col_names(head, h)
                 names_full += [""] * (ws.max_column - len(names_full))
-                cols[ws.title] = (col_keys(names_full), names_full)
+                tpl_names[ws.title] = list(names_full)
+                hcols = {c for c in hcols if c <= ws.max_column}
+                hidden_cols[ws.title] = hcols
+                keys_full = col_keys(names_full)
+                if not keep_hidden:
+                    # 列键照常按列名算（跨文件对齐不受影响），但隐藏列的列名不往产出里写
+                    names_full = ["" if c in hcols else n for c, n in enumerate(names_full, start=1)]
+                cols[ws.title] = (keys_full, names_full)
             else:
                 if stats is not None:
                     stats["skipped_sheets"] += 1
                 if log_fn:
                     log_fn(f"  ⚠️ sheet「{ws.title}」没识别出表头行，已跳过该 sheet")
         if not sheets:
+            if hidden_skipped:      # 看得见的 sheet 都认不出表头，有内容的在隐藏 sheet 里：按设置不发，不算失败
+                if log_fn:
+                    log_fn("  ⚠️ 这个文件看得见的 sheet 里没有能拆的表，隐藏的 sheet 按设置没有发出")
+                return 0
             if stats is not None:
                 stats["failed_files"] += 1
             if log_fn:
                 log_fn("  ⚠️ 未找到有效表头，跳过")
             return 0
 
-        # ---------- 读表头格式 ----------
+        # ---------- 先按拆分列分好组，再清空隐藏列，最后读表头格式 ----------
+        # 顺序不能反：隐藏的拆分列照样要能分组；表头格式里带着列名，要在清空之后读。
+        plan = []          # [(sheet 名, ws, 表头行号, 最后一行, 拆分列号, 到人列号, 分组键, 到人键)]
+        for sn, ws, h, last, names in sheets:
+            col_idx = _find_col(names, split_column)
+            if col_idx is None:
+                if stats is not None:
+                    stats["skipped_sheets"] += 1
+                if log_fn:
+                    log_fn(f"  ⚠️ sheet「{sn}」第 {h} 行（识别出的表头行）里没找到拆分字段"
+                           f"「{split_column}」，已跳过该 sheet")
+                continue
+            pcol_idx = _find_col(names, person_column) if do_person else None
+            # 数据行是 Excel 第 h+1 ~ last 行；第 j 个数据行的 0 基源行号是 h + j
+            keys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, col_idx + 1, h + 1, last)]
+                    if last > h else [])
+            pkeys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, pcol_idx + 1, h + 1, last)]
+                     if pcol_idx is not None and last > h else None)
+            hcols = hidden_cols.get(sn, set())
+            if hcols:
+                if stats is not None:
+                    stats["hidden_cols"] = stats.get("hidden_cols", 0) + len(hcols)
+                shown = "、".join(f"「{tpl_names[sn][c - 1]}」" if tpl_names[sn][c - 1] else f"第 {c} 列"
+                                 for c in sorted(hcols)[:5]) + ("等" if len(hcols) > 5 else "")
+                if keep_hidden:
+                    msg = f"有 {len(hcols)} 列是隐藏的（{shown}），照样发出、仍然隐藏"
+                else:
+                    _clear_hidden(ws, h, hcols)
+                    msg = f"有 {len(hcols)} 列是隐藏的（{shown}），产出里这些列的内容已清空、仍然隐藏"
+                if log_fn:
+                    log_fn(f"  🙈 sheet「{sn}」{msg}")
+            n_hidden_rows = _hidden_data_rows(ws, h, last)
+            if n_hidden_rows:
+                if stats is not None:
+                    stats["hidden_rows"] = stats.get("hidden_rows", 0) + n_hidden_rows
+                if log_fn:
+                    log_fn(f"  ℹ️ sheet「{sn}」有 {n_hidden_rows} 行是隐藏的（可能是筛选掉的），"
+                           f"照常发出，产出里不再隐藏")
+            plan.append((sn, ws, h, last, col_idx, pcol_idx, keys, pkeys))
+
         try:
-            header_meta = {sn: _read_header_format(ws, h) for sn, ws, h, _last, _names in sheets}
+            header_meta = {p[0]: _read_header_format(p[1], p[2]) for p in plan}
         except Exception as e:
             if stats is not None:
                 stats["failed_files"] += 1
@@ -880,6 +981,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 notes[nk] = notes.get(nk, 0) + 1
             if col_map is not None and formula_ws is not None:
                 notes['formula'] = notes.get('formula', 0) + 1     # _append_rows 会把这批行的公式落成数值
+            for c in hidden_cols.get(sheet_name, ()):              # 源表隐藏的列，产出里照样隐藏
+                d = c if col_map is None else col_map[c - 1]
+                sinfo['ws'].column_dimensions[get_column_letter(d)].hidden = True
             _append_rows(sinfo, rows, preserve_ok, ws_src, src_max_col, style_cache,
                          heartbeat=heartbeat, formula_ws=formula_ws, col_map=col_map)
             total_rows += len(rows)
@@ -887,29 +991,15 @@ def process_file(file_path, rel_path, output_root, config, outputs,
 
         # ---------- 逐 sheet 拆分 ----------
         contains = bool(selected_set) and not exact       # 包含匹配：一行可以落进几个分组
-        n_sheets = max(1, len(sheets))
+        n_sheets = max(1, len(plan))
         tpl = None         # 这个文件的模板：第一个含拆分字段的 sheet 的列名（见 template_groups）
-        for si, (sn, ws, h, last, names) in enumerate(sheets):
+        for si, (sn, ws, h, last, col_idx, pcol_idx, keys, pkeys) in enumerate(plan):
             if stop_flag and stop_flag():
                 break
-            col_idx = _find_col(names, split_column)
-            if col_idx is None:
-                if stats is not None:
-                    stats["skipped_sheets"] += 1
-                if log_fn:
-                    log_fn(f"  ⚠️ sheet「{sn}」第 {h} 行（识别出的表头行）里没找到拆分字段"
-                           f"「{split_column}」，已跳过该 sheet")
-                continue
             if tpl is None:
-                tpl = cols[sn][1]
-            pcol_idx = _find_col(names, person_column) if do_person else None
+                tpl = tpl_names[sn]
             if last <= h:
                 continue
-
-            # 数据行是 Excel 第 h+1 ~ last 行；第 j 个数据行的 0 基源行号是 h + j
-            keys = [apply_alias(key_value(v), alias) for v in _column_values(ws, col_idx + 1, h + 1, last)]
-            pkeys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, pcol_idx + 1, h + 1, last)]
-                     if pcol_idx is not None else None)
             targets = selected if selected_set else sorted({k for k in keys if not is_skip_value(k, skip)})
             buckets = {}
             if not contains:
@@ -1045,7 +1135,8 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
     outputs = {}
     grand_total = 0
     stopped = False
-    stats = {"skipped_sheets": 0, "failed_files": 0, "unaligned": 0}   # 供收尾 [SUMMARY] 行汇总
+    stats = {"skipped_sheets": 0, "failed_files": 0, "unaligned": 0,     # 供收尾 [SUMMARY] 行汇总
+             "hidden_sheets": 0, "hidden_cols": 0, "hidden_rows": 0}
     for i, (fp, rp) in enumerate(tasks):
         if stop_flag and stop_flag():
             _log("⛔ 已停止")
@@ -1164,6 +1255,10 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         "stopped": stopped,
         "output": output_path,
         "unaligned": stats["unaligned"],      # v3.0：列名对不上、单独放进「{sheet}_2」的来源 sheet 数
+        # v3.0：隐藏的 sheet / 列 / 行各有几个（keep_hidden 关着时：sheet 没发、列清空了、行照常发）
+        "hidden_sheets": stats["hidden_sheets"],
+        "hidden_cols": stats["hidden_cols"],
+        "hidden_rows": stats["hidden_rows"],
     }
     if groups:
         summary["templates"] = len(groups)    # v3.0：跨文件合并时，这批表有几种模板

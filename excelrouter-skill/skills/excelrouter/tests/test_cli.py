@@ -294,6 +294,34 @@ def test_person_split_keeps_title_and_header_rows(two_books):
     assert os.path.exists(os.path.join(obj["output_path"], "销售部.zip"))
 
 
+def test_split_hidden_content_default_and_keep(tmp_path):
+    """v3.0：隐藏的 sheet 不发、隐藏列清空且仍隐藏（到人文件也一样）；--keep-hidden 全部照样发出。"""
+    src = tmp_path / "表.xlsx"
+    _make_book(src, [["001", "张三", "销售部", "北京", 100], ["002", "李四", "技术部", "上海", 200]])
+    wb = openpyxl.load_workbook(src)
+    wb.active.column_dimensions["D"].hidden = True                 # 城市
+    ws2 = wb.create_sheet("底稿")
+    ws2.append(["部门", "说明"])
+    ws2.append(["销售部", "内部"])
+    ws2.sheet_state = "hidden"
+    wb.save(src)
+
+    rc, obj, stderr = _run("er_split.py", "--input", str(src), "--by", "部门", "--to-person", "姓名",
+                           "--output", str(tmp_path / "a"))
+    assert rc == 0, stderr
+    out = openpyxl.load_workbook(os.path.join(obj["output_path"], "销售部.xlsx"))
+    assert out.sheetnames == ["Sheet1"]
+    assert out.active["D3"].value is None and out.active.column_dimensions["D"].hidden
+    person = openpyxl.load_workbook(os.path.join(obj["output_path"], "销售部", "到人", "张三_销售部.xlsx")).active
+    assert person["D3"].value is None and person.column_dimensions["D"].hidden
+
+    rc, obj, stderr = _run("er_split.py", "--input", str(src), "--by", "部门", "--keep-hidden",
+                           "--output", str(tmp_path / "b"))
+    assert rc == 0, stderr
+    out = openpyxl.load_workbook(os.path.join(obj["output_path"], "销售部.xlsx"))
+    assert out.sheetnames == ["Sheet1", "底稿"] and out.active["D3"].value == "北京"
+
+
 def test_inspect_suggests_split_column_in_one_call(tmp_path):
     """桌面版②卡片的等价物：不用再逐个字段查，一次给出推荐 + 每列分组数。"""
     p = tmp_path / "t.xlsx"

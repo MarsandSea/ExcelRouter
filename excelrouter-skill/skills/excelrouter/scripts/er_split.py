@@ -100,6 +100,8 @@ def main():
     ap.add_argument("--fast", action="store_true", help="快速模式：数据行只写值不保留格式，速度换取不保留样式")
     ap.add_argument("--keep-formulas", action="store_true",
                      help="尽量保留同行公式（跨行/汇总/跨表公式仍会落成当前缓存数值，不会发送算错的公式）")
+    ap.add_argument("--keep-hidden", action="store_true",
+                    help="隐藏的 sheet 和列也照样发出（默认：隐藏的 sheet 不发，隐藏列的内容清空、仍隐藏）")
     ap.add_argument("--fuzzy-match", action="store_true", help="--values 按包含匹配而不是精确匹配")
     ap.add_argument("--header-mode", choices=["auto", "row", "keyword"], default="auto")
     ap.add_argument("--header-row", type=int, default=1, help="header-mode=row 时的 1 基行号")
@@ -165,6 +167,7 @@ def main():
             merge_across_files=args.merge,
             preserve_format=not args.fast,
             keep_formulas=args.keep_formulas,
+            keep_hidden=args.keep_hidden or None,
             no_timestamp=args.no_timestamp,
             exact_match=(False if args.fuzzy_match else None),
             header_mode=args.header_mode,

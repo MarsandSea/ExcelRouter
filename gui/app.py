@@ -164,6 +164,7 @@ FALLBACK_CONFIG = {
     "exact_match": True,
     "preserve_format": True,
     "keep_formulas": False,
+    "keep_hidden": False,          # v3.0：隐藏的 sheet 和列也照样发出（默认不发 sheet、清空列）
     "auto_open_output": True,
     # ── 文件加密分发（v2.6 起 PDF，v2.10 起也收 Word/Excel/PPT；键名沿用 pdf_*）──
     "ui_mode": "excel",
@@ -1059,9 +1060,13 @@ class App(_RootBase):
         self._preserve_var = ctk.BooleanVar(value=self.cfg.get("preserve_format", True))
         self._keep_formula_var = ctk.BooleanVar(value=self.cfg.get("keep_formulas", False))
         self._auto_open_var = ctk.BooleanVar(value=self.cfg.get("auto_open_output", True))
+        self._keep_hidden_var = ctk.BooleanVar(value=self.cfg.get("keep_hidden", False))
         ctk.CTkCheckBox(opts, text="精确匹配", variable=self._exact_var).grid(row=0, column=0, padx=8, pady=4)
         ctk.CTkCheckBox(opts, text="跨文件合并汇总", variable=self._merge_var).grid(row=0, column=1, padx=8, pady=4)
         ctk.CTkCheckBox(opts, text="完成后打开输出", variable=self._auto_open_var).grid(row=0, column=2, padx=8, pady=4)
+        # 默认：隐藏的 sheet 不发、隐藏列清空（仍隐藏）、隐藏的行照常发（多半是筛选）——别人点开就能看见的东西不该藏在里面
+        ctk.CTkCheckBox(opts, text="隐藏的 sheet 和列也照样发出", variable=self._keep_hidden_var).grid(
+            row=0, column=3, padx=8, pady=4)
         # 「保留格式」的勾选框已上移到第 ③ 步的「拆分速度」段选（v2.9），这里不再重复
         self._keep_formula_box = ctk.CTkCheckBox(
             opts, text="保留公式（收件人可见计算过程，仅同行公式，需选「标准」速度）",
@@ -2263,6 +2268,7 @@ class App(_RootBase):
             "exact_match": self._exact_var.get(),
             "preserve_format": self._preserve_var.get(),
             "keep_formulas": self._keep_formula_var.get(),
+            "keep_hidden": self._keep_hidden_var.get(),
             "auto_open_output": self._auto_open_var.get(),
         }
 

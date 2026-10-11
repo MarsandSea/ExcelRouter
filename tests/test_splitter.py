@@ -821,3 +821,113 @@ def test_scan_values_and_template_groups(tmp_path):
     lines = template_lines(groups)
     assert lines[0] == "  · 2 个和「A.xlsx」一样"
     assert lines[1] == "  · 1 个和「C.xlsx」一样：多「备注」；少「金额」"
+
+
+# ---------- 隐藏内容（v3.0）：隐藏的 sheet 不发、隐藏列清空、隐藏行照常发 ----------
+
+def _summary(logs):
+    import json
+    return json.loads([m for m in logs if m.startswith("[SUMMARY] ")][0][len("[SUMMARY] "):])
+
+
+def _make_hidden_book(path, hide_split=False):
+    """明细：D 列「身份证」隐藏（hide_split 时连「部门」C 列也藏）、第 4 行隐藏；另有一张隐藏的「底稿」。"""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "明细"
+    ws.append(["2026年10月明细"])
+    ws.merge_cells("A1:E1")
+    ws.append(["工号", "姓名", "部门", "身份证", "金额"])
+    ws.append(["001", "张三", "销售部", "110101X", 100])
+    ws.append(["002", "李四", "销售部", "110102X", 200])
+    ws.append(["003", "王五", "技术部", "110103X", 300])
+    ws.column_dimensions["D"].hidden = True
+    if hide_split:
+        ws.column_dimensions["C"].hidden = True
+    ws.row_dimensions[4].hidden = True
+    ws2 = wb.create_sheet("底稿")
+    ws2.append(["部门", "说明"])
+    ws2.append(["销售部", "不该发出去"])
+    ws2.sheet_state = "hidden"
+    wb.save(path)
+
+
+def test_hidden_content_default(tmp_path):
+    src = tmp_path / "明细.xlsx"
+    _make_hidden_book(src)
+    logs = []
+    res = run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=logs.append)
+    wb = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))
+    assert wb.sheetnames == ["明细"]                                  # 隐藏的「底稿」没发
+    ws = wb.active
+    assert ws["A1"].value == "2026年10月明细"                         # 跨到可见列的大标题不清
+    assert [ws.cell(row=r, column=4).value for r in range(2, 5)] == [None, None, None]   # 列名和内容都清空
+    assert ws.column_dimensions["D"].hidden                          # 仍然隐藏
+    assert [ws.cell(row=r, column=2).value for r in (3, 4)] == ["张三", "李四"]   # 隐藏的那行照常发
+    assert not any(d.hidden for d in ws.row_dimensions.values())     # 产出里不再隐藏
+    s = _summary(logs)
+    assert (s["hidden_sheets"], s["hidden_cols"], s["hidden_rows"]) == (1, 1, 1)
+    assert s["failed_files"] == 0 and s["skipped_sheets"] == 0
+    text = "\n".join(logs)
+    assert "「底稿」是隐藏的，没有发出" in text and "「身份证」" in text and "1 行是隐藏的" in text
+
+
+def test_hidden_split_column_still_groups(tmp_path):
+    """拆分字段本身被隐藏：先分组再清空，照样拆得开。"""
+    src = tmp_path / "明细.xlsx"
+    _make_hidden_book(src, hide_split=True)
+    res = run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False), log_fn=lambda m: None)
+    assert sorted(f for f in os.listdir(res) if f.endswith(".xlsx")) == ["技术部.xlsx", "销售部.xlsx"]
+    ws = openpyxl.load_workbook(os.path.join(res, "技术部.xlsx")).active
+    assert ws["B3"].value == "王五" and ws["C3"].value is None and ws.column_dimensions["C"].hidden
+
+
+def test_keep_hidden_sends_everything(tmp_path):
+    src = tmp_path / "明细.xlsx"
+    _make_hidden_book(src)
+    logs = []
+    res = run_split(_base_cfg(str(src), str(tmp_path / "out"), make_zip=False, keep_hidden=True),
+                    log_fn=logs.append)
+    wb = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx"))
+    assert wb.sheetnames == ["明细", "底稿"]
+    assert all(ws.sheet_state == "visible" for ws in wb.worksheets)
+    ws = wb["明细"]
+    assert [ws.cell(row=r, column=4).value for r in range(2, 5)] == ["身份证", "110101X", "110102X"]
+    assert ws.column_dimensions["D"].hidden
+    assert wb["底稿"]["B2"].value == "不该发出去"
+    assert _summary(logs)["hidden_sheets"] == 1
+
+
+def test_list_columns_skip_hidden_sheet(tmp_path):
+    src = tmp_path / "a.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "底稿"
+    ws.append(["网格", "备注"])
+    ws.append(["城东", "x"])
+    ws.sheet_state = "hidden"
+    ws2 = wb.create_sheet("明细")
+    ws2.append(["部门", "姓名"])
+    ws2.append(["销售部", "张三"])
+    wb.save(src)
+    assert list_columns(str(src), {}) == ["部门", "姓名"]
+    assert list_values(str(src), {}, "网格") == []
+    assert list_columns(str(src), {"keep_hidden": True}) == ["网格", "备注"]
+
+
+def test_file_with_data_only_in_hidden_sheet_is_not_a_failure(tmp_path):
+    """看得见的 sheet 是空的、数据在隐藏 sheet 里：按设置不发，不算「失败文件」。"""
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _make_book(inp / "A.xlsx", [["001", "张三", "销售部", "北京", 100]])
+    wb = openpyxl.Workbook()
+    wb.active.title = "空白"
+    ws = wb.create_sheet("数据")
+    ws.append(["部门"])
+    ws.append(["销售部"])
+    ws.sheet_state = "hidden"
+    wb.save(inp / "B.xlsx")
+    logs = []
+    run_split(_base_cfg(str(inp), str(tmp_path / "out")), log_fn=logs.append)
+    s = _summary(logs)
+    assert s["failed_files"] == 0 and s["hidden_sheets"] == 1 and s["rows"] == 1

@@ -53,6 +53,8 @@ DEFAULTS = {
     "exact_match": True,
     "preserve_format": True,
     "keep_formulas": False,
+    # v3.0：隐藏的 sheet 默认不发、隐藏列清空（仍隐藏）、隐藏的行照常发；True = 全部照样发出
+    "keep_hidden": False,
     "pdf_input_paths": [],
     "pdf_mapping_path": "",
     "pdf_grid_column": "",

@@ -17,6 +17,7 @@
   "exact_match": true,
   "preserve_format": true,
   "keep_formulas": false,
+  "keep_hidden": false,
   "auto_open_output": true,
   "ui_mode": "excel",
   "pdf_input_paths": [],

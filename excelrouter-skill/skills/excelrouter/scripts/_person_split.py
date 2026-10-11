@@ -135,11 +135,13 @@ def _write_person_file(sheet_entries, out_path):
             title = f"{base}({n})"
         used_titles.add(title)
         dst_ws = dst_wb.create_sheet(title=title)
-        # 列宽取第一个来源的
+        # 列宽取第一个来源的；内核产出里隐藏的列（源表隐藏列）照样隐藏
         for c in range(1, src_ws.max_column + 1):
-            w = src_ws.column_dimensions[get_column_letter(c)].width
-            if w is not None:
-                dst_ws.column_dimensions[get_column_letter(c)].width = w
+            dim = src_ws.column_dimensions[get_column_letter(c)]
+            if dim.width is not None:
+                dst_ws.column_dimensions[get_column_letter(c)].width = dim.width
+            if dim.hidden:
+                dst_ws.column_dimensions[get_column_letter(c)].hidden = True
         # 表头块：第 1 行 ~ 列名行，行高一起带上
         for r in range(1, h_row + 1):
             _copy_row(src_ws, r, dst_ws, r, src_ws.max_column)
