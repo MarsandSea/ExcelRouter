@@ -82,6 +82,7 @@ DEFAULTS = {
     "pdf_grid_column": "",
     "pdf_password_column": "",
     "pdf_receiver_column": "",
+    "pdf_encrypt": True,
     "pdf_watermark": True,
     "pdf_watermark_text": "{grid} {date}",
     "pdf_watermark_opacity": 0.15,
@@ -148,6 +149,9 @@ _PIP_MIRROR = _PIP_MIRRORS[0]  # 报错提示里给用户手动用的那个
 
 _EXCEL_DEPS = (("pandas", "pandas"), ("openpyxl", "openpyxl"), ("xlrd", "xlrd"))
 _PDF_DEPS = (("pypdf", "pypdf"), ("fpdf", "fpdf2"), ("cryptography", "cryptography"))
+# 给 Word / Excel / PPT 加密才要（也写在 requirements-pdf.txt 里）；只发 PDF 时不检查，
+# 免得内网装不上它的用户每次跑 PDF 分发都去试一次安装
+_OFFICE_DEPS = (("msoffcrypto", "msoffcrypto-tool"),)
 
 
 def _missing(deps):
@@ -202,7 +206,7 @@ def _has_pip_config():
     return "index-url" in out
 
 
-def ensure_deps(need_pdf=False):
+def ensure_deps(need_pdf=False, need_office=False):
     """缺依赖就自动装上（首次使用），装不上再报人话错误。
 
     **必须在 import pandas / core.* 之前调用**——否则缺包时 Python 直接甩
@@ -215,6 +219,8 @@ def ensure_deps(need_pdf=False):
     groups = [(_EXCEL_DEPS, "requirements.txt")]
     if need_pdf:
         groups.append((_PDF_DEPS, "requirements-pdf.txt"))
+    if need_office:
+        groups.append((_OFFICE_DEPS, "requirements-pdf.txt"))
     for deps, req in groups:
         missing = _missing(deps)
         # cryptography 缺失只是加密降级（AES-256 → RC4-128），不值得为它阻塞

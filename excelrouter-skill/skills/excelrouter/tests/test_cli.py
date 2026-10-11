@@ -405,6 +405,79 @@ def test_pdf_dist_missing_columns_reports_friendly_error(tmp_path):
     assert "--grid-col" in obj["error"]
 
 
+def _vendor_has_office():
+    """vendor 内核 v2.10 起才会给 Office 文件加密；发版打 tag 时才同步，之前跳过这几条。"""
+    with open(os.path.join(SCRIPTS, "vendor", "core", "pdf_dist.py"), encoding="utf-8") as f:
+        return "OFFICE_EXTS" in f.read()
+
+
+needs_office_core = pytest.mark.skipif(not _vendor_has_office(),
+                                       reason="vendor/core 还没同步到 v2.10（打 tag 时才同步）")
+ROW = ("E001", "张三", "客服部", "东区", 100)
+
+
+@needs_office_core
+def test_pdf_dist_encrypts_word_and_excel(tmp_path):
+    """--files 混给 PDF 和 xlsx：xlsx 加了打开密码、对的密码能解开，内容不变；manifest 不混进 files。"""
+    pytest.importorskip("msoffcrypto")
+    import io
+
+    import msoffcrypto
+    pdf_path = tmp_path / "report.pdf"
+    _make_pdf(pdf_path)
+    xlsx = tmp_path / "明细.xlsx"
+    _make_book(xlsx, [ROW])
+    mp = tmp_path / "map.xlsx"
+    _make_mapping(mp, [("GridA", "001234", "Zhang")])
+    rc, obj, stderr = _run("er_pdf_dist.py", "--files", str(pdf_path), str(xlsx), "--mapping", str(mp),
+                           "--grid-col", "GridName", "--password-col", "Pwd",
+                           "--output", str(tmp_path / "dist"))
+    assert rc == 0, stderr
+    assert obj["encrypted"] is True and obj["watermarked"] is True
+    assert obj["files_total"] == 2
+    assert all(not f.endswith("分发清单.xlsx") for f in obj["files"])
+    assert "只加了密码" in obj["message"]
+    with open(os.path.join(obj["output_path"], "GridA", "明细.xlsx"), "rb") as f:
+        of = msoffcrypto.OfficeFile(f)
+        assert of.is_encrypted()
+        of.load_key(password="001234")
+        buf = io.BytesIO()
+        of.decrypt(buf)
+    assert openpyxl.load_workbook(buf).active["A1"].value == "月度报表"
+
+
+@needs_office_core
+def test_pdf_dist_watermark_only_needs_no_password_column(tmp_path):
+    pdf_path = tmp_path / "report.pdf"
+    _make_pdf(pdf_path)
+    mp = tmp_path / "map.xlsx"
+    _make_mapping(mp, [("GridA", "Zhang")], headers=("GridName", "接收人"))
+    rc, obj, stderr = _run("er_pdf_dist.py", "--files", str(pdf_path), "--mapping", str(mp),
+                           "--grid-col", "GridName", "--no-encrypt", "--output", str(tmp_path / "dist"))
+    assert rc == 0, stderr
+    assert obj["encrypted"] is False
+    assert "明文密码" not in obj["message"]
+    from pypdf import PdfReader
+    assert not PdfReader(os.path.join(obj["output_path"], "GridA", "report.pdf")).is_encrypted
+
+
+def test_pdf_dist_rejects_office_watermark_old_format_and_both_off(tmp_path):
+    """这些都在开跑前就说清楚，不用等内核跳过文件后才发现。"""
+    mp = tmp_path / "map.xlsx"
+    _make_mapping(mp, [("GridA", "001234", "Zhang")])
+    xlsx = tmp_path / "a.xlsx"
+    _make_book(xlsx, [ROW])
+    old = tmp_path / "b.xls"
+    old.write_bytes(b"x")
+    base = ["--mapping", str(mp), "--grid-col", "GridName", "--password-col", "Pwd"]
+    rc, obj, _ = _run("er_pdf_dist.py", "--files", str(xlsx), *base, "--no-encrypt")
+    assert rc == 1 and "不能加水印" in obj["error"]
+    rc, obj, _ = _run("er_pdf_dist.py", "--files", str(old), *base)
+    assert rc == 1 and "老格式" in obj["error"]
+    rc, obj, _ = _run("er_pdf_dist.py", "--pdf", str(xlsx), *base, "--no-encrypt", "--no-watermark")
+    assert rc == 1 and "至少要一个" in obj["error"]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="仅 Windows 有 OpenBLAS 多线程崩溃问题")
 def test_common_pins_openblas_threads():
     """_common 必须在导入 numpy 之前把 OpenBLAS 线程数限制为 1。

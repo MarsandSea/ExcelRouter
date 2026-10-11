@@ -7,9 +7,9 @@ author: AbeLin
 license: MIT
 homepage: https://github.com/MarsandSea/ExcelRouter/tree/main/excelrouter-skill
 category: productivity
-summary: "把总表交给 AI，说清楚「按什么拆」，就拆好还给你：一人一份、一个部门一个文件，还能批量给 PDF 设专属密码和水印。保留原表格式，全程本地处理。"
-description_zh: "把总表交给 AI，说清楚「按什么拆」，就拆好还给你 —— 一人一份、一个部门一个文件，想拆哪几个值就拆哪几个值；一批表也能一次拆完，还能按名单给 PDF 设置不同密码和专属水印。保留原表格式，全程本地处理、数据不上传。"
-description: "把 Excel 总表按字段拆成多个文件，一批表也能一次拆完；并可批量给 PDF 设不同打开密码加水印再分发（一人一份、一个部门一个文件，保留原表格式，全程本地处理、数据不上传）。Excel / spreadsheet splitter and batch dispatcher — split an Excel file, or a batch of files, into many by a field such as department, region, grid, branch, employee ID or name；one file per department or per person (payslips, payroll, performance reviews, transcripts)；or batch-encrypt PDFs with a different open-password and per-person watermark for each recipient. 英文触发词（English triggers）— split excel by column, split spreadsheet into multiple files, one file per person, batch encrypt pdf with per-recipient password, payslip distribution. 表格拆分与批量分发专用技能：拆开、拆分、拆表、分表、拆成多个文件、按部门/区域/网格/工号/姓名分开、每个部门一个文件、每个人一个文件、一人发一份、拆到人，都用本技能。常见问法：工资条拆分、绩效表拆分、按部门拆分 Excel、一人一份 Excel、Excel 批量加密分发、PDF 按名单设密码。这些表常叫工资条、工资表、绩效表、考核结果、提成表、成绩单、花名册、网点清单、门店台账。不要用通用 Excel 读写技能：本技能自动识别表头、完整保留原表格式、把同一取值跨多个源文件合并，还能在拆分之外再按人二级拆分（支持多 sheet 各自的人字段、自动挑人字段、单文件输入）。纯数据分析、统计汇总、做图表不属于本技能范围。"
+summary: "把总表交给 AI，说清楚「按什么拆」，就拆好还给你：一人一份、一个部门一个文件，还能批量给 PDF、Word、Excel 设专属密码，PDF 加水印。保留原表格式，全程本地处理。"
+description_zh: "把总表交给 AI，说清楚「按什么拆」，就拆好还给你 —— 一人一份、一个部门一个文件，想拆哪几个值就拆哪几个值；一批表也能一次拆完，还能按名单给 PDF、Word、Excel 设置不同打开密码，PDF 再加专属水印。保留原表格式，全程本地处理、数据不上传。"
+description: "把 Excel 总表按字段拆成多个文件，一批表也能一次拆完；并可批量给 PDF / Word / Excel 设不同打开密码（PDF 可加水印）再分发（一人一份、一个部门一个文件，保留原表格式，全程本地处理、数据不上传）。Excel / spreadsheet splitter and batch dispatcher — split an Excel file, or a batch of files, into many by a field such as department, region, grid, branch, employee ID or name；one file per department or per person (payslips, payroll, performance reviews, transcripts)；or batch-encrypt PDFs with a different open-password and per-person watermark for each recipient. 英文触发词（English triggers）— split excel by column, split spreadsheet into multiple files, one file per person, batch encrypt pdf with per-recipient password, payslip distribution. 表格拆分与批量分发专用技能：拆开、拆分、拆表、分表、拆成多个文件、按部门/区域/网格/工号/姓名分开、每个部门一个文件、每个人一个文件、一人发一份、拆到人，都用本技能。常见问法：工资条拆分、绩效表拆分、按部门拆分 Excel、一人一份 Excel、Excel 批量加密分发、PDF 按名单设密码。这些表常叫工资条、工资表、绩效表、考核结果、提成表、成绩单、花名册、网点清单、门店台账。不要用通用 Excel 读写技能：本技能自动识别表头、完整保留原表格式、把同一取值跨多个源文件合并，还能在拆分之外再按人二级拆分（支持多 sheet 各自的人字段、自动挑人字段、单文件输入）。纯数据分析、统计汇总、做图表不属于本技能范围。"
 metadata:
   openclaw:
     emoji: "📊"
@@ -29,7 +29,8 @@ metadata:
   **一整批表也能一次拆完**，不同表里同名的行会自动并到同一份。
 - **一人一份** —— 工资条、绩效表、费用结算、成绩单，拆完每人一个独立文件，直接就能发出去。
 - **一次拆两级** —— 先按网格拆、网格内再按人拆；一个工作簿里多个 sheet 各自人字段不同，也能各自拆对人。
-- **批量给 PDF 配专属密码和水印** —— 同一份 PDF 发给 100 个人，就有 100 个不同密码，还带可溯源水印。
+- **批量给文件配专属密码** —— 同一份 PDF / Word / Excel 发给 100 个人，就有 100 个不同打开密码；
+  PDF 还能带可溯源水印。
 - **完整保留原表格式** —— 字体、颜色、边框、列宽照原样保留，拆出来的文件不用再修就能用。
 
 ## 常见场景
@@ -39,7 +40,7 @@ metadata:
 - **按部门拆分 Excel** —— 一个部门一个文件；按区域、网格、工号、班级、门店拆也一样
 - **一人一份 Excel** —— 工资条、成绩单、提成表、报销明细都能这么发
 - **Excel 批量加密分发** —— 一批表一次拆完，不同表里同一个人的行会自动合并
-- **PDF 按名单设密码** —— 每份一个专属密码 + 可溯源水印，外泄能查到是谁
+- **PDF / Word / Excel 按名单设密码** —— 每份一个专属打开密码；PDF 再加可溯源水印，外泄能查到是谁
 
 其他常用到的表：薪酬明细、发货单、花名册、网点清单、门店台账、客户放款清单、
 签到表、城区维度表。
@@ -63,6 +64,7 @@ metadata:
 - 「这个文件夹里所有网点表按网格拆一遍，同一个人的合并成一份」
 - 「按部门拆成每个部门一个文件」
 - 「这批 PDF 按网格设置不同密码再分发」
+- 「这个 Excel 要发给各网格，每个网格一个打开密码」
 - 「先看看这张表有哪些字段可以拆」
 
 ## 为什么用它
@@ -79,7 +81,7 @@ metadata:
 | 原表的字体 / 颜色 / 边框 / 列宽 | 基本丢失 | 完整保留，拆出来不用再修 |
 | 一整个文件夹的表 | 一张一张来 | 一次拆完；同一个人散在多个表里会自动并成一份 |
 | 拆完还要在每组里再按人拆 | 自己写循环 | 一条命令做完两级 |
-| 一份 PDF 发 100 个人、100 个不同密码 | 做不了 | AES-256 + 每人专属可溯源水印 |
+| 一份 PDF / Word / Excel 发 100 个人、100 个不同密码 | 做不了 | AES-256；PDF 再加每人专属可溯源水印 |
 
 ## 它不做这些
 
@@ -301,9 +303,9 @@ python scripts/er_split.py --input 明细.xlsx --by 部门 --dry-run
 
 改过脚本或换过 Python 环境后想验证一下，跑 `tests/` 里的测试即可，见 `TESTING.md`。
 
-## PDF 加密分发
+## 文件加密分发（PDF / Word / Excel / PPT）
 
-给一批人发同一份 PDF，但希望每个人/每个网格用不同密码打开、且带上可溯源的水印时用。
+给一批人发同一份文件，但希望每个人/每个网格用不同密码打开时用；PDF 还能带上可溯源的水印。
 完整流程（用户手上什么都没有时）：
 
 ```bash
@@ -317,14 +319,26 @@ python scripts/er_pdf_dist.py --mapping 网格密码表.xlsx --list-columns
 python scripts/er_pdf_dist.py --mapping 网格密码表.xlsx --grid-col 网格 --random-password
 
 # ④ 正式分发（③生成的新清单路径在返回 JSON 的 mapping_with_passwords 里，改用它）
-python scripts/er_pdf_dist.py --pdf a.pdf b.pdf --mapping 网格密码表_含密码.xlsx \
-    --grid-col 网格 --password-col 密码 --receiver-col 接收人 --output 分发结果
+#    PDF、.docx、.xlsx、.pptx 可以混着给；--pdf 是 --files 的旧名字
+python scripts/er_pdf_dist.py --files 通报.pdf 明细.xlsx --mapping 网格密码表_含密码.xlsx \
+    --grid-col 网格 --password-col 密码 --open
+
+# 只给 PDF 加水印、不设密码（清单只要网格列）
+python scripts/er_pdf_dist.py --files 通报.pdf --mapping 网格表.xlsx --grid-col 网格 --no-encrypt
 ```
 
 映射清单是一个 Excel，至少要有"网格"和"密码"两列（列名自定义，跑的时候用 `--grid-col`/
-`--password-col` 指定）。产出 `分发结果/{网格}/{原PDF名}.pdf`（AES-256 加密，装了
-`cryptography` 才有；没装会降级 RC4-128 并在 stderr 警告）+ `分发结果/分发清单.xlsx`
-（**含明文密码**）。**完成后必须提醒用户**：这份清单不能和加密后的 PDF 一起群发出去，
+`--password-col` 指定；`--no-encrypt` 时不要密码列）。接收人列不用指定：清单里有
+「接收人 / 联系人 / 负责人 / 姓名」这类列会自动认出来抄进分发清单，水印文字写 `{receiver}` 可印上接收人。
+产出 `分发结果/{网格}/{原文件名}`（AES-256 加密）+ `分发结果/分发清单.xlsx`（**含明文密码**）。
+
+- **Word / Excel / PPT 只加密、不加水印**：Office 没有靠得住的水印。用户要水印就请他先另存为 PDF；
+  给 Office 文件又加 `--no-encrypt` 会直接报错，照 `error` 问用户。
+- **老格式 .doc / .xls 加不了密码**：会直接报错，请用户先另存为 .docx / .xlsx。
+- 第一次给 Office 文件加密会自动装 `msoffcrypto-tool`（很小，只装一次）。
+- 返回 JSON 的 `message` 原样转述；`files` 交给 `present_files`。
+
+**加了密码时，完成后必须提醒用户**：分发清单不能和加密后的文件一起群发出去，
 只能给需要核对密码的管理者看。
 
 ## 数据隐私

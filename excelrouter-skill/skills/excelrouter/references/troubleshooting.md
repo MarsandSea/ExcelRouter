@@ -77,9 +77,16 @@ OPENBLAS_NUM_THREADS=8 python scripts/er_split.py --input 明细.xlsx --by 部�
 **别用裸 `pip`**，多个 Python 并存时它常装到别的环境里，装完照样报缺。
 受管环境不希望脚本自动装包，设环境变量 `ER_NO_AUTO_INSTALL=1`。
 
-Excel 拆分只需要 `pandas`/`openpyxl`/`xlrd` 这三个，PDF 加密分发才需要 `pypdf`/`fpdf2`。
-如果只做 Excel 拆分，PDF 相关依赖装不上可以先忽略。`cryptography` 缺失不会导致 PDF 分发
+Excel 拆分只需要 `pandas`/`openpyxl`/`xlrd` 这三个，文件加密分发才需要 `pypdf`/`fpdf2`；
+给 Word / Excel / PPT 加密还要 `msoffcrypto-tool`（只在传了这类文件时才检查和安装）。
+如果只做 Excel 拆分，分发相关依赖装不上可以先忽略。`cryptography` 缺失不会导致 PDF 分发
 报错，只是加密强度从 AES-256 降级为 RC4-128（stderr 会警告，功能仍然可用）。
+
+## 给 Excel / Word 加密时报「老格式，加不了密码」或「只能加密、不能加水印」
+
+- `.doc` / `.xls` / `.ppt` 是老格式，请用户用 Word / Excel / WPS 另存为 `.docx` / `.xlsx` / `.pptx`。
+- Word / Excel / PPT 不加水印。用户要水印就请他先另存为 PDF；只要密码就去掉 `--no-encrypt`。
+- 文件本身已经设了打开密码的会被跳过（stderr 点名），请用户先去掉密码另存。
 
 ## PDF 水印里的中文变成了问号
 

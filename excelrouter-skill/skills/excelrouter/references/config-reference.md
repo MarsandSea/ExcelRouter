@@ -29,20 +29,22 @@ dict。大多数场景用 CLI flag 就够了；需要精细控制、或者想直
 | `preserve_format` | `--fast`（取反） | `True` | 关闭后数据行只写值不保留格式。**它不省时间**（实测提速 0–5%），作用是输出不带样式的纯数值；想省时间请用 `--values` 缩小单次规模。详见 SKILL.md「关于 `--fast`」 |
 | `keep_formulas` | `--keep-formulas` | `False` | 尽量保留"同行公式"为活公式；跨行/汇总/跨表公式仍落成缓存数值。需要 `preserve_format` 同时开启才有意义 |
 
-## PDF 加密分发（run_pdf_dist）
+## 文件加密分发（run_pdf_dist；PDF / Word / Excel / PPT）
 
 | 字段 | 对应 CLI flag | 默认 | 说明 |
 |---|---|---|---|
-| `pdf_input_paths` | `--pdf a.pdf b.pdf` | 必填 | 待分发的 PDF，可多个 |
+| `pdf_input_paths` | `--files a.pdf b.xlsx`（旧名 `--pdf`） | 必填 | 待分发的文件，可多个：PDF、.docx、.xlsx、.pptx（含带宏的 m 版）。老格式 .doc / .xls 加不了密码 |
 | `pdf_mapping_path` | `--mapping` | 必填 | "网格→密码"映射清单 xlsx，表头必须在第 1 行 |
-| `pdf_grid_column` / `pdf_password_column` / `pdf_receiver_column` | `--grid-col` / `--password-col` / `--receiver-col` | 空（前两个必填） | 映射清单里对应的列名；接收人列选填 |
-| `output_path` | `--output` | 空 | 不填则用"第一个 PDF 所在目录/分发结果"，**不带时间戳**（和 Excel 拆分不同） |
-| `pdf_watermark` | `--no-watermark`（取反） | `True` | 是否加网格专属水印 |
-| `pdf_watermark_text` | `--watermark-text` | `"{grid} {date}"` | 水印模板，`{grid}` 替换成网格名，`{date}` 替换成当天日期 |
+| `pdf_grid_column` / `pdf_password_column` / `pdf_receiver_column` | `--grid-col` / `--password-col` / `--receiver-col` | 空 | 映射清单里对应的列名。网格列必填；密码列加密时必填；接收人列留空时自动认「接收人/联系人/负责人/姓名」这类列 |
+| `output_path` | `--output` | 空 | 不填则用"第一个文件所在目录/分发结果"，**不带时间戳**（和 Excel 拆分不同） |
+| `pdf_encrypt` | `--no-encrypt`（取反） | `True` | 是否加打开密码；和水印至少开一个。Word / Excel / PPT 只能加密 |
+| `pdf_watermark` | `--no-watermark`（取反） | `True` | 是否加网格专属水印（**只对 PDF 生效**） |
+| `pdf_watermark_text` | `--watermark-text` | `"{grid} {date}"` | 水印模板，`{grid}` 网格名、`{receiver}` 接收人（为空时用网格名）、`{date}` 当天日期 |
 | `pdf_watermark_opacity` | `--opacity` | `0.15` | 水印透明度 0~1 |
 | `pdf_watermark_angle` | `--angle` | `45` | 水印旋转角度 |
 
-加密算法：装了 `cryptography` 用 AES-256，没装降级 RC4-128（stderr 会警告）。
+加密算法：PDF 装了 `cryptography` 用 AES-256，没装降级 RC4-128（stderr 会警告）；
+Word / Excel / PPT 用 `msoffcrypto-tool`（ECMA-376 Agile，AES-256），直接加密文件字节，原文件格式原样保留。
 中文水印需要系统里有中文字体（Windows 自动探测 `C:\Windows\Fonts`）；非 Windows 环境
 或想指定字体，用 `--font 字体.ttf` 路径。
 
@@ -54,6 +56,6 @@ dict。大多数场景用 CLI flag 就够了；需要精细控制、或者想直
 - 到人（`to_person` 开）：额外产出 `{output_path}/{主取值}/到人/{姓名}.xlsx`（同一人跨文件按 sheet 合并）
 - 批量时，每个产出了文件夹的主取值会打 `{主取值}.zip`
 
-**PDF 分发**（`run_pdf_dist`）：
-- `{output_path}/{网格}/{原PDF文件名}.pdf`（加密+水印后的副本）
-- `{output_path}/分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态，**含明文密码**）
+**文件加密分发**（`run_pdf_dist`）：
+- `{output_path}/{网格}/{原文件名}`（加密 / 加水印后的副本，文件名和原文件一样）
+- `{output_path}/分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态，**含明文密码**；只加水印时没有密码列）

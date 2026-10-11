@@ -82,12 +82,21 @@ python scripts/er_split.py --input 结算表.xlsx --by 部门 --keep-formulas
 python scripts/er_split.py --input 明细.xlsx --by 部门 --dry-run
 ```
 
-## 10. "按网格给一批 PDF 分别加密码"
+## 10. "按网格给一批 PDF / Excel / Word 分别加密码"
 
 ```bash
 python scripts/er_pdf_dist.py --mapping 网格密码表.xlsx --list-columns
-python scripts/er_pdf_dist.py --pdf 报告.pdf --mapping 网格密码表.xlsx \
-    --grid-col 网格 --password-col 密码 --receiver-col 接收人 --output 分发结果
+python scripts/er_pdf_dist.py --files 报告.pdf 明细.xlsx 说明.docx --mapping 网格密码表.xlsx \
+    --grid-col 网格 --password-col 密码 --output 分发结果
+```
+
+Word / Excel 只加密码不加水印；用户要水印就请他先另存为 PDF。
+
+## 10b. "只想给 PDF 打上各网格的水印，不设密码"
+
+```bash
+python scripts/er_pdf_dist.py --files 报告.pdf --mapping 网格表.xlsx --grid-col 网格 \
+    --no-encrypt --watermark-text "{receiver} {date} 请勿外传"
 ```
 
 ## 11. "水印文字想自定义，不想要默认的'网格+日期'"

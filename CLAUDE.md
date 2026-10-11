@@ -210,6 +210,9 @@
 > 自动认，水印文字支持 `{receiver}`（为空时用网格名）。对外改名「文件加密分发」，**内部名、模块名
 > `pdf_dist`、config 的 `pdf_*` 键全部不改**（ui_mode 已存进用户配置，键名是下游技能契约）。
 > 同版顺手修：③卡片的「拆分速度」只在拆分模式显示（原来在 PDF 模式也露着）。
+> 技能侧 `er_pdf_dist.py` 同步：`--files`（`--pdf` 留作旧名）、`--no-encrypt`；老格式、Office 配
+> `--no-encrypt`、两项全关都在开跑前报错；`ensure_deps(need_office=True)` 只在传了 Office 文件时才装
+> msoffcrypto-tool。Office 两条用例看 vendor 里有没有 `OFFICE_EXTS`，打 tag 同步前自动跳过。
 >
 > **新增 PDF 加密分发模式（2026-07-12，v2.5.1 后）**：界面顶部加了
 > `CTkSegmentedButton` 模式切换「Excel 拆分 / PDF 加密分发」。新模式把同一批 PDF

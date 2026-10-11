@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-excelrouter · PDF 按网格加密分发：同一批 PDF，按「网格→密码」映射清单，
-为每个网格生成专属打开密码 + 专属水印（可溯源）的副本，并输出含明文密码的分发清单。
+excelrouter · 文件按网格加密分发：同一批 PDF / Word / Excel / PPT，按「网格→密码」映射清单，
+为每个网格生成一份专属打开密码的副本（PDF 还可加专属水印，可溯源），并输出含明文密码的分发清单。
 
 Copyright (c) 2026 AbeLin
 MIT License
@@ -16,12 +16,19 @@ MIT License
   # 可选：懒得想密码时，让工具给空白网格生成随机密码（写入新文件，不动原清单）
   python er_pdf_dist.py --mapping 映射.xlsx --grid-col 网格 --random-password
 
-  # 第二步：确认列名后正式分发
-  python er_pdf_dist.py --pdf a.pdf b.pdf --mapping 映射.xlsx \
-      --grid-col 网格 --password-col 密码 --receiver-col 接收人 --output 分发结果
+  # 第二步：确认列名后正式分发（PDF、Word、Excel、PPT 可以混着给）
+  python er_pdf_dist.py --files 通报.pdf 明细.xlsx 说明.docx --mapping 映射.xlsx \
+      --grid-col 网格 --password-col 密码 --output 分发结果
+
+  # 只给 PDF 加水印、不设密码（清单只要网格列）
+  python er_pdf_dist.py --files 通报.pdf --mapping 映射.xlsx --grid-col 网格 --no-encrypt
 
 输出：stdout 一行 JSON。分发清单「分发清单.xlsx」含明文密码，务必提醒用户
-不要把这份清单和加密后的 PDF 一起发给同一批人。
+不要把这份清单和加密后的文件一起发给同一批人。
+
+--pdf 是 --files 的旧名字，照样能用。
+Word / Excel / PPT 只加打开密码、不加水印（要水印请先另存为 PDF）；只支持 .docx / .xlsx / .pptx
+这类新格式，老格式 .doc / .xls 请先另存。
 
 --random-password 会用「原文件名_含密码.xlsx」另存一份新清单，正式分发时改用
 那份新清单（JSON 里的 mapping_with_passwords 就是它的绝对路径）。
@@ -37,8 +44,9 @@ from _common import (  # noqa: E402
 )
 
 bootstrap()
-# 整个脚本都是 PDF 流程（连 --make-template 也是它的第一步），一次把 PDF 依赖备齐；
-# 必须排在 core.pdf_dist 的 import 之前，否则缺包时是 ImportError 堆栈而不是人话
+# 整个脚本都是分发流程（连 --make-template 也是它的第一步），一次把 PDF 依赖备齐；
+# 必须排在 core.pdf_dist 的 import 之前，否则缺包时是 ImportError 堆栈而不是人话。
+# Office 加密要的 msoffcrypto-tool 等解析完参数、确实有 Word/Excel/PPT 时再检查。
 ensure_deps(need_pdf=True)
 
 import core.pdf_dist as pdf_dist  # noqa: E402
@@ -50,14 +58,18 @@ from core.pdf_dist import (  # noqa: E402
     write_mapping_template,
 )
 
+OFFICE_EXTS = (".docx", ".docm", ".xlsx", ".xlsm", ".pptx", ".pptm")
+OLD_EXTS = (".doc", ".xls", ".ppt", ".et", ".wps", ".dps")
+
 
 def main():
     ap = argparse.ArgumentParser(
-        description="PDF 按网格加密分发（专属密码 + 专属水印 + 分发清单）",
+        description="文件按网格加密分发（PDF / Word / Excel / PPT 专属密码 + PDF 水印 + 分发清单）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    ap.add_argument("--pdf", nargs="+", default=[], help="待分发的 PDF 文件，可多个")
+    ap.add_argument("--files", "--pdf", dest="files", nargs="+", default=[],
+                    help="待分发的文件，可多个：PDF、.docx、.xlsx、.pptx（--pdf 是旧名字）")
     # 不设 required=True：--make-template 要生成一个「还不存在」的清单，此时 --mapping 本就该缺席。
     # 缺 --mapping 的场景在下面按需校验，报错信息也能带上一句「先用 --make-template 生成」。
     ap.add_argument("--mapping", default="", help="「网格→密码」映射清单 xlsx 路径")
@@ -71,11 +83,15 @@ def main():
                           "「原名_含密码.xlsx」（不改动原清单），不做分发；"
                           "正式分发时改用新清单。需要 --grid-col")
     ap.add_argument("--grid-col", default="", help="映射清单里的网格列名")
-    ap.add_argument("--password-col", default="", help="映射清单里的密码列名")
-    ap.add_argument("--receiver-col", default="", help="映射清单里的接收人列名（选填）")
-    ap.add_argument("--output", default="", help="输出目录；不填则用「第一个PDF所在目录/分发结果」")
-    ap.add_argument("--no-watermark", action="store_true", help="不加水印")
-    ap.add_argument("--watermark-text", default="{grid} {date}", help="水印模板，支持 {grid} {date} 占位")
+    ap.add_argument("--password-col", default="", help="映射清单里的密码列名（--no-encrypt 时不用）")
+    ap.add_argument("--receiver-col", default="",
+                    help="映射清单里的接收人列名（选填；不填时自动认「接收人/联系人/负责人/姓名」这类列）")
+    ap.add_argument("--output", default="", help="输出目录；不填则用「第一个文件所在目录/分发结果」")
+    ap.add_argument("--no-encrypt", action="store_true",
+                    help="不设打开密码，只给 PDF 加水印（清单不需要密码列；Word/Excel/PPT 不能这样用）")
+    ap.add_argument("--no-watermark", action="store_true", help="不加水印（只设密码）")
+    ap.add_argument("--watermark-text", default="{grid} {date}",
+                    help="水印模板，支持 {grid} 网格名、{receiver} 接收人、{date} 日期")
     ap.add_argument("--opacity", type=float, default=0.15, help="水印透明度 0~1")
     ap.add_argument("--angle", type=float, default=45, help="水印旋转角度")
     ap.add_argument("--open", action="store_true",
@@ -130,7 +146,7 @@ def main():
         pwd_col = args.password_col if args.password_col in out_cols else (
             "密码" if "密码" in out_cols else (out_cols[-1] if out_cols else "密码"))
         eprint(f"✅ 已为 {count} 个网格生成随机密码，新清单：{out_path}（原清单未改动）")
-        eprint("⚠ 新清单含明文密码，只留给分发人自己用，不要随 PDF 一起发出去。")
+        eprint("⚠ 新清单含明文密码，只留给分发人自己用，不要随文件一起发出去。")
         emit({"ok": True, "mapping_with_passwords": out_path, "generated": count,
               "password_col": pwd_col,
               "next": f'正式分发改用这份新清单：--mapping "{out_path}" '
@@ -146,16 +162,42 @@ def main():
         emit({"ok": True, "columns": cols})
         return
 
-    if not args.pdf:
-        emit_error("缺少 --pdf（至少一个待分发的 PDF 文件），或改用 --list-columns 只看映射清单表头")
+    # ---- 正式分发：先把文件和选项的问题一次说清，别跑一半才发现 ----
+    if not args.files:
+        emit_error("缺少 --files（至少一个待分发的文件：PDF / .docx / .xlsx / .pptx），"
+                   "或改用 --list-columns 只看映射清单表头")
         return
-    for p in args.pdf:
+    for p in args.files:
         if not os.path.exists(p):
-            emit_error(f"找不到 PDF：{p}")
+            emit_error(f"找不到文件：{p}")
             return
-    if not args.grid_col or not args.password_col:
-        emit_error("缺少 --grid-col / --password-col。不确定列名时先跑 --list-columns 看表头。")
+    exts = [os.path.splitext(p)[1].lower() for p in args.files]
+    old = [os.path.basename(p) for p, e in zip(args.files, exts) if e in OLD_EXTS]
+    if old:
+        emit_error(f"{'、'.join(old)} 是老格式，加不了密码。请用 Word / Excel / WPS 另存为 "
+                   ".docx / .xlsx / .pptx 后再分发", old_format=old)
         return
+    bad = [os.path.basename(p) for p, e in zip(args.files, exts)
+           if e != ".pdf" and e not in OFFICE_EXTS]
+    if bad:
+        emit_error(f"{'、'.join(bad)} 不是 PDF / Word / Excel / PPT，这个功能处理不了", unsupported=bad)
+        return
+    office = [os.path.basename(p) for p, e in zip(args.files, exts) if e in OFFICE_EXTS]
+    encrypt = not args.no_encrypt
+    watermark = not args.no_watermark
+    if not encrypt and not watermark:
+        emit_error("--no-encrypt 和 --no-watermark 不能同时用：加密和水印至少要一个")
+        return
+    if office and not encrypt:
+        emit_error(f"{'、'.join(office)} 是 Word / Excel / PPT，只能加密、不能加水印。"
+                   "要水印请先让用户另存为 PDF；要加密就去掉 --no-encrypt", office_files=office)
+        return
+    if not args.grid_col or (encrypt and not args.password_col):
+        need = "--grid-col / --password-col" if encrypt else "--grid-col"
+        emit_error(f"缺少 {need}。不确定列名时先跑 --list-columns 看表头。")
+        return
+    if office:
+        ensure_deps(need_office=True)
 
     if args.font:
         if not os.path.exists(args.font):
@@ -167,13 +209,14 @@ def main():
         pdf_dist._find_cjk_font = lambda: args.font
 
     config = build_config(
-        pdf_input_paths=[os.path.abspath(p) for p in args.pdf],
+        pdf_input_paths=[os.path.abspath(p) for p in args.files],
         pdf_mapping_path=os.path.abspath(args.mapping),
         output_path=os.path.abspath(args.output) if args.output else "",
         pdf_grid_column=args.grid_col,
-        pdf_password_column=args.password_col,
+        pdf_password_column=args.password_col if encrypt else "",
         pdf_receiver_column=args.receiver_col,
-        pdf_watermark=not args.no_watermark,
+        pdf_encrypt=encrypt,
+        pdf_watermark=watermark,
         pdf_watermark_text=args.watermark_text,
         pdf_watermark_opacity=args.opacity,
         pdf_watermark_angle=args.angle,
@@ -189,18 +232,24 @@ def main():
         emit_error("分发失败：没有任何网格成功生成（详见上方日志）")
         return
 
-    eprint(f"⚠ {MANIFEST_NAME} 含明文密码，请只发给需要核对密码的管理者，不要和加密 PDF 一起群发出去")
-    files = list_outputs(output_root, exts=("pdf",))
+    manifest = os.path.join(output_root, MANIFEST_NAME)
+    files = [f for f in list_outputs(output_root, exts=("pdf",) + tuple(e[1:] for e in OFFICE_EXTS))
+             if os.path.normcase(f) != os.path.normcase(manifest)]
     grids = len({os.path.dirname(f) for f in files})
     opened = open_folder(output_root) if args.open else False
-    emit({"ok": True, "output_path": output_root,
-          "manifest": os.path.join(output_root, MANIFEST_NAME),
-          "files_total": len(files), "files": files[:10], "opened": opened,
-          "message": (f"已为 {grids} 个网格生成 {len(files)} 份加密 PDF（每个网格专属密码"
-                      f"{'+水印' if not args.no_watermark else ''}）。\n"
-                      f"结果在：{output_root}" + ("（已为你打开这个文件夹）" if opened else "") +
-                      f"\n⚠ 「{MANIFEST_NAME}」里是明文密码，只给核对密码的管理者，"
-                      f"不要和 PDF 一起发出去。")})
+    has_pdf = ".pdf" in exts
+    how = "、".join(x for x, on in (("专属打开密码", encrypt),
+                                    ("PDF 专属水印" if office else "专属水印", watermark and has_pdf)) if on)
+    msg = (f"已为 {grids} 个网格生成 {len(files)} 份文件（每个网格{how}）。\n"
+           f"结果在：{output_root}" + ("（已为你打开这个文件夹）" if opened else ""))
+    if office and watermark and has_pdf:
+        msg += "\nWord / Excel / PPT 只加了密码，没有水印（要水印请先另存为 PDF）。"
+    if encrypt:
+        eprint(f"⚠ {MANIFEST_NAME} 含明文密码，请只发给需要核对密码的管理者，不要和加密文件一起群发出去")
+        msg += f"\n⚠ 「{MANIFEST_NAME}」里是明文密码，只给核对密码的管理者，不要和文件一起发出去。"
+    emit({"ok": True, "output_path": output_root, "manifest": manifest,
+          "encrypted": encrypt, "watermarked": watermark and has_pdf,
+          "files_total": len(files), "files": files[:10], "opened": opened, "message": msg})
 
 
 if __name__ == "__main__":
