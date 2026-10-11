@@ -2681,6 +2681,33 @@ class App(_RootBase):
                 if bad:
                     lines.append("⚠ " + "，".join(bad) + "（点「处理详情」看原因）")
                     has_warn = True
+                # v3.0：行数对账——源表每一行去哪了，一眼对得上
+                if s.get("source_rows") and not s.get("stopped"):
+                    parts = [f"拆出 {s.get('routed', 0)}"] + [
+                        f"{lab} {s[k]}" for k, lab in (("skip_rows", "合计等"), ("not_selected", "没选的分组"))
+                        if s.get(k)]
+                    if s.get("unassigned"):
+                        parts.append(f"没写分组 {s['unassigned']}（见「请核对_无归属.xlsx」）")
+                        has_warn = True
+                    lines.append(f"🧮 源表 {s['source_rows']} 行 = " + " + ".join(parts))
+                if s.get("hidden_sheets") or s.get("hidden_cols"):
+                    if self._keep_hidden_var.get():
+                        lines.append("🙈 隐藏的 sheet / 列照样发出了（高级设置里勾选了「隐藏的也照样发出」）")
+                    else:
+                        hid = [f"{s[k]} 个{lab}" for k, lab in
+                               (("hidden_sheets", "隐藏 sheet 没发"), ("hidden_cols", "隐藏列的内容已清空")) if s.get(k)]
+                        lines.append("🙈 " + "，".join(hid) + "（要一起发，在高级设置里勾选）")
+                if s.get("hidden_rows"):
+                    lines.append(f"ℹ️ 有 {s['hidden_rows']} 行原来是隐藏的（可能是筛选掉的），照常发出了")
+                if s.get("templates"):
+                    t = f"📋 这批表其实是 {s['templates']} 种模板，跨文件合并已按列名对齐"
+                    if s.get("unaligned"):
+                        t += f"；{s['unaligned']} 个 sheet 列名大半对不上，单独放进了「sheet 名_2」"
+                        has_warn = True
+                    lines.append(t)
+                if s.get("groups") == 1 and not s.get("stopped") and not self._split_list(self._selvals_var.get()):
+                    lines.append("⚠ 只拆出 1 组：每一行的拆分字段都一样，可能选错了字段")
+                    has_warn = True
                 if s.get("issued"):
                     lines.append("✍️ 已标出填写列并写了下发记录；收回来后切到「Excel 汇总」，选回收文件夹点「查收」"
                              "（下发记录已自动带上）")
