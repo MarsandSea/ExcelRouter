@@ -1,10 +1,10 @@
 <div align="center">
 
-# ExcelRouter · Excel 智能拆分工具
+# ExcelRouter · Excel 智能拆分汇总工具
 
-**整个文件夹一键拆完：按部门、区域、工号等字段自动拆分，打包分发**
+**一键按部门、网格、工号拆分并打包分发；收回来一键汇总，还能查出谁没交、谁漏填**
 
-保留原格式 · 跨文件自动合并 · 单个文件也能拆 · 可同时拆到每个人
+保留原格式 · 多表合并汇总 · 查收通报 · PDF 加密分发
 
 <br>
 
@@ -22,8 +22,9 @@
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux(%E9%BA%92%E9%BA%9F%2FUOS)-lightgrey)
 
-*Batch-split a whole folder of Excel files by any field (department / region / ID), keep original
-formatting, merge across files, optional per-person output — free, open-source, no coding required.*
+*ExcelRouter — split, distribute and merge Excel files, 100% offline. Batch-split a whole folder by
+any field (department / region / ID) keeping original formatting, then merge the returned tables
+back into one — free, open-source, no coding required.*
 
 作者 / Author：**AbeLin** · 觉得好用请点 ⭐ Star！
 
@@ -33,17 +34,21 @@ formatting, merge across files, optional per-person output — free, open-source
 
 ## 📌 一句话介绍 / What is this
 
-**ExcelRouter 是一个开源 Excel 批量拆分工具**（Windows + 国产化 Linux：银河麒麟 V10 / 统信 UOS）（MIT 协议，永久免费，无广告、
+**ExcelRouter 是一个开源 Excel 批量拆分与汇总工具**（Windows + 国产化 Linux：银河麒麟 V10 / 统信 UOS）（MIT 协议，永久免费，无广告、
 无注册、无功能限制）。它把**一个或一整批** Excel 表格，按你指定的**任意一个字段**
 （部门 / 区域 / 门店 / 网格 / 工号 / 班级……）的取值自动拆成多个文件，**完整保留原有的复杂表头
 与单元格格式**，可选再按第二个字段拆到每个人，最后按组打包成 ZIP 直接分发。
-**全程在本机运行，不联网、不上传任何数据**，断网也能正常使用。另附 PDF 加密分发模式：
-同一份 PDF 为每个网格生成专属打开密码 + 专属水印的副本。
+**全程在本机运行，不联网、不上传任何数据**，断网也能正常使用。另附两个模式：
+**Excel 汇总**——反过来把一个文件夹里同一套模板的表（或一个文件里的多个 sheet）合成一张，
+按列名对齐、每行标上来自哪个文件；如果表是发下去让大家填的，还能先「查收」：几秒查出谁没交、
+谁交了空表、谁哪一列漏了哪几行，生成能直接发群的通报和逐人催办话术；**PDF 加密分发**——同一份 PDF
+为每个网格生成专属打开密码 + 专属水印的副本。
 
 **它不做这些**（避免你下载后才发现不合用）：
 
 - ❌ 不做**表头扁平化 / 多层表头降维**——本工具的定位是「原样保留」表头，不是改造表头
-- ❌ 不做**把多个表合并成一个总表**的通用合并（只在拆分时支持「同一取值跨文件合并」）
+- ❌ 不做**不同结构**表格的通用合并（「Excel 汇总」只合并同一套模板的表：按列名对齐，
+  列顺序不同、多一列少一列都能合；能对上的列不到一半就不合，单独列出来请你核对）
 - ❌ 不做数据透视、清洗、统计分析
 - ❌ **没有 Mac 版，也没有在线版**（在线版意味着要上传数据，与「数据不出本机」冲突）
 - ✅ **支持信创环境**：银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64（飞腾 / 鲲鹏）双架构，
@@ -55,10 +60,14 @@ formatting, merge across files, optional per-person output — free, open-source
 > that splits one or a whole folder of Excel files by the values of any column** — department, region, store, employee ID, class —
 > keeping the original (even multi-row, merged) headers and cell formatting intact. Optional second
 > level split (per person), automatic cross-file merge, ZIP packaging per group, plus a PDF secure
-> distribution mode (per-group password + watermark). Everything runs **100% locally — no upload,
+> distribution mode (per-group password + watermark), and a merge mode: combine a folder of
+> same-template workbooks (or the sheets of one workbook) into one, aligned by column name, with a
+> source column; when the sheets were sent out to be filled in, it can first report in seconds who
+> has not submitted, who returned an empty sheet and which rows of which required column are blank.
+> Everything runs **100% locally — no upload,
 > no telemetry, works offline**. Windows x64 plus Linux x86_64/aarch64; no macOS build and no web
 > version; it does not flatten headers,
-> merge workbooks into one, or do any analytics.*
+> merge workbooks of unrelated layouts, or do any analytics.*
 
 ---
 
@@ -70,10 +79,14 @@ formatting, merge across files, optional per-person output — free, open-source
 - 学校成绩单，**按班级拆分**，班主任只拿到自己班的表
 - 每月一份表、连着十几个月，**把同一个部门的数据跨文件合并成一张汇总表**
 - 一份通报 PDF 要发给多个网格，**每个网格一个专属密码 + 专属水印**（泄露可溯源）
+- 各门店 / 各月份交上来几十张同样格式的表，**一键合并成一张**，每行标上来自哪个文件
+- 表格拆下去让各网格 / 各客户经理填，**收回来一键查谁没交、谁交了空表、谁哪一列漏了哪几行**，
+  生成能直接发群的通报，全部合格后汇总成一张
 
 > 如果你正在搜的是这些问题 ——「怎么把一个 Excel 按某一列拆分成多个文件」「一个工作表拆成多个
 > 工作簿」「批量拆分 Excel 不写 VBA / 不用 Power Query」「拆完还要保留原来的复杂表头和格式」
-> 「按部门把表格分开发给不同的人」—— 那这个工具就是干这个的。
+> 「按部门把表格分开发给不同的人」「多个 Excel 表格怎么合并成一个」「收上来的表怎么快速查谁没交、
+> 谁没填完」—— 那这个工具就是干这个的。
 
 **国内用户下载更快**：[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)（与 GitHub 同步发版，免登录直下）·
 国际用户：[GitHub Releases](../../releases)

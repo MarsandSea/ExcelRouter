@@ -52,7 +52,7 @@ def main():
         ver = tag.lstrip("v")
         payload = {
             "tag_name": tag,
-            "name": f"v{ver} · Excel 智能拆分工具 Windows 免安装版",
+            "name": f"v{ver} · Excel 智能拆分汇总工具 Windows 免安装版",
             "body": template.replace("{ver}", ver),
         }
         if args.dry_run:

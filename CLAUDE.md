@@ -11,7 +11,26 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v2.9.3**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+当前版本 **v2.10.0**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+
+> **v2.10.0：下发 → 查收通报 → 汇总闭环（2026-10）**。新增 `core/collect.py`（**纯 openpyxl，不导入
+> pandas**——内部 MobileWork 技能会原样带上这个文件，那边的 Python 加载 pandas 不可靠；测试
+> `test_does_not_import_pandas` 守着这条）。GUI 顶部第二个模式「**Excel 汇总**」（内部名仍是 `collect`）：
+> **默认就是普通汇总**（`merge_tables`：文件夹里同模板的表 / 一个文件的各 sheet 合成一张，不要名单）——
+> 公开仓库的大多数人要的是这个，作者 2026-10-11 定的；②「先查收，再汇总」开关（`collect_check`）
+> 打开后主按钮变「查收」：逐人列出未交 / 交了空表 / 有漏填（到列到行号）/ 和下发时不一样 / 合格，写「回收通报.txt」
+> 「回收进度.xlsx」「回收记录.json」（多轮，通报里写「比上次新交」）；结果卡片里「汇总已交的表」走 `run_collect`。
+> 末尾 sheet 统一叫「汇总说明」（没名单时不写「应交」「状态」列）。清点到同批的下发记录或名单表时自动打开开关；
+> 拆分带填写列成功后也自动打开、带上下发记录并清掉上一批手填的名单 / 必填列 / 标题。
+> **界面第一眼要看得懂**：①选表格 → ②可选开关（默认收起）→ ③一个主按钮；必填列、分人列、标题、
+> 下发记录收在「更多设置」里，别再摊成六个输入框。拆分侧新增可选键 `fill_columns` / `due`（②卡片「让对方填写的列」）：
+> 填写列标浅黄解锁、其余锁定（**不设口令**）、加「填报说明」sheet（填报对象 = 分组名，查收靠它认领
+> 改了名的文件），输出目录写「下发记录.json」「发送清单.xlsx」「下发通知.txt」——在 `run_split`
+> 保存之后、打 ZIP 之前做（`prepare_issue`），不填就完全不走这段，原有契约不变。
+> **下发记录只存分组名、列名、行数和每行短哈希，不存单元格内容**；整列指纹与行顺序无关（排序不算改动）。
+> 查收的卖点是「快速看到、快速通报」：别把通报退化成合并日志。不做自动发送 / 自动催办。
+> `collect.py` 的注释和字符串**避开内部打包的禁用字眼**（敏感、台账、密码、工资、绩效、薪；
+> 也不 import shutil、不读环境变量），因为内部技能审核会扫这些。
 
 > **v2.9.3：技能「像软件一样省事」升级 + 内核输出目录防撞（2026-10）**。
 > 内核：`run_split` 的 `{MMDDHHMM}结果` 时间戳只到分钟，一分钟内重跑（选错字段马上重跑很常见）
@@ -166,7 +185,18 @@
 > 突出智能拆分能力（自动识别表头、自动枚举取值、跨文件智能合并等），「批量」只体现数量维度，
 > 不能传达工具的智能识别能力。统一文案：窗口标题 `ExcelRouter · Excel 智能拆分工具`；
 > README H1、`version.txt` FileDescription 同步。标语/特性行/界面术语不变。
-> **此为最新定稿**，「Excel 批量拆分工具」已废弃，勿再混用。
+> 「Excel 批量拆分工具」已废弃，勿再混用。
+>
+> **品牌文案三次修订（2026-10-11，v2.10）**：加了「Excel 汇总」后副标只说了一半，作者定：
+> 品牌名 **ExcelRouter 不改**（Router 本身双向：发出去是分发、收回来是汇总；改名要重来仓库链接、
+> SkillHub slug 和搜索收录），中文副标改为 **「Excel 智能拆分汇总工具」**；
+> 标语「一键按部门、网格、工号拆分并打包分发；收回来一键汇总，还能查出谁没交、谁漏填」
+> （一句话盖住两个方向，**不随模式切换**）；特性行「保留原格式 · 多表合并汇总 · 查收通报 · PDF 加密分发」；
+> 英文 `ExcelRouter — split, distribute and merge Excel files, 100% offline`。
+> 同步处：界面品牌区、README 首屏、`version.txt` FileDescription、`llms.txt`、`docs/index.html`、
+> `docs/使用指引.md`、Linux 使用说明与 .desktop、release.yml / Gitee 发行版标题。
+> core 模块 docstring 里的旧副标是模块描述，不必跟改。**此为最新定稿。**
+> 内部版（MobileWork 专家）对应叫「敏感数据分发汇总工具」/「敏感数据分发汇总专家（ExcelRouter）」。
 >
 > **新增 PDF 加密分发模式（2026-07-12，v2.5.1 后）**：界面顶部加了
 > `CTkSegmentedButton` 模式切换「Excel 拆分 / PDF 加密分发」。新模式把同一批 PDF
@@ -249,6 +279,7 @@ excel-router/
 │   ├── __init__.py
 │   ├── splitter.py            # 核心拆分逻辑（最重要的文件）
 │   ├── pdf_dist.py            # PDF 按网格加密分发（密码/水印/分发清单）
+│   ├── collect.py             # Excel 汇总 + 查收通报 + 下发标记（纯 openpyxl，不导入 pandas）
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
@@ -269,7 +300,8 @@ excel-router/
     ├── test_platform_compat.py # 平台兼容层单测（纯函数，无 Tk、可无头跑）
     ├── test_utils.py          # utils 单元测试
     ├── test_splitter.py       # splitter 集成测试（单文件/合并、到人双产出、格式保留）
-    └── test_pdf_dist.py       # pdf_dist 集成测试（加密/水印/清单/容错/停止）
+    ├── test_pdf_dist.py       # pdf_dist 集成测试（加密/水印/清单/容错/停止）
+    └── test_collect.py        # collect 测试（各状态/认领/行号/多轮/总表分人/下发比对/汇总/拆分往返）
 ```
 
 ### 数据模型（config 关键字段）
@@ -300,6 +332,12 @@ excel-router/
 | `window_geometry` | 上次关闭时的窗口大小位置；空 = 按屏幕高度自适应（v2.7） | `""` |
 | `ui_scale` | 界面缩放百分比（大字号=115），重启生效（v2.7） | `100` |
 | `appearance_mode` | 深浅色：system / light / dark，页脚循环按钮即时切换（v2.7.1） | `"system"` |
+| `fill_columns` / `due` | 拆分时让对方填写的列（顿号/逗号分隔）/ 截止时间；空 = 不做下发标记（v2.10） | `""` |
+| `collect_input_path` | Excel 汇总：要汇总的文件夹，或一个文件（合它的各 sheet / 查收时是各填各行的总表） | `""` |
+| `collect_check` | Excel 汇总 ② 的开关：True = 先查收再汇总；False = 普通汇总 | `false` |
+| `collect_expect` / `collect_required` | 应交名单 / 必须填的列（文字，`collect.split_names` 拆） | `""` |
+| `collect_by` | 总表按哪一列分人（仅输入是单个文件时生效） | `""` |
+| `collect_title` / `collect_due` / `collect_record` | 通报标题 / 截止时间 / 下发记录路径（空 = 自动找） | `""` |
 
 ### core/splitter.py 的关键函数
 
@@ -383,7 +421,40 @@ excel-router/
 输出结构：`输出根/{网格}/{原文件名}.pdf` + `分发清单.xlsx`（网格|文件名|密码|接收人|页数|状态）。
 **清单含明文密码**，完成日志里有「勿随文件发出」提醒——不要删这句。
 
+### core/collect.py 的关键函数（v2.10，Excel 汇总）
+
+- `scan(files, cfg, deadline, log, by, fp_keys, stop, progress)` —— 只读扫描：表头、行数、每列空了
+  哪几行（`blank_rows`，每列最多记 `BLANK_KEEP` 个行号）、「填报说明」里的填报对象（`claims`）、
+  可选按 `by` 列分组统计、可选指纹。**不留单元格的值**
+- `claim_files` —— 文件归谁：填报说明 → 文件名（**长名字优先**，「城区二」不会被认成「城区」）
+  → 所在文件夹名 → 行指纹（`_fp_owners`：和下发记录里哪一份的行对上一半以上，给「删了填报说明 +
+  改名 / 贴进新表」兜底，宁可认不出也不认错）→ 分组列多数值（文件夹模式没指定时用下发记录的
+  `split_column`）；没名单时用去掉「副本 / (2)」后缀的文件名
+- `analyze(files, res, expect, wanted, record, by, rows_mode)` —— 逐人判定，状态优先级
+  空表 > 有漏填 > 有改动 > 表头对不上 > 合格（一个人可同时有多个 flags）；同一人交了几次同一份表
+  只查最新的；**别人交了一模一样的表照样算他交了**（只注明），同一人重复交的才去重
+- `notice_text` / `write_progress` —— 回收通报（可直接发群 + 逐人催办）/ 回收进度.xlsx
+- `merge_tables` / `check_collect` / `run_collect` —— **签名与 run_split 一致**，收尾打 `[SUMMARY]`
+  （mode 为 `merge` / `collect_check` / `collect`）；结果固定在输入旁的「汇总结果」，扫描时整体跳过这个目录。
+  `merge_tables` 是普通汇总：**不走 analyze、不认人**——每个文件一个来源（`_base_stem` 那套「去副本后缀、
+  只查最新」只适合查收，用在普通汇总会把「明细_1 / 明细_2」当成同一个人重复交而丢掉一份）；
+  名字像名单的表也照样合。汇总结果的 [SUMMARY] 带 `report_text`（`merge_text`），界面结果卡片直接显示
+- `merge_start` / `merge_step` —— 从内部 er_merge 移植的**可分段**合并（内部技能 70 秒一段续做），
+  桌面版一次做完；`labels` 把「来源」写成交表人，`people` 写进「汇总说明」
+- `prepare_issue` / `fingerprint_file` / `lock_keys` —— 下发标记与指纹；一个分组只有一个文件时
+  才记指纹（文件夹不合并时一组多个文件，不比对改动）
+
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
+
+**Excel 汇总模式（v2.10）**：`MODE_LABELS` 三段，顺序「Excel 拆分 / Excel 汇总 / PDF 加密分发」；
+`_collect_frame` 由 `_build_collect_steps` 搭（①文件夹 / 一个文件 ②「先查收，再汇总」开关 `_col_check_var`，
+打开后才露出应交名单、截止时间和折叠的「更多设置」+ 不编号的结果卡片：查收后是通报 + 复制通报 / 打开进度表 /
+汇总已交的表，汇总后是汇总说明 + 打开汇总表）。主按钮文案随开关变（`_start_text`）；
+`_refresh_collect_status` 统一刷新①状态行和②名单提示；下发记录的分组名和文件夹里的文件名一个都对不上时
+提示「可能不是这一批」，不自动打开开关。这个模式下③卡片的「结果保存到」和「拆分速度」两行
+收起（`_out_row` / `_speed_row`），输入另存在 `collect_input_path`，不覆盖拆分模式的 `input_path`。
+`_on_done` 遇到 `ui_mode == "collect"` 交给 `_on_collect_done`；查收不自动打开输出文件夹。
+
 
 **双模式（2026-07-12 起）**：`_build_header` 尾部的 `_mode_seg` 切换「Excel 拆分 / PDF 加密分发」，
 `self._mode`（"excel"/"pdf"）随 `ui_mode` 持久化。`_body` 里 `_excel_frame` / `_pdf_frame` 两个

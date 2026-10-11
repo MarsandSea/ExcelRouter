@@ -124,7 +124,7 @@ jobs:
           $body = @{
             access_token     = $env:GITEE_TOKEN
             tag_name         = "v$ver"
-            name             = "v$ver · Excel 智能拆分工具 Windows 免安装版"
+            name             = "v$ver · Excel 智能拆分汇总工具 Windows 免安装版"
             target_commitish = "${{ github.sha }}"
             body             = $notes
           }

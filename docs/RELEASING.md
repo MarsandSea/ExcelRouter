@@ -232,7 +232,7 @@ gh repo edit MarsandSea/ExcelRouter --add-topic excel,excel-splitter,split-excel
 **仓库简介**：
 
 ```
-ExcelRouter · Excel 智能拆分工具：把一批 Excel 按部门/区域/工号等任意字段的取值批量拆成多个文件，保留原复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；另支持 PDF 按网格加密 + 水印分发。Windows 与银河麒麟/UOS 信创系统均可用，免安装，MIT 开源免费，数据全程本机处理不上传。
+ExcelRouter · Excel 智能拆分汇总工具：把一批 Excel 按部门/区域/工号等任意字段的取值批量拆成多个文件，保留原复杂表头格式，可跨文件合并、二级拆到人、自动打包 ZIP 分发；也能把同一套模板的多个表合并汇总，发下去让人填的表还能先查出谁没交、谁漏填；另支持 PDF 按网格加密 + 水印分发。Windows 与银河麒麟/UOS 信创系统均可用，免安装，MIT 开源免费，数据全程本机处理不上传。
 ```
 
 **标签**（Gitee 支持中文标签，国内搜索主要吃这些词）：
