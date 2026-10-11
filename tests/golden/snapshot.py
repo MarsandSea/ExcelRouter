@@ -1,6 +1,8 @@
 """把拆分输出目录整理成可比较的数据：文件清单、每个工作簿的 sheet、单元格的值与类型、格式、合并单元格、列宽，ZIP 成员。
 
 不比较的：运行日志.txt（日志措辞会变）、请核对_无归属.xlsx（v3.0 新增的产出，由专门的测试断言）。
+
+Copyright (c) 2026 AbeLin · MIT License
 """
 import datetime
 import os

@@ -3,6 +3,8 @@
 
 标准答案在 v2.10.1（pandas 读表路径）上生成，用来守住 v3.0 换成纯 openpyxl 读表后行为不变。
 有意改变的行为不在这里，见各自的专门测试。重定标准答案：py tests/golden/make_golden.py
+
+Copyright (c) 2026 AbeLin · MIT License
 """
 import json
 import os

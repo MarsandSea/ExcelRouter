@@ -3,6 +3,8 @@
 只在需要重定标准答案时跑（例如有意改变了拆分输出）。v3.0 的标准答案是在 v2.10.1（pandas 读表路径）上生成的。
 每个场景跑两遍，两遍的快照必须一样，保证快照里没有时间戳之类每次都变的东西。
 产出写在系统临时目录，跑完删掉；标准答案写进 tests/golden/expected/。
+
+Copyright (c) 2026 AbeLin · MIT License
 """
 import json
 import os

@@ -39,12 +39,14 @@ from copy import copy
 from itertools import islice
 
 import openpyxl
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE, MergedCell
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from core import splitter as sp
 from core.utils import hard_clean, safe_filename, soft_clean
+from core.xlio import (HEAD_SCAN, _cell, _head_limit, _iter_sheets_ro, _load_sheets, _no_formulas, _nonempty,
+                       col_keys, col_names, hidden_info, is_total_row, match)
 
 SOURCE_COL = "来源"
 REPORT_SHEET = "汇总说明"
@@ -57,9 +59,6 @@ RESULT_DIR = "汇总结果"
 CLAIM_LABELS = ("填报对象", "下发对象", "填报单位", "填报人")       # 「填报说明」sheet 里写明这份表是谁的
 LIST_WORDS = ("应交名单", "发送清单", "分发清单")                   # 文件名含这些字的是名单，不是交回来的表
 NAME_HEADS = ("应交", "填报对象", "分组", "名称", "单位", "网格", "姓名", "接收人")
-TOTAL_WORDS = ("合计", "小计", "总计")
-HEAD_SCAN = 20           # 表头只在前这么多行里找（与引擎一致）
-MATCH_RATIO = 0.5        # 能对上的列名至少占这个 sheet 列名的一半，否则当作表头对不上
 FILLED_SHARE = 0.8       # 没指定该填的列时：总体八成以上的行填了、且大多数表填满的列算该填的
 OPTIONAL_WORDS = ("备注", "说明", "附注", "其他", "其它")   # 这类列本来就可填可不填，不算该填的
 BLANK_FILL = PatternFill("solid", fgColor="FFC7CE")         # 该填没填的格子在结果里标浅红
@@ -117,221 +116,17 @@ def unreadable(path):
     return ""
 
 
-def _nonempty(row):
-    return any(soft_clean(v) != "" for v in row)
-
-
-def _cell(row, ci):
-    return row[ci] if ci is not None and ci < len(row) else None
-
-
 def _chain(a, b):
     yield from a
     yield from b
 
 
-def _head_limit(cfg):
-    if cfg.get("header_mode") == "row":
-        try:
-            return max(HEAD_SCAN, int(cfg.get("header_row", 1)))
-        except (TypeError, ValueError):
-            pass
-    return HEAD_SCAN
-
-
-def _xls_sheets(path):
-    """用 xlrd 读 .xls 的值（.xls 的格式本来就保不住），返回 [(sheet 名, [行元组])]。"""
-    import xlrd
-    book = xlrd.open_workbook(path)
-    out = []
-    for sh in book.sheets():
-        rows = []
-        for r in range(sh.nrows):
-            vals = []
-            for c in range(sh.ncols):
-                cell = sh.cell(r, c)
-                v = cell.value
-                if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
-                    v = None
-                elif cell.ctype == xlrd.XL_CELL_DATE:
-                    try:
-                        v = xlrd.xldate.xldate_as_datetime(v, book.datemode)
-                    except Exception:
-                        pass
-                elif cell.ctype == xlrd.XL_CELL_NUMBER and float(v).is_integer():
-                    v = int(v)
-                elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
-                    v = bool(v)
-                vals.append(v)
-            rows.append(tuple(vals))
-        out.append((sh.name, rows))
-    return out
-
-
-def _iter_sheets_ro(path):
-    """只读方式逐 sheet 产出 (sheet 名, 行迭代器)：快、省内存。中间缺的空行也会产出（空元组），行号不会错位。"""
-    if path.lower().endswith(".xls"):
-        for name, rows in _xls_sheets(path):
-            yield name, iter(rows)
-        return
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    try:
-        for ws in wb.worksheets:
-            ws.reset_dimensions()   # 有的程序生成的表把尺寸写错，不重置的话只读模式会少读行列
-            yield ws.title, ws.iter_rows(values_only=True)
-    finally:
-        wb.close()
-
-
-_NS_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
-_NS_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
-_NS_PKG = "{http://schemas.openxmlformats.org/package/2006/relationships}"
-
-
-def _xlsx_hidden(path):
-    """直接读 xlsx 包里的 XML：{sheet 名: (状态, {隐藏列 1 基列号})}。
-
-    只读模式拿不到列属性，整本加载又太慢；<cols> 在 <sheetData> 之前，读到那里就停。
-    列宽小到看不见（< 0.5）的列也算隐藏。
-    """
-    import posixpath
-    import zipfile
-    from xml.etree.ElementTree import fromstring, iterparse
-    out = {}
-    with zipfile.ZipFile(path) as z:
-        rels = {r.get("Id"): r.get("Target") for r in fromstring(z.read("xl/_rels/workbook.xml.rels"))
-                if r.tag == _NS_PKG + "Relationship"}
-        sheets = fromstring(z.read("xl/workbook.xml")).find(_NS_MAIN + "sheets")
-        for sh in (sheets if sheets is not None else []):
-            target = rels.get(sh.get(_NS_REL + "id"), "")
-            part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
-            cols = set()
-            try:
-                with z.open(part) as f:
-                    for _ev, el in iterparse(f, events=("start",)):
-                        if el.tag == _NS_MAIN + "sheetData":
-                            break
-                        if el.tag == _NS_MAIN + "col":
-                            width = el.get("width")
-                            hidden = el.get("hidden") in ("1", "true") or (
-                                el.get("customWidth") in ("1", "true") and width is not None and float(width) < 0.5)
-                            if hidden:
-                                cols.update(range(int(el.get("min")), int(el.get("max")) + 1))
-            except (KeyError, ValueError):
-                pass
-            out[sh.get("name")] = (sh.get("state") or "visible", cols)
-    return out
-
-
-def _xls_hidden(path):
-    """.xls 的隐藏 sheet 与隐藏列（xlrd 要 formatting_info 才有列信息）。"""
-    import xlrd
-    out = {}
-    book = xlrd.open_workbook(path, formatting_info=True, on_demand=True)
-    try:
-        for i, name in enumerate(book.sheet_names()):
-            sh = book.sheet_by_index(i)
-            cols = {c + 1 for c, info in sh.colinfo_map.items() if info.hidden or info.width < 128}   # 1/256 字符宽
-            out[name] = ("visible" if sh.visibility == 0 else "hidden", cols)
-            book.unload_sheet(i)
-    finally:
-        book.release_resources()
-    return out
-
-
-def hidden_info(path):
-    """{sheet 名: (状态 visible|hidden|veryHidden, {隐藏列 1 基列号})}；读不出来时返回 {}（当作没有隐藏）。"""
-    try:
-        return _xls_hidden(path) if path.lower().endswith(".xls") else _xlsx_hidden(path)
-    except Exception:
-        return {}
-
-
-def _legal(v):
-    return ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v
-
-
-def _no_formulas(wb):
-    """保存前把产出里所有「公式」单元格定为文字。
-
-    值都来自计算好的结果，本来没有公式；但 openpyxl 写入以「=」开头的文字时会自动当成公式，
-    源表里一个写着「=…」的文字格子，复制过来就会变成能执行的公式。这里改回文字，打开时原样显示。
-    """
-    for ws in wb.worksheets:
-        for cell in ws._cells.values():
-            if cell.data_type == "f":
-                cell.data_type = "s"
-
-
-def _load_sheets(path):
-    """完整加载一个源文件，返回 (wb, [(sheet 名, 行值列表, ws)], 是否 .xls)。
-
-    .xlsx 用 openpyxl 加载一次，值和格式都从这一份取；.xls 转成只有值的内存工作簿，复制路径与 .xlsx 相同。
-    """
-    if path.lower().endswith(".xls"):
-        wb = openpyxl.Workbook()
-        wb.remove(wb.active)
-        sheets = []
-        for name, rows in _xls_sheets(path):
-            ws = wb.create_sheet(title=name[:31])
-            for r in rows:
-                ws.append([_legal(v) for v in r])
-            sheets.append((name, rows, ws))
-        return wb, sheets, True
-    wb = openpyxl.load_workbook(path, read_only=False, data_only=True)
-    return wb, [(ws.title, list(ws.iter_rows(values_only=True)), ws) for ws in wb.worksheets], False
-
-
-# ---------- 表头与列 ----------
-
-def col_names(head, h):
-    """表头第 h 行（1 基）的列名。多行表头里某列在这一行是空的（上面纵向合并的格子），往上找两行。"""
-    row = head[h - 1]
-    names = []
-    for c in range(len(row)):
-        v, k = soft_clean(row[c]), h - 2
-        while not v and k >= max(0, h - 3):
-            v = soft_clean(_cell(head[k], c))
-            k -= 1
-        names.append(v)
-    while names and not names[-1]:
-        names.pop()
-    return names
-
-
-def col_keys(names):
-    """列名 → 对齐用的键：只留字母数字汉字后比对；重名的按出现顺序加「#2」；没有列名的按位置对齐。"""
-    seen, keys = {}, []
-    for c, n in enumerate(names):
-        k = hard_clean(n).lower()
-        if not k:
-            keys.append(f"#{c + 1}")
-            continue
-        seen[k] = seen.get(k, 0) + 1
-        keys.append(k if seen[k] == 1 else f"{k}#{seen[k]}")
-    return keys
-
+# ---------- 表头与列（读法和列键在 core/xlio.py） ----------
 
 def lock_keys(names, fill_columns):
     """下发时不该被改动的列（列键）：除了让对方填写的列、和没有列名的列以外的所有列。"""
     fill = {hard_clean(c).lower() for c in fill_columns if hard_clean(c)}
     return [k for k in col_keys(names) if not k.startswith("#") and k.split("#")[0] not in fill]
-
-
-def is_total_row(row):
-    """行里前 3 个有内容的格子有「合计 / 小计 / 总计」字样（如「合计」「全市合计」）：这是各表自己的合计行。"""
-    for v in [v for v in row if soft_clean(v) != ""][:3]:
-        t = hard_clean(v)
-        if 0 < len(t) <= 8 and t.endswith(TOTAL_WORDS):
-            return True
-    return False
-
-
-def match(tpl_keys, keys):
-    """返回 (对上的列数, 是否表头对不上)。只算有列名的列。"""
-    named = [k for k in keys if not k.startswith("#")]
-    hit = sum(1 for k in named if k in set(tpl_keys))
-    return hit, (not named or hit < max(1, MATCH_RATIO * len(named)))
 
 
 def label(rel, sheet, mode, multi_sheet, who=None):

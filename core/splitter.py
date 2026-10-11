@@ -55,99 +55,12 @@ from openpyxl.utils import get_column_letter
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.formula.translate import Translator
 
-from core.utils import soft_clean, hard_clean, apply_alias, is_skip_value, safe_filename
+from core.utils import soft_clean, apply_alias, is_skip_value, safe_filename
+# 表头识别在 core/xlio.py（汇总也用它）；这里照旧导出原名，collect / 技能 / 测试都按 splitter 的名字调用
+from core.xlio import resolve_header_row
+from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
 
 warnings.filterwarnings('ignore')
-
-
-# =====================================================
-# 表头识别
-# =====================================================
-
-def _looks_numeric(v):
-    """单元格内容看起来像数字（含带千分位/百分号/货币符号的文本）。"""
-    if isinstance(v, bool):
-        return False
-    if isinstance(v, (int, float)):
-        return True
-    s = soft_clean(v)
-    if s == "":
-        return False
-    s = s.replace(',', '').replace('%', '').replace('¥', '').replace('￥', '').replace('$', '')
-    try:
-        float(s)
-        return True
-    except ValueError:
-        return False
-
-
-def detect_header_row_auto(rows, max_scan=15):
-    """通用启发式：从前若干行的值矩阵里挑「最像表头的行」。
-
-    表头行的特征：非空单元格多、内容多为文字标签（而非数字）、且下一行起开始出现数据。
-    rows 是「行 -> 该行各列值」的二维列表。返回 1 基行号，找不到返回 -1。
-    """
-    best_idx, best_score = -1, -1.0
-    limit = min(len(rows), max_scan)
-    for r in range(limit):
-        cells = rows[r]
-        nonempty = [c for c in cells if soft_clean(c) != ""]
-        if not nonempty:
-            continue
-        n = len(nonempty)
-        # 文字占比：表头通常是文字标签，少有纯数字
-        str_like = sum(1 for c in nonempty if not _looks_numeric(c))
-        str_ratio = str_like / n
-        # 数据感：下一个非空行里数字占比越高，越说明这行是表头。
-        # 表头正下方偶尔会有一整行空行（分隔用），若只看紧邻的下一行会看到全空、data_hint
-        # 归零，导致真正的表头因为"看起来不像后面跟数据"而在打分上输给深处某行数据行
-        # （尤其像点名表这种大多列是姓名/工号/日期的宽表，数据行本身就有一半以上"看起来不像数字"）。
-        # 跳过空行往下找最近的非空行来判断，最多向下看 3 行。
-        data_hint = 0.0
-        for look in range(r + 1, min(r + 4, len(rows))):
-            nxt = [c for c in rows[look] if soft_clean(c) != ""]
-            if nxt:
-                data_hint = sum(1 for c in nxt if _looks_numeric(c)) / len(nxt)
-                break
-        score = n * (0.5 + 0.5 * str_ratio) + n * 0.3 * data_hint
-        if score > best_score:
-            best_score, best_idx = score, r
-    return best_idx + 1 if best_idx >= 0 else -1
-
-
-def find_header_row(rows, grid_keys, id_keys, max_scan=15):
-    """关键词法：在前若干行中找同时包含「网格关键词」和「工号关键词」的表头行。
-
-    rows 为值矩阵，返回 1 基行号，找不到返回 -1。grid_keys/id_keys 任一为空则不启用该条件。
-    """
-    for r in range(min(len(rows), max_scan)):
-        row_str = "".join(hard_clean(c) for c in rows[r])
-        ok_grid = (not grid_keys) or any(hard_clean(k) in row_str for k in grid_keys)
-        ok_id = (not id_keys) or any(hard_clean(k) in row_str for k in id_keys)
-        if ok_grid and ok_id:
-            return r + 1
-    return -1
-
-
-def resolve_header_row(rows, config):
-    """按 config['header_mode'] 分发：auto / row(指定行号) / keyword。返回 1 基行号或 -1。"""
-    mode = config.get('header_mode', 'auto')
-    if mode == 'row':
-        try:
-            hr = int(config.get('header_row', 1))
-        except (TypeError, ValueError):
-            return -1
-        return hr if hr >= 1 else -1
-    if mode == 'keyword':
-        grid_keys, id_keys = config.get('grid_keys', []), config.get('id_keys', [])
-        if not grid_keys and not id_keys:
-            # 两类关键词都没填时，find_header_row 的"任一为空则不启用该条件"会退化成
-            # "永远命中第 1 行"——多 sheet 表格里真实表头不在第 1 行的 sheet 会被强行
-            # 按错误的行去找列，导致拆分字段/到人字段找不到而被静默跳过。关键词法本意是
-            # "专家兜底"，没配关键词就不该比 auto 启发式更武断，退回 auto。
-            return detect_header_row_auto(rows)
-        return find_header_row(rows, grid_keys, id_keys)
-    return detect_header_row_auto(rows)
 
 
 # =====================================================
