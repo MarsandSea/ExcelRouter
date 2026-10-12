@@ -718,6 +718,27 @@ def test_merge_aligns_reordered_columns(tmp_path, preserve):
     assert s["unaligned"] == 0 and s["templates"] == 1         # 列一样、只是顺序不同，算同一种模板
 
 
+def test_dir_files_processed_in_name_order(tmp_path, monkeypatch):
+    """Linux 上 os.walk 不按名字排序：v3.0.0 的麒麟构建里 B 先被处理、B 的列顺序成了表头。
+    这里把 os.walk 的结果倒过来模拟，第一个文件仍须是 A。"""
+    real_walk = os.walk
+
+    def shuffled_walk(top, *a, **kw):
+        for root, dirs, files in real_walk(top, *a, **kw):
+            dirs.reverse()
+            yield root, dirs, files[::-1]
+
+    monkeypatch.setattr(os, "walk", shuffled_walk)
+    inp = tmp_path / "in"
+    inp.mkdir()
+    _make_book_custom(inp / "A.xlsx", HEADERS, [["001", "张三", "销售部", "北京", 100]])
+    _make_book_custom(inp / "B.xlsx", REORDERED, [["李四", "002", "销售部", 200, "上海"]])
+    res = run_split(_base_cfg(str(inp), str(tmp_path / "out")), log_fn=lambda m: None)
+    ws = openpyxl.load_workbook(os.path.join(res, "销售部.xlsx")).active
+    assert _values(ws, 2) == HEADERS
+    assert _values(ws, 3) == ["001", "张三", "销售部", "北京", 100]
+
+
 def test_merge_unaligned_goes_to_own_sheet(tmp_path):
     """对上的列名不到一半：不硬合，这个来源的行放进「Sheet1_2」，用它自己的表头；一行不丢。"""
     inp = tmp_path / "in"

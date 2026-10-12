@@ -67,7 +67,7 @@ def _iter_input_files(input_path, output_root=None):
         for name in names:
             if _is_candidate_excel(name):
                 files.append(os.path.join(root, name))
-    return files
+    return sorted(files)    # Linux 上 os.walk 不排序，和 Windows 保持同一顺序
 
 
 _detect_all_sheets = sheet_headers

@@ -2277,6 +2277,7 @@ class App(_RootBase):
                         if ra == out_abs or ra.startswith(out_abs + os.sep):
                             dirs[:] = []
                             continue
+                    dirs.sort()         # Linux 上 os.walk 不排序，样本表要和 Windows 挑同一个
                     for fn in sorted(files):
                         if fn.lower().endswith(('.xlsx', '.xls')) and not fn.startswith('~$'):
                             n += 1

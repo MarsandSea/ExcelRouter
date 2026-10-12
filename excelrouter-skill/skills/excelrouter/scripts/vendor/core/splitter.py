@@ -1371,7 +1371,10 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         for root, dirs, files in os.walk(input_path):
             if os.path.abspath(root).startswith(os.path.abspath(output_root)):
                 continue
-            for f in files:
+            # 按名字排序：Linux 上 os.walk 的顺序不固定，而跨文件合并时第一个文件定表头 /
+            # 列顺序——不排序的话麒麟上同一批表拆出来的列顺序会和 Windows 不一样
+            dirs.sort()
+            for f in sorted(files):
                 # 大小写统一用 lf 判断：区分大小写的文件系统（Linux）上，残留的
                 # `X__TMP__.XLSX` 会绕过原来那条区分大小写的判断被当数据重新吃进去
                 lf = f.lower()
