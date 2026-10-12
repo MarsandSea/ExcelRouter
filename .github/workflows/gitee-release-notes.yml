@@ -1,0 +1,36 @@
+name: 重刷 Gitee 发行版正文
+
+# 改了 .github/gitee_release_body.md 或 docs/release-notes-v*.md 之后，用它把 Gitee 上已发的
+# 发行版正文重新生成一遍（令牌只在 secrets.GITEE 里，本机没有，所以放到这里跑）。
+# 已经发过麒麟包的版本，正文里那行麒麟下载指引会原样保留。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要重刷的 tag（例如 v3.0.0）；留空 = 最新版"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Refresh Gitee release body
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ -n "$GITEE_TOKEN" ] || { echo "::error::缺少 secrets.GITEE"; exit 1; }
+          if [ -n "$TAG" ]; then
+            python update_gitee_releases.py --tag "$TAG"
+          else
+            python update_gitee_releases.py
+          fi

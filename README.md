@@ -8,10 +8,10 @@
 
 <br>
 
-[![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows-1E7F4B?style=for-the-badge)](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
+[![立即下载](https://img.shields.io/badge/%E2%AC%87%20%E7%AB%8B%E5%8D%B3%E4%B8%8B%E8%BD%BD-%E5%85%8D%E8%B4%B9%20%C2%B7%20%E5%85%8D%E5%AE%89%E8%A3%85%20%C2%B7%20Windows-1E7F4B?style=for-the-badge)](https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Windows.zip)
 
-点上面的按钮**直接开始下载**（Windows 免安装版，约 29 MB，不用注册、不用装 Python）。
-国内网络慢？走 **[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)**，在附件里选文件名带 `win64.zip` 的那个。
+点上面的按钮**直接开始下载**（Windows 免安装版，约 29 MB，国内直连，不用注册、不用装 Python）。
+海外网络：[从 GitHub 下载](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)（内容完全一样）。
 国内镜像仓库：**[gitee.com/Marsandsea/Excelrouter](https://gitee.com/Marsandsea/Excelrouter)**（与 GitHub 同步，国内直连）
 
 **[📖 3 分钟上手指引](docs/使用指引.md)** · **[❓ 常见问题](docs/FAQ.md)** · [下载哪个文件？](#-直接下载使用无需安装-python--download)
@@ -97,7 +97,7 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
 > 「按部门把表格分开发给不同的人」「多个 Excel 表格怎么合并成一个」「收上来的表怎么快速查谁没交、
 > 谁没填完」—— 那这个工具就是干这个的。
 
-**国内用户下载更快**：[Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)（与 GitHub 同步发版，免登录直下）·
+**下载**：[Gitee 直接下载](https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Windows.zip)（国内直连，免登录）· [Gitee 发行版页](https://gitee.com/Marsandsea/Excelrouter/releases/latest) ·
 国际用户：[GitHub Releases](../../releases)
 
 ---
@@ -168,11 +168,11 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
 
 普通用户不用挑文件，点这一个链接就开始下载：
 
-### 👉 [下载 ExcelRouter（Windows 免安装版，约 29 MB）](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)
+### 👉 [下载 ExcelRouter（Windows 免安装版，约 29 MB）](https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Windows.zip)
 
 下载得到 `ExcelRouter-Windows.zip`，解压到任意文件夹，双击里面的 `ExcelRouter.exe` 即可使用。
 **不需要安装 Python，不需要注册，不需要联网。**
-国内网络慢的话走 [Gitee 最新版](https://gitee.com/Marsandsea/Excelrouter/releases/latest)（免登录直下），在附件里选文件名带 `win64.zip` 的那个，内容完全一样。
+这个链接走 Gitee，国内直连、免登录。海外网络可以 [从 GitHub 下载](https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip)，内容完全一样。
 
 想自己挑产物的话，每个 Release 里还有这些：
 
