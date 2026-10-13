@@ -294,12 +294,14 @@ def _candidate(ta, tb, cols, names):
             "empty_a": sa["empty"], "empty_b": sb["empty"]}
 
 
-def _mostly_decimal(t, i):
-    """这一列多半是带小数的数（金额、比例）：当不了关键列。"""
+def _mostly_amount(t, i, name):
+    """这一列多半是数（金额、数量、比例），列名又不像工号编码：碰巧不重复也当不了关键列。"""
+    if _id_like(name):
+        return False
     vals = [_cell(row, i) for _r, row in t["rows"][:500]]
     vals = [v for v in vals if v is not None and soft_clean(v) != ""]
-    dec = sum(1 for v in vals if isinstance(v, float) and not v.is_integer())
-    return bool(vals) and dec > len(vals) / 2
+    num = sum(1 for v in vals if norm(v)[0] == "n")
+    return bool(vals) and num > len(vals) / 2
 
 
 def suggest_keys(ta, tb, limit=3):
@@ -309,7 +311,7 @@ def suggest_keys(ta, tb, limit=3):
     """
     both, _a, _b = common_columns(ta, tb)
     pool = [c for c in both if not _UNNAMED.fullmatch(c[0]) and not _not_key(c[0])
-            and not _mostly_decimal(ta, c[1])]
+            and not _mostly_amount(ta, c[1], c[0])]
     out = [x for c in pool if (x := _candidate(ta, tb, [c], [c[0]]))]
     if not out:
         spread = sorted(pool, key=lambda c: -len(key_stats(ta, [c[1]])["values"]))[:PAIR_POOL]

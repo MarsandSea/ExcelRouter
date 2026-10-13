@@ -74,13 +74,14 @@ def test_suggest_prefers_id_column_and_skips_serial(tmp_path):
     b = cp.read_table(_xlsx(tmp_path / "b.xlsx", [HEAD] + _rows()))
     keys = cp.suggest_keys(a, b)
     assert keys[0]["cols"] == ["工号"]
+    assert all(k["cols"] != ["姓名"] or k["score"] < keys[0]["score"] for k in keys)
     assert all(k["cols"] != ["序号"] for k in keys)
     assert all(k["cols"] != ["金额"] for k in keys)
 
 
 def test_suggest_falls_back_to_pair(tmp_path):
     head = ("姓名", "部门", "金额")
-    rows = [("张三", "东城", 1.5), ("张三", "西城", 2.5), ("李四", "东城", 3.5), ("李四", "西城", 4.5)]
+    rows = [("张三", "东城", 1), ("张三", "西城", 2), ("李四", "东城", 3), ("李四", "西城", 4)]   # 金额碰巧不重复也不推荐
     a = cp.read_table(_xlsx(tmp_path / "a.xlsx", [head] + rows))
     b = cp.read_table(_xlsx(tmp_path / "b.xlsx", [head] + rows))
     assert cp.suggest_keys(a, b)[0]["cols"] == ["姓名", "部门"]
@@ -171,3 +172,10 @@ def test_read_table_stops_when_too_big(tmp_path):
     else:
         raise AssertionError("应当报 TooBig")
     assert len(cp.read_table(p, max_cells=1000)["rows"]) == 100
+
+
+def test_numeric_id_column_still_suggested(tmp_path):
+    head = ("编号", "数量")
+    a = cp.read_table(_xlsx(tmp_path / "a.xlsx", [head] + [(1000 + i, i * 3) for i in range(10)]))
+    b = cp.read_table(_xlsx(tmp_path / "b.xlsx", [head] + [(1000 + i, i * 3) for i in range(10)]))
+    assert [k["cols"] for k in cp.suggest_keys(a, b)] == [["编号"]]
