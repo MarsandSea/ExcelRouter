@@ -179,3 +179,11 @@ def test_numeric_id_column_still_suggested(tmp_path):
     a = cp.read_table(_xlsx(tmp_path / "a.xlsx", [head] + [(1000 + i, i * 3) for i in range(10)]))
     b = cp.read_table(_xlsx(tmp_path / "b.xlsx", [head] + [(1000 + i, i * 3) for i in range(10)]))
     assert [k["cols"] for k in cp.suggest_keys(a, b)] == [["编号"]]
+
+
+def test_a_few_duplicate_keys_still_suggested(tmp_path):
+    rows = [(f"E{i}", i) for i in range(40)]
+    a = cp.read_table(_xlsx(tmp_path / "a.xlsx", [("工号", "数量")] + rows + [rows[0]]))
+    b = cp.read_table(_xlsx(tmp_path / "b.xlsx", [("工号", "数量")] + rows))
+    k = cp.suggest_keys(a, b)[0]
+    assert k["cols"] == ["工号"] and k["dup_a"] == 2

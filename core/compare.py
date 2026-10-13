@@ -30,7 +30,7 @@ from core.xlio import (HEAD_SCAN, _iter_sheets_ro, _legal, col_keys, col_names, 
 
 MAX_CELLS = 1_000_000    # 两张表合起来最多这么多个格子（本机读 100 万格约 26 秒，内部技能一条命令要在 70 秒内做完）
 TOL = 0.005               # 数字相差不到这么多算一样
-KEY_RATIO = 0.99          # 推荐关键列：两表都至少这么多行填了、且不重复
+KEY_RATIO = 0.95          # 推荐关键列：两表都至少这么多行填了、且不重复（个别重复的照样推荐，重复行单独列出）
 KEY_OVERLAP = 0.3         # 推荐关键列：两表的值至少这么多能对上（按少的那张表算）
 MAX_KEY_COLS = 3          # 关键列最多几列合起来
 PAIR_POOL = 8             # 单列当不了关键列时，从这么多列里试两列组合
