@@ -341,6 +341,7 @@ excel-router/
 │   ├── pdf_dist.py            # PDF 按网格加密分发（密码/水印/分发清单）
 │   ├── collect.py             # Excel 汇总 + 查收通报 + 下发标记 + 填报规则（纯 openpyxl，不导入 pandas）
 │   ├── xlio.py                # v3.0：拆分和汇总共用的读表层（表头识别、只读流式读、隐藏信息、写值、ZIP）
+│   ├── compare.py             # 两表核对：按关键列对上两张表，找新增 / 没了 / 改过的格子（纯 openpyxl；GUI 暂未接入）
 │   ├── recipe.py              # v3.0：方案（存 / 读 / 套用 / 列检查），只用标准库
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
@@ -367,6 +368,7 @@ excel-router/
     ├── test_collect_snapshot.py # 查收通报 / 催办 / 进度表全文快照 + 问题编码 + 多轮对比（v3.0）
     ├── test_fill_rules.py     # 填报规则：解析、_coerce、下发验证、查收填写有误、汇总规整（v3.0）
     ├── test_recipe.py         # 方案：往返、外来数据、列检查（v3.0）
+    ├── test_compare.py        # 两表核对：比较口径、关键列推荐、重复关键列、结果工作簿
     ├── test_xlio.py           # 读表层单测 + 「清洁度」检查（v3.0）
     ├── test_golden_split.py   # 拆分产物与 2.10.1 逐格比对（v3.0 去 pandas 的守卫）
     └── golden/                # 快照样本生成器与期望值（expected/*.json、collect/*.json）

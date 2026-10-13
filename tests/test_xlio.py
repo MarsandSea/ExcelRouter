@@ -23,7 +23,7 @@ BANNED = ("getpass", "getuser", "_INTEGRITY", "usage.jsonl", "msoffcrypto", "sec
           "faulthandler", "shutil", "subprocess", "os.remove", "os.unlink", "os.startfile", "os.system",
           "ProcessPoolExecutor", "os.environ", "getenv",
           "密码", "台账", "工资", "绩效", "薪", "敏感", "国家", "秘密", "保密", "涉密")
-LEAN_FILES = ("core/xlio.py", "core/collect.py", "core/utils.py")
+LEAN_FILES = ("core/xlio.py", "core/collect.py", "core/utils.py", "core/compare.py")
 
 
 def test_put_keeps_equals_text_as_text(tmp_path):
