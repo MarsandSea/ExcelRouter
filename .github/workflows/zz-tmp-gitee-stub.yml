@@ -1,0 +1,56 @@
+name: 一次性 / 创建 Gitee 占位跳转仓库
+
+# 用途：在 Gitee 建 excel-router 占位空仓（旧地址 404 → 改为跳转说明），
+# 让百度/AI 给出的旧链接不再吃 404。跑完即删本文件。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 创建 Gitee 仓库 excel-router（已存在则忽略）
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE }}
+        run: |
+          code=$(curl -s -o /tmp/create.json -w "%{http_code}" -X POST \
+            "https://gitee.com/api/v5/user/repos" \
+            -d "access_token=${GITEE_TOKEN}" \
+            -d "name=excel-router" \
+            --data-urlencode "description=旧地址占位：仓库已更名为 ExcelRouter（本仓库不含代码，仅作跳转）" \
+            -d "private=false" \
+            -d "auto_init=false" \
+            -d "has_issues=false" \
+            -d "has_wiki=false" \
+            -d "can_comment=true")
+          echo "create HTTP ${code}"
+          head -c 500 /tmp/create.json || true
+          echo
+
+      - name: 写入跳转 README
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE }}
+        run: |
+          set -e
+          git clone "https://oauth2:${GITEE_TOKEN}@gitee.com/Marsandsea/excel-router.git" stub
+          cd stub
+          cat > README.md <<'EOF'
+          # excel-router（旧地址）
+
+          本仓库已更名为 **[ExcelRouter](https://gitee.com/marsandsea/ExcelRouter)**，请从新地址获取。
+
+          - 仓库首页：https://gitee.com/marsandsea/ExcelRouter
+          - 直接下载（Windows 免安装版）：https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Windows.zip
+          - GitHub：https://github.com/MarsandSea/ExcelRouter
+
+          > 本仓库仅为旧地址跳转占位，不放任何代码。
+          > ExcelRouter 是把 Excel 总表按部门 / 区域 / 工号 / 姓名等任意字段批量拆分，
+          > 保留原表头格式、可二级拆到人、按组打包 ZIP 的免费开源（MIT）工具；
+          > 另有 PDF / Word / Excel / PPT 按网格设不同打开密码、PDF 加专属水印的分发能力。
+          > 全程本机处理，不联网、不上传。
+          EOF
+          git add README.md
+          git -c user.name="MarsandSea" -c user.email="MarsandSea@users.noreply.github.com" \
+            commit -m "占位跳转：指向 ExcelRouter 新地址" || echo "无改动可提交"
+          git push -u origin HEAD:master
