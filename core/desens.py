@@ -33,7 +33,7 @@ from openpyxl.packaging.core import DocumentProperties
 from openpyxl.utils import get_column_letter
 
 from core.utils import safe_filename, soft_clean
-from core.xlio import (HEAD_SCAN, _no_formulas, col_names, hidden_info, key_value, open_book, put,
+from core.xlio import (HEAD_SCAN, _iter_sheets_ro, _no_formulas, col_names, hidden_info, key_value, open_book, put,
                        resolve_header_row)
 
 SAMPLE_ROWS = 200                   # 识别时每列看前这么多行
@@ -502,6 +502,24 @@ class Job:
             scene = "自定义"
         return cls(scene, cols, d.get("notes", True) is not False, str(d.get("seed") or ""))
 
+    # ---------- 分段做：存进度 / 读回 ----------
+    def to_state(self):
+        """存成能写进 JSON 的样子（技能分几条命令做完一批时用）。含代号种子：做完后调用方应把它去掉。"""
+        return {"scene": self.scene, "columns": self.columns, "notes": self.notes, "key": self.key.hex(),
+                "fixed": self.fixed_seed, "kept": sorted(self.kept), "details": self.details,
+                "embedded": self.embedded, "hits": self.hits, "files": [list(f) for f in self.files]}
+
+    @classmethod
+    def from_state(cls, d):
+        job = cls(d.get("scene") or "自定义", d.get("columns"), d.get("notes", True), d.get("key") or "")
+        job.fixed_seed = bool(d.get("fixed"))
+        job.kept = set(d.get("kept") or [])
+        job.details = list(d.get("details") or [])
+        job.embedded = int(d.get("embedded") or 0)
+        job.hits = list(d.get("hits") or [])
+        job.files = [tuple(f) for f in d.get("files") or []]
+        return job
+
     # ---------- 识别 ----------
     def rules(self, names, samples):
         """names：列名（0 基）；samples：{0 基列号: [样本值]}。返回 {1 基列号: (类型, 处理方式)}。"""
@@ -781,6 +799,46 @@ def desens_copy(path, setting, log_fn=None):
     except Exception as e:
         log(f"  ⚠️ 脱敏报告没写成：{e}")
     return out, job
+
+
+def inspect(path, setting=None, config=None):
+    """只读识别一个表格：每个 sheet 认出哪些列、按用途怎么处理。界面和技能在开始前给用户确认用。
+
+    返回 [{sheet, hidden, header_row, rows, cols, columns: [{column, kind, method}]}]——只有列名、类型和计数，
+    没有任何格子的值。隐藏的 sheet 也列出来（hidden 为 True），结果里默认不带它。
+    """
+    config = config or {}
+    job = Job.from_config(setting or "发群通报") or Job("发群通报")
+    hid = hidden_info(path)
+    out = []
+    for title, rows in _iter_sheets_ro(path):
+        head, samples, n, width = [], {}, 0, 0
+        for i, row in enumerate(rows):
+            if i < HEAD_SCAN:
+                head.append(tuple(key_value(v) for v in row))
+            if any(v is not None and v != "" for v in row):
+                n = i + 1
+                width = max(width, len(row))
+            if i < HEAD_SCAN + SAMPLE_ROWS:
+                for c, v in enumerate(row):
+                    if v is not None:
+                        samples.setdefault(i, {})[c] = v
+        h = resolve_header_row(head, config) if head else -1
+        h = h if h > 0 else 0
+        names = col_names(head, h) if h else []
+        by_col = {}
+        for i, cells in samples.items():
+            if h < i + 1 <= h + SAMPLE_ROWS:
+                for c, v in cells.items():
+                    by_col.setdefault(c, []).append(v)
+        cols = []
+        for c, (kind, method) in sorted(job.rules(names, by_col).items()):
+            name = soft_clean(names[c - 1]) if c - 1 < len(names) else ""
+            cols.append({"column": name or get_column_letter(c), "kind": kind, "method": method})
+        state = hid.get(title, ("visible", set()))[0]
+        out.append({"sheet": title, "hidden": state != "visible", "header_row": h, "rows": max(0, n - h),
+                    "cols": width, "columns": cols})
+    return out
 
 
 def _out_dir(base):

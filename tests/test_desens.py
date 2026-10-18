@@ -287,3 +287,32 @@ def test_merge_writes_desens_copy(tmp_path):
     assert ID1 in _flat(out)                                       # 汇总表本身不动
     text = _flat(s["desens_output"])
     assert ID1 not in text and "13512340001" not in text and "张三" not in text
+
+
+def test_inspect_returns_columns_without_values(tmp_path):
+    src = tmp_path / "清单.xlsx"
+    _book(src)
+    wb = openpyxl.load_workbook(src)
+    wb.create_sheet("底稿").append(["证件号码"])
+    wb["底稿"].sheet_state = "hidden"
+    wb.save(src)
+    info = D.inspect(str(src), "发群通报")
+    first = info[0]
+    assert first["sheet"] == "清单" and first["header_row"] == 2 and first["rows"] == 3 and not first["hidden"]
+    kinds = {c["column"]: (c["kind"], c["method"]) for c in first["columns"]}
+    assert kinds["证件号码"] == ("身份证号", "mask") and kinds["客户姓名"] == ("姓名", "mask")
+    assert info[1]["hidden"]
+    inner = {c["column"]: c["method"] for c in D.inspect(str(src), "内部下发")[0]["columns"]}
+    assert inner["联系电话"] == "keep" and inner["银行卡号"] == "mask"
+    text = json.dumps(info, ensure_ascii=False, default=str)
+    assert ID1 not in text and "张三" not in text and "13512340001" not in text
+
+
+def test_job_state_round_trip_keeps_codes():
+    job = D.Job.from_config({"scene": "交给AI分析", "columns": {"备注": "clear"}})
+    job.kept.add("联系电话")
+    job.details.append({"file": "a", "sheet": "s", "column": "c", "kind": "姓名", "method": "pseudo", "cells": 2})
+    back = D.Job.from_state(json.loads(json.dumps(job.to_state())))
+    assert back.scene == job.scene and back.columns == job.columns and back.kept == {"联系电话"}
+    assert back.details == job.details and back.fixed_seed is False
+    assert D.apply_value("张三", "姓名", "pseudo", back.key) == D.apply_value("张三", "姓名", "pseudo", job.key)
