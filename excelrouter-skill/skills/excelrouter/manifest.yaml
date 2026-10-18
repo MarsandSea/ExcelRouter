@@ -16,7 +16,7 @@ name: excelrouter
 # 「excel合并」「表格汇总」不在名字里连续出现，靠 description 里的「多个 Excel 合并成一个、表格汇总」被网页搜索读到。
 # 显示名不写「文件加密」：丢掉已排第 3 的「PDF加密」，又像通用加密软件；Word/Excel/PPT 也能加密写在描述里。
 display_name: Excel拆分合并、表格拆分汇总、PDF加密分发 — ExcelRouter
-version: "3.0.0"
+version: "3.1.0"
 slug: excelrouter
 description: >
   发出去、收回来都交给 AI。拆分——总表按任意字段拆成多个文件：工资条、绩效表一人一份，
