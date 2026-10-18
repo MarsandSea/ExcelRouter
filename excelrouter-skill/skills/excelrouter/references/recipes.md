@@ -180,6 +180,28 @@ python scripts/er_merge.py --input 九月收表/ --checked --expect "城区、�
 名单也可以不在命令里写：文件夹里放一张文件名含「应交名单」的表，或用 ExcelRouter 拆分下发时
 生成的「下发记录.json」（放在文件夹或上一层），脚本会自己找。
 
+## 脱敏："客户清单要发群，把身份证号、手机号打码"
+
+```bash
+python scripts/er_desens.py --input 客户清单.xlsx --scene 发群通报 --dry-run   # 先看会怎么处理
+python scripts/er_desens.py --input 客户清单.xlsx --scene 发群通报 --open
+```
+要交给 AI 分析用 `--scene 交给AI分析`（同一个人同一个代号，还能统计）；某列另外处理加 `--set "备注:清空"`。
+
+## 脱敏："按网格拆，发下去前把证件号、银行卡号遮掉，手机号留着外呼"
+
+```bash
+python scripts/er_split.py --input 明细.xlsx --by 网格 --desens 内部下发 --open
+```
+复检没过时不打包、`ok:false`：照 `warnings` 用 `--desens-set "列名:打码"` 补上漏掉的列再拆。
+
+## 脱敏："汇总完要上报，个人信息不能带出去"
+
+```bash
+python scripts/er_merge.py --input 九月收表/ --desens 对外报送 --open
+```
+上报发 `desens_output`（`{原名}_脱敏版.xlsx`）；汇总表本身是完整的，留着自己用。
+
 ## 查收："大家在同一张总表里各填各行"
 
 ```bash

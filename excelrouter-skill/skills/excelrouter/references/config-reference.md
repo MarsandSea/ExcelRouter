@@ -29,6 +29,7 @@ dict。大多数场景用 CLI flag 就够了；需要精细控制、或者想直
 | `preserve_format` | `--fast`（取反） | `True` | 关闭后数据行只写值不保留格式。**它不省时间**（实测提速 0–5%），作用是输出不带样式的纯数值；想省时间请用 `--values` 缩小单次规模。详见 SKILL.md「关于 `--fast`」 |
 | `keep_formulas` | `--keep-formulas` | `False` | 尽量保留"同行公式"为活公式；跨行/汇总/跨表公式仍落成缓存数值。需要 `preserve_format` 同时开启才有意义 |
 | `keep_hidden` | `--keep-hidden` | `False` | v3.0。默认隐藏的 sheet 不发、隐藏列内容清空（仍隐藏）、隐藏的行照常发；`True` 时全部照样发出，隐藏列仍隐藏、sheet 变成可见 |
+| `desens` | `--desens 用途` + `--desens-set "列:方式"` | 空（不脱敏） | v3.1。拆的同时打码：用途名，或 `{"scene": 用途, "columns": {列名: mask/pseudo/generalize/clear/keep}, "notes": true}`。落盘后复检，没过就不打组 ZIP、不打总包，写「未通过复检_请勿发出.txt」；脚本返回 `ok:false`、`desens_blocked:true`。`--config` 里写 `"notes": false` 时文字里夹带的号码不处理 |
 
 ## 文件加密分发（run_pdf_dist；PDF / Word / Excel / PPT）
 

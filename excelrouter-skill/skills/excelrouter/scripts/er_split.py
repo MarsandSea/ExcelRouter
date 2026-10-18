@@ -31,6 +31,9 @@ MIT License
   # 输出直接落在 --output，不再套一层 {MMDDHHMM}结果 时间戳子目录
   python er_split.py --input 明细.xlsx --output 拆分结果 --by 部门 --no-timestamp
 
+  # 拆的同时给个人信息打码（证件号、银行卡号、手机号……），按用途处理；处理完复检，没过就不打包
+  python er_split.py --input 明细.xlsx --by 网格 --desens 内部下发
+
   # 只看会怎么拆、不真正写盘
   python er_split.py --input 明细.xlsx --output 拆分结果 --by 部门 --dry-run
 
@@ -50,14 +53,19 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
-    _join, add_recipe_args, apply_recipe_args, bootstrap, build_config, default_output_for, emit, emit_error,
-    ensure_deps, eprint, list_outputs, match_column, open_folder, save_recipe_from, sheet_headers,
+    DESENS_SCENES, _join, add_recipe_args, apply_recipe_args, bootstrap, build_config, default_output_for, emit,
+    emit_error, ensure_deps, eprint, list_outputs, match_column, open_folder, parse_desens_set, save_recipe_from,
+    sheet_headers,
 )
 
 bootstrap()
 ensure_deps()  # 必须排在下面这些 import 之前：缺包时要给人话提示 / 自动装，而不是 ImportError 堆栈
 
 from core.splitter import UNASSIGNED, run_split  # noqa: E402
+try:
+    from core import desens as D  # noqa: E402
+except ImportError:      # 技能目录里的内核还没同步到带数据脱敏的版本
+    D = None
 from _person_split import (  # noqa: E402  网格→人 二级拆分（scripts 包装层补强）
     flatten_output,
     parse_person_spec,
@@ -102,6 +110,11 @@ def main():
                      help="尽量保留同行公式（跨行/汇总/跨表公式仍会落成当前缓存数值，不会发送算错的公式）")
     ap.add_argument("--keep-hidden", action="store_true",
                     help="隐藏的 sheet 和列也照样发出（默认：隐藏的 sheet 不发，隐藏列的内容清空、仍隐藏）")
+    ap.add_argument("--desens", default="", choices=("",) + DESENS_SCENES, metavar="用途",
+                    help="拆的同时给个人信息打码，按用途处理：" + " / ".join(DESENS_SCENES)
+                         + "。处理完把结果重扫一遍，还有完整号码时不打 ZIP、不打总包")
+    ap.add_argument("--desens-set", default="",
+                    help="配合 --desens 逐列调整：「列名:处理方式、…」（打码 / 换代号 / 泛化 / 清空 / 照发）")
     ap.add_argument("--fuzzy-match", action="store_true", help="--values 按包含匹配而不是精确匹配")
     ap.add_argument("--header-mode", choices=["auto", "row", "keyword"], default="auto")
     ap.add_argument("--header-row", type=int, default=1, help="header-mode=row 时的 1 基行号")
@@ -135,6 +148,7 @@ def main():
         "id_keys": ("id_keys", _join),
         "skip_values": ("skip_values", _join),
         "value_alias_map": ("alias_json", lambda v, s: json.dumps(v, ensure_ascii=False) if v else ""),
+        "split_desens": ("desens", lambda v, s: v if v in DESENS_SCENES else ""),
     })
     recipe_extra.pop("to_person", None)          # 跟着 person_column 走
 
@@ -201,6 +215,13 @@ def main():
         )
 
     config.update(recipe_extra)                     # 方案里没有对应参数的设置（如填写列）
+    if args.desens_set and not args.desens:
+        emit_error("--desens-set 要配合 --desens 用：先说用途（如 --desens 内部下发），再逐列调整。")
+    if args.desens:
+        if D is None:
+            emit_error("技能里的 ExcelRouter 内核还没更新到带数据脱敏的版本（v3.1 起才有），请更新本技能后再用 --desens。")
+        config["desens"] = {"scene": args.desens, "columns": parse_desens_set(args.desens_set, "--desens-set"),
+                            "notes": True}
     if recipe:
         eprint(f"📋 套用方案「{recipe['name']}」")
     if not os.path.exists(config["input_path"]):
@@ -312,8 +333,20 @@ def main():
     if args.no_timestamp:
         output_path = flatten_output(output_path, config["output_path"], log_fn=eprint)
 
+    # 数据脱敏：内核落盘后复检，没过（或中途停了、没复检）就一个包都不打——ZIP 是「拿去发」的那一步
+    ds = summary.get("desens") if config.get("desens") else None
+    desens_blocked = bool(config.get("desens")) and (
+        state["stopped"] or bool(summary.get("stopped")) or not (ds or {}).get("ok"))
+    if desens_blocked:
+        why = ("中途停了，结果没有复检过" if (state["stopped"] or summary.get("stopped")) else
+               f"复检没过：还有 {(ds or {}).get('residual', 0)} 个格子有完整的号码，"
+               f"见结果目录的「{D.FAIL_NOTE if D else '未通过复检_请勿发出.txt'}」")
+        warnings.append(f"数据脱敏{why}；这次没有打 ZIP 和总包，结果请勿发出。"
+                        f"用 --desens-set \"列名:打码\" 指定漏掉的列后重拆")
+        eprint(f"⚠ {warnings[-1]}")
+
     bundle = None
-    if not args.no_zip:
+    if not args.no_zip and not desens_blocked:
         _zip_group_folders(output_path, log_fn=eprint)
         bundle = _make_bundle(output_path, resolved, log_fn=eprint)
 
@@ -322,26 +355,28 @@ def main():
     for w in after:
         eprint(f"⚠ {w}")
 
-    saved = save_recipe_from(args, config, "excel", input_name=config["input_path"])
+    saved = save_recipe_from(args, dict(config, split_desens=args.desens), "excel", input_name=config["input_path"])
     files = list_outputs(output_path)
     if bundle:  # 「拿去发」的那一个文件排第一，AI 先 present 它
         files = [bundle] + [f for f in files if f != bundle]
     opened = open_folder(output_path) if args.open else False
-    emit({"ok": True, "output_path": output_path,
+    emit({"ok": not desens_blocked, "output_path": output_path,
           "split_column_resolved": resolved,
           "summary": summary,
           "bundle_zip": bundle,
           "files_total": len(files),
           "files": files[:10],
           "message": _human_message(summary, resolved, files, output_path, opened,
-                                    state["stopped"], bundle),
+                                    state["stopped"], bundle, desens_blocked),
           "warnings": warnings,
           "opened": opened,
           "recipe": recipe["name"] if recipe else "", "recipe_notes": recipe_notes, "recipe_saved": saved,
           "person_split_by": ("wrapper" if need_wrapper_person
                               else ("vendor" if person_map else None)),
           "person_files": person_count if need_wrapper_person else None,
-          "stopped": state["stopped"]})
+          "stopped": state["stopped"], "desens_blocked": desens_blocked,
+          "next": ("告诉用户：脱敏复检没过，这次的结果先不要发出；把 message 里的原因说清楚。" if desens_blocked else
+                   "把 message 原样告诉用户（⚠ 各条都要说到），请用户打开结果文件夹查看。")})
 
 
 def _preflight_column(config):
@@ -441,7 +476,7 @@ def _make_bundle(output_path, column, log_fn=None):
     for root, _dirs, names in os.walk(output_path):
         for n in names:
             low = n.lower()
-            if low.endswith(".zip") or low.startswith("~$") or n in ("运行日志.txt", UNASSIGNED):
+            if low.endswith(".zip") or low.startswith("~$") or n in ("运行日志.txt", UNASSIGNED, *_DESENS_OWN):
                 continue   # 「请核对_无归属」是给用户自己核对的，不跟着整包发出去
             members.append(os.path.join(root, n))
     if not members:
@@ -459,6 +494,10 @@ def _make_bundle(output_path, column, log_fn=None):
     if log_fn:
         log_fn(f"📦 已打成一个总包：{os.path.basename(path)}（{len(members)} 个文件）")
     return path
+
+
+# 脱敏报告是给发件人自己看的（列名、格数、虚构示例），不进总包
+_DESENS_OWN = (D.REPORT_NAME, D.FAIL_NOTE) if D else ()
 
 
 def _result_warnings(summary, column):
@@ -479,7 +518,7 @@ def _result_warnings(summary, column):
     return out
 
 
-def _human_message(summary, column, files, output_path, opened, stopped, bundle=None):
+def _human_message(summary, column, files, output_path, opened, stopped, bundle=None, desens_blocked=False):
     """一句可以直接念给用户的话，AI 不用自己拼数字。"""
     if not summary:
         return f"已完成，结果在：{output_path}"
@@ -506,6 +545,14 @@ def _human_message(summary, column, files, output_path, opened, stopped, bundle=
         problems.append("源表里隐藏的 sheet / 列没有发出去")
     if problems:
         msg += "⚠ " + "，".join(problems) + "，详情见日志。"
+    ds = summary.get("desens")
+    if ds and not desens_blocked:
+        msg += (f"\n已按「{ds['scene']}」打码：处理 {ds['columns']} 列、{ds['cells']} 个格子"
+                + (f"，文字里夹带的号码 {ds['embedded']} 处" if ds.get("embedded") else "")
+                + f"；处理完重扫了一遍结果，没有发现完整的号码（复检通过）。明细见「{D.REPORT_NAME if D else '脱敏报告.xlsx'}」，"
+                  "示例是虚构的，不含表里的真实内容。")
+    elif desens_blocked:
+        msg += "\n⚠ 数据脱敏没有通过复检（或中途停了没复检），这次没有打包，结果请勿发出。"
     if bundle:
         size = os.path.getsize(bundle) / 1024 / 1024
         msg += (f"\n全部结果已打成一个压缩包，可以直接转发：{os.path.basename(bundle)}"

@@ -15,6 +15,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import sys
 
 
@@ -108,6 +109,27 @@ def emit_error(message, **extra):
     obj.update(extra)
     emit(obj)
     sys.exit(1)
+
+
+# ---------- 数据脱敏（v3.1）：er_desens / er_split --desens / er_merge --desens 共用 ----------
+
+DESENS_SCENES = ("发群通报", "内部下发", "交给AI分析", "对外报送")
+METHOD_WORDS = {"打码": "mask", "换代号": "pseudo", "代号": "pseudo", "泛化": "generalize", "清空": "clear",
+                "照发": "keep", "不处理": "keep", "mask": "mask", "pseudo": "pseudo", "generalize": "generalize",
+                "clear": "clear", "keep": "keep"}
+METHOD_TEXT = {"mask": "打码", "pseudo": "换代号", "generalize": "泛化", "clear": "清空", "keep": "照发"}
+
+
+def parse_desens_set(text, flag="--set"):
+    """「备注:清空、客户姓名:照发」→ {列名: 处理方式}；看不懂的写法直接报错退出。"""
+    out = {}
+    for part in [p.strip() for p in re.split(r"[、，,；;\n]+", text or "") if p.strip()]:
+        m = re.match(r"^(.+?)\s*[:：=]\s*(.+)$", part)
+        how = METHOD_WORDS.get(m.group(2).strip()) if m else None
+        if m is None or how is None:
+            emit_error(f"「{part}」看不懂。{flag} 的写法是「列名:处理方式」，处理方式只能是 打码、换代号、泛化、清空、照发。")
+        out[m.group(1).strip()] = how
+    return out
 
 
 # ---------- 方案（v3.0）：桌面版「📋 方案」存的小 JSON，技能也能读、能存，格式只有一份 ----------

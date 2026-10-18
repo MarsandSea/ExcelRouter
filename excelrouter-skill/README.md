@@ -276,6 +276,9 @@ excelrouter-skill/
 │   │   ├── _common.py        # 公共工具（sys.path 引导、默认配置、JSON 输出约定）
 │   │   ├── er_inspect.py     # 看表：字段名/取值/表头行
 │   │   ├── er_split.py       # Excel 拆分
+│   │   ├── er_merge.py       # Excel 汇总（文件夹 / 多 sheet 合成一张；--desens 另存脱敏版）
+│   │   ├── er_check.py       # 查收通报（谁没交、谁漏填）
+│   │   ├── er_desens.py      # 数据脱敏（按用途打码 / 换代号 / 清空，处理完复检）
 │   │   ├── er_pdf_dist.py    # 文件按网格加密分发（PDF / Word / Excel / PPT）
 │   │   └── vendor/core/      # ← 上游 core/ 的逐字副本，自动同步，勿手改
 │   └── references/           # 参数手册 / 场景配方 / 排查手册

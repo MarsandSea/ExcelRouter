@@ -21,6 +21,9 @@ MIT License
   # 一个文件的 12 个月份 sheet 合成一张
   python er_merge.py --input 全年明细.xlsx --open
 
+  # 汇总完另存一份脱敏版上报（个人信息整列清空、编码换代号；原汇总表不动）
+  python er_merge.py --input 九月报表/ --desens 对外报送 --open
+
   # 先查收过（er_check.py），只合交了的表，「来源」写交表人
   python er_merge.py --input 九月收表/ --checked --expect "城区、东城、西城" --open
 
@@ -41,7 +44,8 @@ T_START = time.time()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
-    add_recipe_args, apply_recipe_args, bootstrap, emit, emit_error, ensure_deps, eprint, open_folder, save_recipe_from,
+    DESENS_SCENES, add_recipe_args, apply_recipe_args, bootstrap, emit, emit_error, ensure_deps, eprint, open_folder,
+    save_recipe_from,
 )
 
 bootstrap()
@@ -49,6 +53,10 @@ ensure_deps(lite=True)  # 汇总只要 openpyxl + xlrd；必须排在 core impor
 
 from core import collect as em  # noqa: E402
 from _gather import gather, order_key  # noqa: E402
+try:
+    from core import desens as D  # noqa: E402
+except ImportError:      # 技能目录里的内核还没同步到带数据脱敏的版本
+    D = None
 
 BUDGET = 100          # 从进程启动算起，做到这么多秒就存好进度返回（宿主 120 秒掐断）
 SCAN_SECONDS = 60     # 合并前读表头的时间上限
@@ -73,6 +81,9 @@ def main():
     ap.add_argument("--by", default="", help="--checked 且输入是一张各填各行的总表时：按哪一列分人")
     ap.add_argument("--include-old-results", action="store_true",
                     help="文件夹里混着以前的拆分结果目录时也照样合（默认拦下，免得行数翻倍）")
+    ap.add_argument("--desens", default="", choices=("",) + DESENS_SCENES, metavar="用途",
+                    help="汇总完另存一份脱敏版（{原名}_脱敏版.xlsx，原汇总表不动），用途：" + " / ".join(DESENS_SCENES)
+                         + "；上报一般用 对外报送。脱敏版复检没过就不写出来")
     ap.add_argument("--restart", action="store_true", help="丢掉上次没做完的进度，从头合")
     ap.add_argument("--budget", type=float, default=BUDGET, help=argparse.SUPPRESS)   # 测试用
     add_recipe_args(ap)
@@ -86,6 +97,8 @@ def main():
         "header_row": ("header_row", lambda v, s: v if s.get("header_mode") == "row" else 0),
     })
 
+    if args.desens and D is None:
+        emit_error("技能里的 ExcelRouter 内核还没更新到带数据脱敏的版本（v3.1 起才有），请更新本技能后再用 --desens。")
     src = os.path.abspath(args.input)
     if not os.path.exists(src):
         emit_error(f"找不到「{src}」，请确认文件夹或文件的完整路径。")
@@ -160,8 +173,21 @@ def main():
     if not output:
         emit_error("这些表里没有能合并的数据。" + ("\n" + msg if msg else ""),
                    problems=state["pre_problems"])
+    desens_out, desens_info = "", None
+    if args.desens and D is not None:
+        try:
+            desens_out, job = D.desens_copy(output, args.desens, log_fn=eprint)
+            desens_info = job.summary()
+        except Exception as e:
+            warnings.append(f"脱敏版没做成：{e}（汇总表本身不受影响）")
+        if desens_info is not None:
+            msg += "\n" + _desens_message(args.desens, desens_out, desens_info)
+            if not desens_out:
+                warnings.append(f"脱敏版没通过复检，没有写出来；见「{D.FAIL_NOTE}」，汇总表本身是完整的、未脱敏的，请勿直接上报")
     saved = save_recipe_from(args, dict(cfg, collect_check=args.checked), "collect", input_name=src)
-    emit({"ok": True, "done": True, "output": output, "output_dir": out_dir, "files": [output],
+    emit({"ok": True, "done": True, "output": output, "output_dir": out_dir,
+          "files": [desens_out, output] if desens_out else [output],
+          "desens_output": desens_out, "desens": desens_info,
           "recipe": recipe["name"] if recipe else "", "recipe_notes": recipe_notes, "recipe_saved": saved,
           "summary": {"mode": state["mode"], "sources": len({s["file"] for s in merged}), "sheets_merged": len(merged),
                       "result_sheets": len(st["sheets"]), "rows": rows, "rows_written": written,
@@ -344,6 +370,16 @@ def _checked(cfg, files, bad):
         if files_mode else None
     return (sel, labels if files_mode else None, people, lines, ctx["title"],
             {k: g["required"] for k, g in groups.items()}, mode)
+
+
+def _desens_message(scene, out, info):
+    """脱敏版的一段话：写没写出来、处理了多少、提醒汇总表本身没脱敏。"""
+    if not out:
+        return (f"脱敏版（{scene}）：处理完重扫时还有 {info.get('residual', 0)} 个格子有完整的号码，没有写出来；"
+                f"见「{D.FAIL_NOTE if D else ''}」。上报请先别用汇总表本身——它是完整的、没脱敏的。")
+    return (f"脱敏版（{scene}）：{os.path.basename(out)}，处理 {info['columns']} 列、{info['cells']} 个格子"
+            + (f"，文字里夹带的号码 {info['embedded']} 处" if info.get("embedded") else "")
+            + "；重扫过一遍，没有发现完整的号码（复检通过）。上报发这一份，汇总表本身是完整的、留着自己用。")
 
 
 def _message(state, st, output, rows, written, opened):
