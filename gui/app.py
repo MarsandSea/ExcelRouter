@@ -309,7 +309,8 @@ class App(_RootBase):
         self._values_hint = None      # 勾选面板里的提示文字（随锁定/抽样状态变）
         self._warn_count = 0          # 本轮运行日志里 ⚠ 行数（完成后给「处理详情」打角标）
         self._last_summary = None     # core 收尾的 [SUMMARY] JSON（完成摘要用）
-        self._pdf_grid_rows = 0       # 映射清单网格行数（分发预览用）
+        self._parked = {}             # 切走模式时收起的上一轮结果：{模式: (露着的控件名, 状态行文字, 颜色)}
+        self._pdf_grid_rows = 0      # 映射清单网格行数（分发预览用）
         self._pdf_n_cols = 0          # 映射清单列数（分发预览用）
         self._ui_q = queue.Queue()            # 子线程 → 主线程的消息队列
         self._prog_indeterminate = False      # 进度条当前是否处于不定态动画
@@ -1703,7 +1704,7 @@ class App(_RootBase):
             self._log("💬 用得顺手或踩了坑？点「反馈建议」匿名告诉作者（1 分钟）。")
         self._summary_lbl.configure(text="\n".join(lines), text_color=C_WARN if warn else C_OK)
         self._summary_banner.configure(fg_color=("gray90", "gray20") if warn else OK_BANNER_BG)
-        self._summary_banner.grid()
+        self._show_summary_banner()
         if self._warn_count:
             self._log_btn.configure(text=self._log_btn_text())
 
@@ -1742,9 +1743,34 @@ class App(_RootBase):
         return None
 
     # ── 模式切换 ─────────────────────────────────────────
+    # ③卡片里只属于上一轮的结果控件（完成摘要、打开输出文件夹、存方案提示、复制日志）
+    _RESULT_WIDGETS = ("_summary_banner", "_open_btn", "_recipe_tip", "_copylog_btn")
+
     def _on_mode_change(self, label):
+        """切模式。上一轮的结果只属于跑它的那个模式：切走时收起、切回来原样放出。
+
+        不收起的话，拆分的完成摘要会挂在「开始分发」下面（对不上），而且③卡片被摘要
+        撑高后，上面的步骤区会被挤到几乎没有，再带着原来的滚动位置——看上去只剩第 3 步。
+        """
+        old = self._mode
         self._mode = next((k for k, v in MODE_LABELS.items() if v == label), "excel")
+        switched = old != self._mode and not self._running
+        if switched:
+            shown = tuple(n for n in self._RESULT_WIDGETS if getattr(self, n).winfo_manager())
+            for n in shown:
+                getattr(self, n).grid_remove()
+            self._parked[old] = (shown, self._run_status.cget("text"), self._run_status.cget("text_color"))
         self._apply_mode()
+        if switched and self._mode in self._parked:
+            shown, text, color = self._parked.pop(self._mode)
+            for n in shown:
+                getattr(self, n).grid()
+            self._run_status.configure(text=text, text_color=color)
+        # 切回有结果的模式就停在结果上（结果在步骤下面，等布局刷新完再拉到底），其余从头看起
+        if self._summary_banner.winfo_manager():
+            self.after(150, lambda: self._body._parent_canvas.yview_moveto(1.0))
+        else:
+            self._body._parent_canvas.yview_moveto(0)
 
     def _start_text(self):
         if self._mode == "collect":
@@ -1851,17 +1877,19 @@ class App(_RootBase):
         self._run_status.grid(row=6, column=0, padx=12, pady=(0, 2), sticky="w")
         # 完成摘要（v2.7，A4；v2.7.1 横幅化）：浅绿底圆角横幅承载「完成瞬间」的
         # 明确成功反馈——摘要内容与逻辑不变，只加视觉承载。
-        self._summary_banner = ctk.CTkFrame(card, corner_radius=10,
+        # 放在滚动区里、步骤下面（和汇总的结果卡片一样），不放进固定的③卡片：
+        # 摘要有五六行，放在③里会把上面的步骤区挤到只剩十几像素，老笔记本上看着就只剩第 3 步
+        self._summary_banner = ctk.CTkFrame(self._body, corner_radius=10,
                                             fg_color=OK_BANNER_BG)
-        self._summary_banner.grid(row=7, column=0, padx=12, pady=(0, 10), sticky="ew")
+        self._summary_banner.grid(row=1, column=0, padx=8, pady=(0, 6), sticky="ew")
         self._summary_banner.grid_remove()
         self._summary_lbl = ctk.CTkLabel(self._summary_banner, text="",
                                          font=ctk.CTkFont(size=12, weight="bold"),
                                          text_color=C_OK, anchor="w", justify="left")
         self._summary_lbl.grid(row=0, column=0, padx=14, pady=8, sticky="w")
         # 跑完后的小提示：这次的设置存成方案，下个月一键套用（v3.0）
-        self._recipe_tip = ctk.CTkFrame(card, fg_color="transparent")
-        self._recipe_tip.grid(row=8, column=0, padx=8, pady=(0, 6), sticky="w")
+        self._recipe_tip = ctk.CTkFrame(self._body, fg_color="transparent")
+        self._recipe_tip.grid(row=2, column=0, padx=4, pady=(0, 6), sticky="w")
         _flat_button(self._recipe_tip, text="📋 把这次的设置存成方案，下个月一键用", width=260, anchor="w",
                      command=self._save_recipe).pack(side="left")
         _flat_button(self._recipe_tip, text="不再提示", width=70, command=self._recipe_tip_never).pack(side="left")
@@ -1974,9 +2002,8 @@ class App(_RootBase):
         self.cfg.update(new)
         self._fill_from_recipe(rec["settings"], rec["mode"])
         self._recipe_active = rec
-        self._mode = rec["mode"]
-        self._mode_seg.set(MODE_LABELS[self._mode])
-        self._apply_mode()
+        self._mode_seg.set(MODE_LABELS[rec["mode"]])
+        self._on_mode_change(MODE_LABELS[rec["mode"]])   # 和点模式按钮走同一条路（上一轮结果跟着收起）
         self._remember_recipe(path)
         self._log(f"📋 已套用方案「{rec['name']}」（{R.MODE_NAMES[rec['mode']]}）：{R.summary(rec)}")
         for w in warns + notes:
@@ -2638,6 +2665,7 @@ class App(_RootBase):
         self._last_output = None
         self._warn_count = 0
         self._last_summary = None
+        self._parked.clear()          # 结果控件要给这一轮用了，别的模式收起的旧结果作废
         self._summary_lbl.configure(text="")
         self._summary_banner.grid_remove()
         self._recipe_tip.grid_remove()
@@ -2975,7 +3003,12 @@ class App(_RootBase):
         self._summary_banner.configure(
             fg_color=("gray90", "gray20") if has_warn else OK_BANNER_BG)
         self._summary_lbl.configure(text_color=C_WARN if has_warn else C_OK)
+        self._show_summary_banner()
+
+    def _show_summary_banner(self):
+        """露出完成摘要并把滚动区拉到底：摘要在步骤下面，不拉的话要自己往下翻才看得到。"""
         self._summary_banner.grid()
+        self.after(150, lambda: self._body._parent_canvas.yview_moveto(1.0))
 
     def _on_done(self, cfg, output_path):
         self._running = False
