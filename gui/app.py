@@ -81,8 +81,21 @@ PDF_COL_PLACEHOLDER = "（选清单后自动识别）"
 # 顶部模式切换：内部模式名 ↔ 按钮文字（ui_mode 存的是内部名；字典顺序 = 按钮顺序）。
 # 「collect」对外叫「Excel 汇总」：默认是普通的合并汇总，查收（谁没交、谁漏填）是 ② 里的可选开关
 # 「pdf」对外叫「文件加密分发」（v2.10 起也收 Word / Excel / PPT，内部名不改，ui_mode 已存进用户配置）
-MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "pdf": "文件加密分发"}
+# 「desens」对外叫「数据脱敏」（v3.1）：单独给表格打码 / 换代号 / 清空，处理完复检
+MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "desens": "数据脱敏", "pdf": "文件加密分发"}
 COL_IN_TIP = "把要合并的表放进一个文件夹再选它；选一个文件时，把它的各个 sheet 合成一张"
+DS_IN_TIP = "选一个表或一个文件夹；结果放在旁边的「脱敏结果」里，原表不改"
+# 数据脱敏的用途与处理方式（与 core/desens.py 一致；GUI 启动时不 import core）
+DS_SCENES = ("发群通报", "内部下发", "交给AI分析", "对外报送")
+DS_SCENE_TEXT = {
+    "发群通报": "认出来的个人信息全部打码：138****5678、张*、证件号留前 6 后 4、地址留到镇街",
+    "内部下发": "只遮证件号和银行卡号，手机号、姓名、地址照发（客户经理外呼要完整号码）",
+    "交给AI分析": "姓名、号码、证件、编码换成一致的代号（还能统计、关联，认不出人），地址到区县、日期到年",
+    "对外报送": "个人信息整列清空，编码换成代号",
+}
+DS_METHODS = {"mask": "打码", "pseudo": "换代号", "generalize": "泛化", "clear": "清空", "keep": "照发"}
+DS_METHOD_WORDS = {"打码": "mask", "换代号": "pseudo", "代号": "pseudo", "泛化": "generalize",
+                   "清空": "clear", "照发": "keep", "不处理": "keep"}
 EXPECT_TIP = "名字用顿号或逗号隔开，也可以点「从表格读」；留空时用下发记录，或文件夹里名为「应交名单」的表"
 # 文件加密分发能收的文件（与 core.pdf_dist.SUPPORTED_EXTS 一致；GUI 不在启动时 import core）
 DIST_EXTS = (".pdf", ".docx", ".xlsx", ".pptx", ".docm", ".xlsm", ".pptm")
@@ -272,6 +285,11 @@ class App(_RootBase):
         self._col_notice = ""         # 结果卡片里的文字（查收通报 / 汇总说明，「复制」用）
         self._col_progress = ""       # 最近一次查收的进度表路径
         self._col_merged = ""         # 最近一次汇总表路径（「打开汇总表」用）
+        self._ds_scanned = None       # 数据脱敏：最近识别过的输入（防重复 / 过期结果）
+        self._ds_info: dict[str, Any] = {}   # 最近一次识别的结果（只有列名、类型和计数）
+        self._ds_overrides: dict[str, str] = {}   # 逐列调整：{列名: 处理方式}，和用途默认一样的不记
+        self._ds_report = ""          # 最近一次脱敏报告路径
+        self._split_ds_cols = []      # 拆分：样本表里认出的个人信息列 [(列名, 类型)]
         self._pdf_paths = [p for p in self.cfg.get("pdf_input_paths", []) if os.path.exists(p)]
         self._scanned_map_path = None   # 最近扫描过的映射清单路径（防过期结果）
         self._columns = []
@@ -403,12 +421,16 @@ class App(_RootBase):
         self._collect_frame = ctk.CTkFrame(self._body, fg_color="transparent")
         self._collect_frame.grid(row=0, column=0, sticky="ew")
         self._collect_frame.grid_columnconfigure(0, weight=1)
+        self._desens_frame = ctk.CTkFrame(self._body, fg_color="transparent")
+        self._desens_frame.grid(row=0, column=0, sticky="ew")
+        self._desens_frame.grid_columnconfigure(0, weight=1)
         self._build_step_input(self._excel_frame)              # ① 选表格
         self._build_step_field(self._excel_frame)              # ② 选字段（含批量选项）
         self._build_adv_area(self._excel_frame)                # ▸ 高级设置
         self._build_pdf_step_input(self._pdf_frame)            # PDF ① 选 PDF
         self._build_pdf_step_map(self._pdf_frame)              # PDF ② 选映射清单
         self._build_collect_steps(self._collect_frame)         # 汇总 ①② + 结果卡片
+        self._build_desens_steps(self._desens_frame)           # 脱敏 ①② + 结果卡片
         self._build_action(self)                               # row 2 ③ 开始（固定底部）
         self._build_bottom(self)                               # row 3-5 工具条 / 日志 / 页脚
 
@@ -553,6 +575,25 @@ class App(_RootBase):
                                 "填错的收回来也查得出",
                      font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w", justify="left",
                      wraplength=640).grid(row=8, column=0, padx=12, pady=(0, 10), sticky="w")
+
+        # 发出去时打码（v3.1）：样本表里认出个人信息列才出现；证件号、银行卡号默认打勾
+        drow = self._split_ds_row = ctk.CTkFrame(card, fg_color="transparent")
+        drow.grid(row=9, column=0, padx=12, pady=(0, 10), sticky="ew")
+        self._split_ds_lbl = ctk.CTkLabel(drow, text="", anchor="w", justify="left", wraplength=640,
+                                          text_color=C_WARN)
+        self._split_ds_lbl.grid(row=0, column=0, columnspan=3, sticky="w")
+        self._split_ds_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(drow, text="发出去时打码", variable=self._split_ds_var,
+                        command=self._on_split_desens_toggle).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ctk.CTkLabel(drow, text="用途").grid(row=1, column=1, sticky="w", padx=(12, 6), pady=(4, 0))
+        self._split_ds_scene = ctk.CTkOptionMenu(drow, values=["内部下发", "发群通报", "交给AI分析", "对外报送"],
+                                                 width=130, command=lambda _v: self._on_split_desens_toggle())
+        self._split_ds_scene.set(self.cfg.get("split_desens") or "内部下发")
+        self._split_ds_scene.grid(row=1, column=2, sticky="w", pady=(4, 0))
+        self._split_ds_tip = ctk.CTkLabel(drow, text="", font=ctk.CTkFont(size=11), text_color=C_MUTED,
+                                          anchor="w", justify="left", wraplength=640)
+        self._split_ds_tip.grid(row=2, column=0, columnspan=3, sticky="w")
+        drow.grid_remove()
 
     def _build_batch(self, parent):
         f = ctk.CTkFrame(parent)
@@ -1413,6 +1454,10 @@ class App(_RootBase):
         self._col_merged_btns.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="w")
         ctk.CTkButton(self._col_merged_btns, text="📄 打开汇总表", width=120, fg_color=PRIMARY,
                       hover_color=PRIMARY_HOVER, command=self._open_merged).pack(side="left")
+        # 要往上报、发给外单位：另存一份个人信息清空的脱敏版（v3.1）
+        self._col_desens_btn = _ghost_button(self._col_merged_btns, text="🛡 另存脱敏版（上报用）", width=170,
+                                             command=self._desens_merged)
+        self._col_desens_btn.pack(side="left", padx=(10, 0))
         self._col_merged_btns.grid_remove()
         res.grid_remove()
         p = self._col_in_var.get().strip()
@@ -1742,6 +1787,412 @@ class App(_RootBase):
                     return c
         return None
 
+    # ── 数据脱敏（v3.1）─────────────────────────────────────
+    # ① 选表格 → ② 选用途、看识别结果、逐列调整 → ③ 开始脱敏；结果固定在输入旁的「脱敏结果」
+    def _build_desens_steps(self, parent):
+        card, _ = self._step_card(parent, 0, 1, "选择要脱敏的表格")
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.grid(row=1, column=0, padx=12, pady=(6, 2), sticky="w")
+        ctk.CTkButton(btns, text="📄 选一个 Excel 文件", width=170,
+                      command=self._pick_desens_file).pack(side="left")
+        _ghost_button(btns, text="📁 选整个文件夹", width=130,
+                      command=self._pick_desens_folder).pack(side="left", padx=(10, 0))
+        self._ds_in_var = ctk.StringVar(value=self.cfg.get("desens_input_path", ""))
+        entry = ctk.CTkEntry(card, textvariable=self._ds_in_var,
+                             placeholder_text="也可以把表格或文件夹直接拖到这里")
+        entry.grid(row=2, column=0, padx=12, pady=(6, 2), sticky="ew")
+        entry.bind("<Return>",   lambda e: self._scan_desens())
+        entry.bind("<FocusOut>", lambda e: self._scan_desens())
+        self._enable_drop(card, self._on_drop_desens)
+        self._enable_drop(entry, self._on_drop_desens)
+        self._ds_in_status = ctk.CTkLabel(
+            card, text=DS_IN_TIP, font=ctk.CTkFont(size=11), text_color=C_MUTED,
+            anchor="w", justify="left", wraplength=640)
+        self._ds_in_status.grid(row=3, column=0, padx=12, pady=(0, 10), sticky="w")
+
+        card2, _ = self._step_card(parent, 1, 2, "处理完拿去做什么")
+        scene = self.cfg.get("desens_scene") or DS_SCENES[0]
+        self._ds_scene_seg = ctk.CTkSegmentedButton(card2, values=list(DS_SCENES), command=self._on_desens_scene,
+                                                    selected_color=PRIMARY, selected_hover_color=PRIMARY_HOVER)
+        self._ds_scene_seg.set(scene if scene in DS_SCENES else DS_SCENES[0])
+        self._ds_scene_seg.grid(row=1, column=0, padx=12, pady=(6, 0), sticky="w")
+        self._ds_scene_tip = ctk.CTkLabel(card2, text=DS_SCENE_TEXT[self._ds_scene_seg.get()],
+                                          font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w",
+                                          justify="left", wraplength=640)
+        self._ds_scene_tip.grid(row=2, column=0, padx=12, pady=(2, 4), sticky="w")
+        self._ds_notes_var = ctk.BooleanVar(value=self.cfg.get("desens_notes", True) is not False)
+        ctk.CTkCheckBox(card2, text="备注等文字里夹带的手机号、证件号、银行卡号也打码",
+                        variable=self._ds_notes_var).grid(row=3, column=0, padx=12, pady=(2, 6), sticky="w")
+        self._ds_cols_title = ctk.CTkLabel(card2, text="识别结果：选好表格后这里列出认出的列，处理方式可以逐列改",
+                                           font=ctk.CTkFont(size=12, weight="bold"), anchor="w")
+        self._ds_cols_title.grid(row=4, column=0, padx=12, pady=(4, 0), sticky="w")
+        self._ds_cols_box = ctk.CTkFrame(card2, fg_color="transparent")
+        self._ds_cols_box.grid(row=5, column=0, padx=12, pady=(2, 2), sticky="ew")
+        xrow = ctk.CTkFrame(card2, fg_color="transparent")
+        xrow.grid(row=6, column=0, padx=12, pady=(4, 0), sticky="ew")
+        ctk.CTkLabel(xrow, text="其他列（选填）").pack(side="left")
+        self._ds_extra_var = ctk.StringVar(value=str(self.cfg.get("desens_columns", "") or ""))
+        ctk.CTkEntry(xrow, textvariable=self._ds_extra_var, width=360,
+                     placeholder_text="如 备注:清空、宽带账号:换代号").pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(card2, text="识别靠列名和号码校验，不保证找全：没认出的列照发，漏了的在这里写「列名:处理方式」"
+                                 "（打码 / 换代号 / 泛化 / 清空 / 照发）。处理完会把结果重新扫一遍，还有完整号码的表不写出来。",
+                     font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w", justify="left",
+                     wraplength=640).grid(row=7, column=0, padx=12, pady=(2, 10), sticky="w")
+
+        res = self._ds_result = ctk.CTkFrame(parent, corner_radius=12, border_width=1, border_color=CARD_BORDER)
+        res.grid(row=2, column=0, padx=8, pady=(0, 10), sticky="ew")
+        res.grid_columnconfigure(0, weight=1)
+        self._ds_result_title = ctk.CTkLabel(res, text="", font=ctk.CTkFont(size=14, weight="bold"))
+        self._ds_result_title.grid(row=0, column=0, padx=14, pady=(10, 2), sticky="w")
+        self._ds_result_lbl = ctk.CTkLabel(res, text="", font=ctk.CTkFont(size=12), anchor="w", justify="left",
+                                           wraplength=640)
+        self._ds_result_lbl.grid(row=1, column=0, padx=14, pady=(2, 6), sticky="w")
+        rb = ctk.CTkFrame(res, fg_color="transparent")
+        rb.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="w")
+        ctk.CTkButton(rb, text="📄 打开脱敏报告", width=130, fg_color=PRIMARY, hover_color=PRIMARY_HOVER,
+                      command=self._open_desens_report).pack(side="left")
+        res.grid_remove()
+        p = self._ds_in_var.get().strip()
+        if p and os.path.exists(p):
+            self._scan_desens()
+
+    def _pick_desens_file(self):
+        p = filedialog.askopenfilename(filetypes=[("Excel 文件", "*.xlsx *.xlsm *.xls")])
+        if p:
+            self._ds_in_var.set(os.path.normpath(p))
+            self._scan_desens()
+
+    def _pick_desens_folder(self):
+        p = filedialog.askdirectory()
+        if p:
+            self._ds_in_var.set(os.path.normpath(p))
+            self._scan_desens()
+
+    def _on_drop_desens(self, event):
+        paths = self._parse_drop_paths(getattr(event, "data", ""))
+        if self._drop_recipe(paths):
+            return
+        target = next((p for p in paths
+                       if os.path.isdir(p) or p.lower().endswith((".xlsx", ".xlsm", ".xls"))), None)
+        if target is None:
+            self._ds_in_status.configure(text="⚠ 请拖入一个 Excel 文件，或装表格的文件夹", text_color=C_WARN)
+            return
+        self._ds_in_var.set(os.path.normpath(target))
+        self._scan_desens()
+
+    def _scan_desens(self, force=False):
+        """子线程识别：数一数有几个表，拿第一个表当样本认出哪些列是个人信息（只有列名和类型，没有值）。"""
+        p = self._ds_in_var.get().strip()
+        if not p or (p == self._ds_scanned and not force):
+            return
+        self._ds_scanned = p
+        if not os.path.exists(p):
+            self._ds_info = {}
+            self._ds_in_status.configure(text="⚠ 找不到这个文件或文件夹，请检查路径", text_color=C_WARN)
+            return
+        self._ds_in_status.configure(text="正在识别…", text_color=C_MUTED)
+        setting = self._desens_setting(with_overrides=False)
+        cfg = self._header_cfg()
+
+        def work():
+            info: dict[str, Any] = {"path": p}
+            try:
+                from core import desens
+                tasks = desens._tasks(p)
+                info["n"] = len(tasks)
+                if tasks:
+                    sample = tasks[0][0]
+                    info["sample"] = os.path.basename(sample)
+                    info["sheets"] = desens.inspect(sample, setting, cfg)
+            except Exception as e:
+                info["error"] = str(e)
+            self._ui_q.put(("desens_scan", info))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _header_cfg(self):
+        mode_map = {"自动": "auto", "指定行号": "row", "关键词": "keyword"}
+        try:
+            row = int(self._hrow_var.get())
+        except (TypeError, ValueError):
+            row = 1
+        return {"header_mode": mode_map.get(self._header_seg.get(), "auto"), "header_row": row,
+                "grid_keys": self._split_list(self._grid_keys_var.get()),
+                "id_keys": self._split_list(self._id_keys_var.get())}
+
+    def _on_desens_scan(self, info):
+        if info["path"] != self._ds_in_var.get().strip():
+            return    # 结果已过期
+        self._ds_info = info
+        if info.get("error"):
+            self._ds_in_status.configure(text=f"⚠ 读不了这个位置：{info['error']}", text_color=C_WARN)
+            self._render_desens_cols()
+            return
+        n = info.get("n", 0)
+        if not n:
+            self._ds_in_status.configure(text="⚠ 这里没有表格（.xlsx / .xls）", text_color=C_WARN)
+        elif os.path.isfile(info["path"]):
+            self._ds_in_status.configure(text=f"✓ 已选择：{os.path.basename(info['path'])}；结果放在旁边的「脱敏结果」，原表不改",
+                                         text_color=C_OK)
+        else:
+            self._ds_in_status.configure(text=f"✓ 找到 {n} 个表，全部一起处理；结果放在这个文件夹里的「脱敏结果」，原表不改",
+                                         text_color=C_OK)
+        self._render_desens_cols()
+
+    def _ds_detected(self):
+        """样本表里认出的列：[(列名, 类型)]，按出现顺序去重；隐藏的 sheet 不算（结果里本来就不带）。"""
+        seen, out = set(), []
+        for s in self._ds_info.get("sheets") or []:
+            if s.get("hidden") and not self._keep_hidden_var.get():
+                continue
+            for c in s["columns"]:
+                if c["column"] not in seen:
+                    seen.add(c["column"])
+                    out.append((c["column"], c["kind"]))
+        return out
+
+    def _render_desens_cols(self):
+        """识别结果一列一行：列名 · 识别为 · 处理方式下拉（默认值随用途变；改过的记进 _ds_overrides）。"""
+        for w in self._ds_cols_box.winfo_children():
+            w.destroy()
+        cols = self._ds_detected()
+        info = self._ds_info
+        if not cols:
+            self._ds_cols_title.configure(
+                text="识别结果：没认出个人信息列（可以在下面「其他列」里自己写）" if info.get("sheets") is not None
+                else "识别结果：选好表格后这里列出认出的列，处理方式可以逐列改")
+            return
+        from core.desens import _scene_method
+        scene = self._ds_scene_seg.get()
+        more = f"（样本：{info.get('sample', '')}，其他表处理时各自重新识别）" if info.get("n", 0) > 1 else ""
+        self._ds_cols_title.configure(text=f"识别出 {len(cols)} 列{more}")
+        for i, (col, kind) in enumerate(cols[:30]):
+            ctk.CTkLabel(self._ds_cols_box, text=col, anchor="w", width=150).grid(row=i, column=0, sticky="w")
+            ctk.CTkLabel(self._ds_cols_box, text=kind, anchor="w", width=80, text_color=C_MUTED).grid(
+                row=i, column=1, sticky="w", padx=(6, 0))
+            method = self._ds_overrides.get(col) or _scene_method(scene, kind)
+            var = ctk.StringVar(value=DS_METHODS[method])
+            ctk.CTkOptionMenu(self._ds_cols_box, variable=var, values=list(DS_METHODS.values()), width=110,
+                              command=lambda label, c=col, k=kind: self._on_desens_method(c, k, label)).grid(
+                row=i, column=2, sticky="w", padx=(6, 0), pady=1)
+        if len(cols) > 30:
+            ctk.CTkLabel(self._ds_cols_box, text=f"……还有 {len(cols) - 30} 列按用途默认处理，报告里逐列写明",
+                         text_color=C_MUTED, font=ctk.CTkFont(size=11)).grid(row=31, column=0, columnspan=3, sticky="w")
+
+    def _on_desens_method(self, col, kind, label):
+        from core.desens import _scene_method
+        method = next(k for k, v in DS_METHODS.items() if v == label)
+        if method == _scene_method(self._ds_scene_seg.get(), kind):
+            self._ds_overrides.pop(col, None)      # 改回和用途一样，就不算单独调整
+        else:
+            self._ds_overrides[col] = method
+
+    def _on_desens_scene(self, label):
+        self._ds_scene_tip.configure(text=DS_SCENE_TEXT.get(label, ""))
+        self._ds_overrides = {}                    # 换了用途：逐列调整按新用途重来，免得留着旧用途的选择
+        self._render_desens_cols()
+        self._ds_result.grid_remove()
+
+    def _parse_desens_extra(self):
+        """「备注:清空、宽带账号:换代号」→ ({列名: 处理方式}, 看不懂的几段)。"""
+        out, bad = {}, []
+        for part in [x.strip() for x in re.split(r"[、，,；;\n]+", self._ds_extra_var.get()) if x.strip()]:
+            m = re.match(r"^(.+?)\s*[:：=]\s*(.+)$", part)
+            how = DS_METHOD_WORDS.get(m.group(2).strip()) if m else None
+            if m is None or how is None:
+                bad.append(part)
+            else:
+                out[m.group(1).strip()] = how
+        return out, bad
+
+    def _desens_setting(self, with_overrides=True):
+        cols = {}
+        if with_overrides:
+            extra, _bad = self._parse_desens_extra()
+            cols = dict(extra, **self._ds_overrides)
+        return {"scene": self._ds_scene_seg.get(), "columns": cols, "notes": self._ds_notes_var.get()}
+
+    def _start_desens(self):
+        p = self._ds_in_var.get().strip()
+        if not p or not os.path.exists(p):
+            messagebox.showwarning("先选择表格", "请先在第 ① 步选择要脱敏的 Excel 文件或文件夹。")
+            return
+        _extra, bad = self._parse_desens_extra()
+        if bad:
+            messagebox.showwarning("「其他列」看不懂",
+                                   f"这几段看不懂：{'、'.join(bad[:3])}\n\n写法是「列名:处理方式」，处理方式只能是"
+                                   "打码、换代号、泛化、清空、照发，多个用顿号隔开。")
+            return
+        locks = self._find_open_locks(p)
+        if locks:
+            shown = "、".join(locks[:3]) + (" 等" if len(locks) > 3 else "")
+            if not messagebox.askyesno(
+                    "文件正被打开",
+                    f"检测到以下文件正被 Excel/WPS 打开：{shown}\n"
+                    "读到的是「打开前保存的内容」，刚改的不会算进去。\n\n建议先关闭这些文件。仍要继续吗？"):
+                return
+        cfg = self._collect_config()
+        run_cfg = dict(self._header_cfg(), input_path=p, desens=self._desens_setting(),
+                       keep_hidden=self._keep_hidden_var.get())
+        self._enter_running("⏳ 正在脱敏…", "已开始，正在读取表格…")
+        self._ds_result.grid_remove()
+
+        def run():
+            try:
+                from core.desens import run_desens
+                output_path = run_desens(run_cfg,
+                                         log_fn=lambda m: self._ui_q.put(("log", m)),
+                                         progress_fn=lambda v: self._ui_q.put(("progress", v)),
+                                         stop_flag=lambda: self._stop_flag)
+            except Exception as e:
+                self._ui_q.put(("log", f"\n❌ 运行出错：{e}"))
+                output_path = None
+            self._ui_q.put(("done", (cfg, output_path)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_desens_done(self, cfg, output_path):
+        s = self._last_summary or {}
+        if not output_path or s.get("mode") != "desens":
+            self._run_status.configure(
+                text="❌ 没有完成：原因见下方「处理详情」；可点「复制日志」连同反馈一起发给作者", text_color=C_ERR)
+            self._copylog_btn.grid()
+            self._toggle_log(show=True)
+            return
+        self._last_output = output_path
+        self._ds_report = s.get("report", "")
+        self._open_btn.grid()
+        try:
+            save_config(cfg)
+        except Exception:
+            pass
+        ok, blocked = s.get("ok", False), s.get("blocked", 0)
+        lines = [f"🛡 {s.get('files', 0)} 个表写进了结果 · 处理 {s.get('columns', 0)} 列、{s.get('cells', 0)} 个格子"
+                 + (f" · 文字里夹带的号码 {s['embedded']} 处" if s.get("embedded") else "")]
+        if s.get("stopped"):
+            lines.append("⏹ 中途停了：处理完的表已写进结果，没处理的不在里面")
+        if ok:
+            lines.append("✅ 复检通过：处理过的类型里没有发现完整的号码")
+        else:
+            lines.append(f"❌ {blocked} 个表没通过复检（还有完整的号码），没有写出来；"
+                         "结果文件夹里的「未通过复检_请勿发出.txt」写了是哪列，在「其他列」里指定后再跑一次")
+        if s.get("failed_files"):
+            lines.append(f"⚠ {s['failed_files']} 个表没处理成（点「处理详情」看原因）")
+        lines.append(f"📁 {output_path}")
+        warn = not ok or bool(s.get("failed_files")) or bool(s.get("stopped"))
+        self._ds_result_title.configure(text="✅ 脱敏完成" if not warn else "⚠ 脱敏完成，但有表没写出来")
+        self._ds_result_lbl.configure(
+            text="「脱敏报告.xlsx」逐列写了识别为什么、怎么处理、处理了几格（示例是虚构的）；"
+                 "批注、图片、图表、文档属性没有带进结果。打码不可逆，原表请自己留好。")
+        self._ds_result.grid()
+        self._summary_lbl.configure(text="\n".join(lines), text_color=C_WARN if warn else C_OK)
+        self._summary_banner.configure(fg_color=("gray90", "gray20") if warn else OK_BANNER_BG)
+        self._show_summary_banner()
+        self._run_status.configure(text="✅ 脱敏完成！点「打开输出文件夹」查看" if not warn else
+                                   "⚠ 有表没通过复检，没有写出来，详见下方", text_color=C_WARN if warn else C_OK)
+        if not warn:
+            self._log("💬 用得顺手或踩了坑？点「反馈建议」匿名告诉作者（1 分钟）。")
+            self._offer_recipe(cfg)
+
+    def _open_desens_report(self):
+        p = self._ds_report
+        if not p or not os.path.exists(p):
+            self._run_status.configure(text="⚠ 脱敏报告不在了，请重新跑一次", text_color=C_WARN)
+            return
+        if not open_folder(p):
+            self._run_status.configure(text=f"⚠ 打不开脱敏报告，文件在：{p}", text_color=C_WARN)
+
+    # 拆分 ② 卡片里的「发出去时打码」：识别到个人信息列才出现，证件号、银行卡号默认打勾
+    def _scan_split_desens(self, tpl_path, p):
+        if not tpl_path:
+            self._split_ds_row.grid_remove()
+            return
+        cfg = self._header_cfg()
+
+        def work():
+            cols = []
+            try:
+                from core.desens import inspect
+                for s in inspect(tpl_path, "内部下发", cfg):
+                    if not s["hidden"]:
+                        cols += [(c["column"], c["kind"]) for c in s["columns"]]
+            except Exception:
+                cols = []
+            self._ui_q.put(("split_desens", (p, list(dict.fromkeys(cols)))))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_split_desens(self, payload):
+        p, cols = payload
+        if p != self._input_var.get().strip():
+            return
+        self._split_ds_cols = cols
+        if not cols:
+            self._split_ds_row.grid_remove()
+            return
+        shown = "、".join(f"{c}（{k}）" if c != k else c for c, k in cols[:4]) + (" 等" if len(cols) > 4 else "")
+        self._split_ds_lbl.configure(text=f"🛡 发现个人信息列：{shown}")
+        strong = any(k in ("身份证号", "银行卡号") for _c, k in cols)
+        rec = self._recipe_active if (self._recipe_active or {}).get("mode") == "excel" else None
+        want = (rec or {}).get("settings", {}).get("split_desens") if rec else None
+        if want is not None:
+            self._split_ds_var.set(bool(want))
+            if want:
+                self._split_ds_scene.set(want)
+        else:
+            self._split_ds_var.set(strong)
+        self._split_ds_row.grid()
+        self._on_split_desens_toggle()
+
+    def _on_split_desens_toggle(self):
+        on = self._split_ds_var.get()
+        self._split_ds_scene.configure(state="normal" if on else "disabled")
+        scene = self._split_ds_scene.get()
+        self._split_ds_tip.configure(
+            text=(DS_SCENE_TEXT.get(scene, "") + "；拆完复检，还有完整号码就不打 ZIP") if on else
+            "不打码：拆出去的表里是完整的号码。要打码就勾上（发群用就把用途选成「发群通报」）")
+
+    def _split_desens_value(self):
+        """拆分时的 config['desens']：没出现提示行、或没勾上都是空（不脱敏，行为和以前一样）。"""
+        if not self._split_ds_cols or not self._split_ds_var.get():
+            return ""
+        return self._split_ds_scene.get()
+
+    def _desens_merged(self):
+        """汇总完另存脱敏版（默认「对外报送」：个人信息整列清空）。原汇总表不动。"""
+        p = self._col_merged
+        if not p or not os.path.exists(p):
+            self._run_status.configure(text="⚠ 汇总表不在了，请重新汇总一次", text_color=C_WARN)
+            return
+        self._col_desens_btn.configure(state="disabled")
+        self._run_status.configure(text="⏳ 正在生成脱敏版…", text_color=C_MUTED)
+
+        def work():
+            try:
+                from core.desens import desens_copy
+                out, job = desens_copy(p, "对外报送", lambda m: self._ui_q.put(("log", m)))
+                res = (out, job.summary())
+            except Exception as e:
+                self._ui_q.put(("log", f"❌ 脱敏版没生成：{e}"))
+                res = ("", None)
+            self._ui_q.put(("desens_copy", res))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_desens_copy(self, res):
+        out, s = res
+        self._col_desens_btn.configure(state="normal")
+        if out:
+            self._run_status.configure(
+                text=f"✅ 脱敏版已另存：{os.path.basename(out)}（个人信息整列清空，复检通过），旁边有脱敏报告",
+                text_color=C_OK)
+        elif s:
+            self._run_status.configure(text="⚠ 脱敏版没通过复检，没有写出来；汇总结果里的「未通过复检_请勿发出.txt」写了是哪列",
+                                       text_color=C_WARN)
+        else:
+            self._run_status.configure(text="❌ 脱敏版没生成，原因见「处理详情」", text_color=C_ERR)
+            self._toggle_log(show=True)
+
     # ── 模式切换 ─────────────────────────────────────────
     # ③卡片里只属于上一轮的结果控件（完成摘要、打开输出文件夹、存方案提示、复制日志）
     _RESULT_WIDGETS = ("_summary_banner", "_open_btn", "_recipe_tip", "_copylog_btn")
@@ -1775,15 +2226,15 @@ class App(_RootBase):
     def _start_text(self):
         if self._mode == "collect":
             return "🔍 查收（看谁没交、谁漏填）" if self._col_check_var.get() else "▶ 开始汇总"
-        return {"pdf": "🔐 开始分发"}.get(self._mode, "▶ 开始拆分")
+        return {"pdf": "🔐 开始分发", "desens": "🛡 开始脱敏"}.get(self._mode, "▶ 开始拆分")
 
     def _apply_mode(self):
         """按当前模式显示对应步骤区并更新③卡片文案；运行中禁止切换按钮已够复杂，
         简单起见运行中也允许切界面，但开始按钮在运行中本来就是禁用态。"""
-        for fr in (self._excel_frame, self._pdf_frame, self._collect_frame):
+        for fr in (self._excel_frame, self._pdf_frame, self._collect_frame, self._desens_frame):
             fr.grid_remove()
         # Excel 汇总的结果固定放在输入旁的「汇总结果」：收起保存位置；拆分速度只有拆分模式有意义
-        for w, show in ((self._out_row, self._mode != "collect"),
+        for w, show in ((self._out_row, self._mode not in ("collect", "desens")),
                         (self._speed_row, self._mode == "excel"),
                         (self._speed_hint, self._mode == "excel")):
             if show:
@@ -1800,13 +2251,22 @@ class App(_RootBase):
                     text="收回几份就点一次「查收」；交齐后在结果里点「汇总成一张」" if check else
                     "选好表格直接点「开始汇总」：同一套模板的表合成一张，每行标上来自哪个文件，列顺序不同也能对齐",
                     text_color=C_MUTED)
+        elif self._mode == "desens":
+            self._desens_frame.grid()
+            self._action_title.configure(text="开始脱敏")
+            if not self._running:
+                self._start_btn.configure(text="🛡 开始脱敏")
+                self._run_status.configure(
+                    text="选好表格和用途后点「开始脱敏」：结果放在表格旁边的「脱敏结果」，原表不改，处理完自动复检",
+                    text_color=C_MUTED)
         elif self._mode == "pdf":
             self._pdf_frame.grid()
             self._action_title.configure(text="开始分发")
             if not self._running:
                 self._start_btn.configure(text="🔐 开始分发")
                 self._run_status.configure(
-                    text="完成 ① ② 后点「开始分发」；每个网格生成一份带专属密码 / 水印的副本，并输出分发清单",
+                    text="完成 ① ② 后点「开始分发」；每个网格生成一份带专属密码 / 水印的副本，并输出分发清单。"
+                         "只是个别列有号码、证件号？先用「数据脱敏」打码，发出去就不用再发密码",
                     text_color=C_MUTED)
         else:
             self._excel_frame.grid()
@@ -1937,6 +2397,8 @@ class App(_RootBase):
     def _recipe_input_name(self):
         if self._mode == "collect":
             return self._col_in_var.get().strip()
+        if self._mode == "desens":
+            return self._ds_in_var.get().strip()
         if self._mode == "pdf":
             return self._pdf_map_var.get().strip()
         return self._input_var.get().strip()
@@ -2013,6 +2475,10 @@ class App(_RootBase):
             self._on_columns(self._columns)          # 已经选了表：当场检查方案里的字段在不在
         elif rec["mode"] == "excel":
             msg += "：现在选这个月的表格就行"
+        elif rec["mode"] == "desens":
+            msg += "：选这次要脱敏的表格"
+            if self._ds_info:
+                self._render_desens_cols()
         elif rec["mode"] == "collect":
             msg += "：选收回来的文件夹，截止时间请重新填"
             p = self._col_in_var.get().strip()
@@ -2059,7 +2525,22 @@ class App(_RootBase):
             if has("fill_columns"):
                 self._fill_var.set(st["fill_columns"])
             self._due_var.set("")
-        if mode in ("excel", "collect"):
+            if has("split_desens") and self._split_ds_cols:
+                self._split_ds_var.set(bool(st["split_desens"]))
+                if st["split_desens"]:
+                    self._split_ds_scene.set(st["split_desens"])
+                self._on_split_desens_toggle()
+        if mode == "desens":
+            if has("desens_scene") and st["desens_scene"] in DS_SCENES:
+                self._ds_scene_seg.set(st["desens_scene"])
+                self._on_desens_scene(st["desens_scene"])
+            if has("desens_notes"):
+                self._ds_notes_var.set(st["desens_notes"])
+            if has("desens_columns"):
+                self._ds_extra_var.set(st["desens_columns"])
+            if has("keep_hidden"):
+                self._keep_hidden_var.set(st["keep_hidden"])
+        if mode in ("excel", "collect", "desens"):
             if has("header_mode"):
                 label = {"auto": "自动", "row": "指定行号", "keyword": "关键词"}[st["header_mode"]]
                 self._header_seg.set(label)
@@ -2367,6 +2848,8 @@ class App(_RootBase):
         else:
             self._set_in_status(f"✓ 已选择：{name}{size_txt}{heavy}", C_OK)
         self._on_columns(cols, tpl_name)
+        self._split_ds_cols = []
+        self._scan_split_desens(tpl_full, p)
 
     def _on_columns(self, cols, tpl_name=None):
         self._columns = cols
@@ -2532,6 +3015,11 @@ class App(_RootBase):
             "collect_check": self._col_check_var.get(),
             "fill_columns": self._fill_var.get().strip(),
             "due": self._due_var.get().strip(),
+            "split_desens": self._split_desens_value(),
+            "desens_input_path": self._ds_in_var.get().strip(),
+            "desens_scene": self._ds_scene_seg.get(),
+            "desens_notes": self._ds_notes_var.get(),
+            "desens_columns": self._ds_extra_var.get().strip(),
             # 界面个性化键随每次保存透传，避免跑一次成功后丢失（与 pdf 水印参数同理）
             "ui_scale": self.cfg.get("ui_scale", 100),
             "window_geometry": self.cfg.get("window_geometry", ""),
@@ -2593,6 +3081,9 @@ class App(_RootBase):
         scanall: Any = _MISSING
         scanall_prog: Any = _MISSING
         col_scan: Any = _MISSING
+        ds_scan: Any = _MISSING
+        split_ds: Any = _MISSING
+        ds_copy: Any = _MISSING
         try:
             while True:
                 kind, payload = self._ui_q.get_nowait()
@@ -2614,6 +3105,12 @@ class App(_RootBase):
                     scanall_prog = payload
                 elif kind == "collect_scan":
                     col_scan = payload
+                elif kind == "desens_scan":
+                    ds_scan = payload
+                elif kind == "split_desens":
+                    split_ds = payload
+                elif kind == "desens_copy":
+                    ds_copy = payload
         except queue.Empty:
             pass
         if logs:
@@ -2654,6 +3151,12 @@ class App(_RootBase):
             self._on_scan_all(scanall)
         if col_scan is not _MISSING:
             self._on_collect_scan(col_scan)
+        if ds_scan is not _MISSING:
+            self._on_desens_scan(ds_scan)
+        if split_ds is not _MISSING:
+            self._on_split_desens(split_ds)
+        if ds_copy is not _MISSING:
+            self._on_desens_copy(ds_copy)
         if done is not _MISSING:
             self._on_done(*done)
         self.after(100, self._pump_ui)
@@ -2762,7 +3265,10 @@ class App(_RootBase):
             return self._start_pdf()
         if self._mode == "collect":
             return self._start_collect("check" if self._col_check_var.get() else "merge")
+        if self._mode == "desens":
+            return self._start_desens()
         cfg = self._collect_config()
+        cfg["desens"] = cfg["split_desens"]       # 拆分时顺带脱敏：空 = 不脱敏，和以前一样
         if not cfg["input_path"] or not os.path.exists(cfg["input_path"]):
             messagebox.showwarning("先选择表格", "请先在第 ① 步选择要拆的 Excel 文件或文件夹。")
             return
@@ -2992,6 +3498,15 @@ class App(_RootBase):
                 if s.get("groups") == 1 and not s.get("stopped") and not self._split_list(self._selvals_var.get()):
                     lines.append("⚠ 只拆出 1 组：每一行的拆分字段都一样，可能选错了字段")
                     has_warn = True
+                d = s.get("desens")
+                if d:
+                    if d.get("ok"):
+                        lines.append(f"🛡 打码（{d['scene']}）：{d['columns']} 列、{d['cells']} 个格子；复检通过，"
+                                     "脱敏报告在结果文件夹里")
+                    else:
+                        lines.append(f"❌ 复检没通过：还有 {d.get('residual', 0)} 个格子有完整的号码，没有打 ZIP；"
+                                     "见结果里的「未通过复检_请勿发出.txt」，这批先别发")
+                        has_warn = True
                 if s.get("issued"):
                     lines.append("✍️ 已标出填写列并写了下发记录；收回来后切到「Excel 汇总」，选回收文件夹点「查收」"
                              "（下发记录已自动带上）")
@@ -3021,6 +3536,9 @@ class App(_RootBase):
             self._on_collect_done(cfg, output_path)
             if output_path and not self._stop_flag:
                 self._offer_recipe(cfg)
+            return
+        if cfg.get("ui_mode") == "desens":
+            self._on_desens_done(cfg, output_path)
             return
         if output_path:
             self._last_output = output_path

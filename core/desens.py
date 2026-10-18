@@ -776,9 +776,7 @@ def desens_copy(path, setting, log_fn=None):
     先在内存里处理、复检，过了才写出去。返回 (脱敏版路径，没写出来是 "", Job)。
     """
     log = log_fn or (lambda m: None)
-    job = Job.from_config(setting or "对外报送")
-    if job is None:
-        job = Job.from_config("对外报送")
+    job = Job.from_config(setting or "对外报送") or Job("对外报送")
     stem = os.path.splitext(path)[0]
     name = os.path.basename(stem) + "_脱敏版.xlsx"
     data, _n = desens_book(job, path, name, None, log)
@@ -876,7 +874,7 @@ def run_desens(config, log_fn=None, progress_fn=None, stop_flag=None):
     每个文件先在内存里处理、复检，过了才写出去；没过的不写，并写「未通过复检_请勿发出.txt」。返回结果文件夹。
     """
     log = log_fn or (lambda m: None)
-    job = Job.from_config(config.get("desens") or "发群通报")
+    job = Job.from_config(config.get("desens") or "发群通报") or Job("发群通报")
     input_path = config["input_path"]
     base = os.path.dirname(input_path) if os.path.isfile(input_path) else input_path
     out = _out_dir(base)

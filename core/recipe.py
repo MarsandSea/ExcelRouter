@@ -33,24 +33,29 @@ DEFAULTS = {
     "pdf_grid_column": "", "pdf_password_column": "", "pdf_receiver_column": "", "pdf_encrypt": True,
     "pdf_watermark": True, "pdf_watermark_text": "{grid} {date}", "pdf_watermark_opacity": 0.15,
     "pdf_watermark_angle": 45,
+    "split_desens": "", "desens_scene": "发群通报", "desens_notes": True, "desens_columns": "",
 }
 RECIPE_KEYS = {
     "excel": ["split_column", "selected_values", "header_mode", "header_row", "grid_keys", "id_keys", "to_person",
               "person_column", "person_file_filter", "make_zip", "merge_across_files", "preserve_format",
-              "keep_formulas", "keep_hidden", "exact_match", "value_alias_map", "skip_values", "fill_columns"],
+              "keep_formulas", "keep_hidden", "exact_match", "value_alias_map", "skip_values", "fill_columns",
+              "split_desens"],
     "collect": ["collect_check", "collect_expect", "collect_required", "collect_by", "collect_title",
                 "header_mode", "header_row"],
     "pdf": ["pdf_grid_column", "pdf_password_column", "pdf_receiver_column", "pdf_encrypt", "pdf_watermark",
             "pdf_watermark_text", "pdf_watermark_opacity", "pdf_watermark_angle"],
+    "desens": ["desens_scene", "desens_notes", "desens_columns", "keep_hidden", "header_mode", "header_row"],
 }
-MODE_NAMES = {"excel": "Excel 拆分", "collect": "Excel 汇总", "pdf": "文件加密分发"}
+MODE_NAMES = {"excel": "Excel 拆分", "collect": "Excel 汇总", "desens": "数据脱敏", "pdf": "文件加密分发"}
 # 套用后清空的键：每次都不一样（截止时间）或者只属于上一次（下发记录）
-CLEAR_ON_APPLY = {"excel": ("due",), "collect": ("collect_due", "collect_record"), "pdf": ()}
+CLEAR_ON_APPLY = {"excel": ("due",), "collect": ("collect_due", "collect_record"), "desens": (), "pdf": ()}
 _RANGES = {"header_row": (1, 1000), "pdf_watermark_opacity": (0.0, 1.0), "pdf_watermark_angle": (-360, 360)}
-_CHOICES = {"header_mode": ("auto", "row", "keyword")}
+_SCENES = ("发群通报", "内部下发", "交给AI分析", "对外报送")      # 与 core/desens.py 的用途一致
+_CHOICES = {"header_mode": ("auto", "row", "keyword"), "desens_scene": _SCENES + ("自定义",),
+            "split_desens": ("",) + _SCENES}
 # 套用时要在表里找得到的列：(键, 说给人听的名字, 只在这个键为真时才查)
 _COLUMN_KEYS = {"excel": [("split_column", "拆分字段", None), ("person_column", "到人字段", "to_person")],
-                "collect": [("collect_by", "按哪一列分人", None)], "pdf": []}
+                "collect": [("collect_by", "按哪一列分人", None)], "desens": [], "pdf": []}
 
 
 class RecipeError(ValueError):
@@ -222,6 +227,12 @@ def summary(recipe):
     if s.get("collect_expect"):
         from core.collect import split_names
         bits.append(f"应交名单 {len(split_names(s['collect_expect']))} 个")
+    if recipe.get("mode") == "desens" and s.get("desens_scene"):
+        bits.append(f"用途 = {s['desens_scene']}")
+    if s.get("desens_columns"):
+        bits.append(f"逐列调整 = {s['desens_columns']}")
+    if s.get("split_desens"):
+        bits.append(f"发出去时打码 = {s['split_desens']}")
     return "；".join(bits) or "（用默认设置）"
 
 

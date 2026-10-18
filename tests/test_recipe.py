@@ -87,3 +87,15 @@ def test_check_columns():
     assert any("不太一样" in x for x in w)
     no_person = R.make_recipe(dict(CFG, to_person=False), "excel", "x")
     assert not any("到人" in x for x in R.check_columns(no_person, ["网格"]))
+
+
+def test_desens_recipe_round_trip_and_choices(tmp_path):
+    cfg = dict(CFG, desens_scene="交给AI分析", desens_notes=False, desens_columns="备注:清空", split_desens="内部下发")
+    r = R.make_recipe(cfg, "desens", "回访给 AI")
+    assert r["settings"] == {"desens_scene": "交给AI分析", "desens_notes": False, "desens_columns": "备注:清空",
+                             "header_mode": "row", "header_row": 3}
+    assert "用途 = 交给AI分析" in R.summary(r) and "逐列调整 = 备注:清空" in R.summary(r)
+    assert R.make_recipe(cfg, "excel", "x")["settings"]["split_desens"] == "内部下发"
+    path = R.save_recipe(dict(r, settings=dict(r["settings"], desens_scene="随便")), str(tmp_path / "a.json"))
+    loaded, warns = R.load_recipe(path, mode="desens")
+    assert "desens_scene" not in loaded["settings"] and warns
