@@ -656,7 +656,10 @@ npx pyright --pythonpath "$(py -c 'import sys; print(sys.executable)')"
                            # 类型检查（范围 gui/+main.py；必须传 --pythonpath，
                            # 因为 PATH 里的 python 是商店 stub，pyright 自己找不到依赖）
 py -m py_compile main.py core/*.py gui/*.py
-pytest -q
+pytest -q                  # 只收 tests/（pytest.ini 的 testpaths）
+py -m pytest -q excelrouter-skill/skills/excelrouter/tests
+                           # 技能测试必须单独跑：它把 vendor/ 插到 sys.path 最前，
+                           # 和桌面版测试同一进程会让后者 import 到 vendor 里的旧 core
 ```
 
 GUI 需要图形环境；无显示器时只做静态检查 + `pytest -q`。
