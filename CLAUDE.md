@@ -11,7 +11,32 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v3.0.0**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+当前版本 **v3.1.0**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+
+> **v3.1.0：数据脱敏（2026-10）**。设计与口径见 `docs/数据脱敏-设计方案.md`（GB/T 37964 去标识化技术对应）。
+> ① **内核 `core/desens.py`**（规矩同 collect / xlio：不导入 pandas、不用 shutil、不读环境变量、不删文件、不起进程、
+> 避开内部禁用字眼——内部技能原样带上它）：按**用途**定规则（内部下发 / 发群通报 / 交给AI分析 / 对外报送 / 自定义），
+> 处理方式 mask / pseudo（HMAC 代号）/ generalize / clear / keep，可逐列覆盖；文字里夹带的号码按校验就地打码。
+> `inspect()` 只读识别各列（**只回列名、类型、处理方式，不回值**）；`Job.to_state()/from_state()` 让内部技能分段续做。
+> ② **复检是硬闸**：拆分落盘后重扫，没洗干净**不打 ZIP**、写「未通过复检_请勿发出.txt」，`[SUMMARY].desens.ok=false`；
+> 单独脱敏 / 汇总脱敏版先在内存复检，**过了才落盘**。中途停了没复检也不打包。报告、日志、[SUMMARY] 里**没有任何真实值**
+> （报告示例是虚构的）。拆分时顺序固定：先按真实值分组 → 清隐藏列 → 脱敏；脱敏时「保留公式」不生效。
+> ③ **GUI 第四个模式「数据脱敏」**（`MODE_LABELS` 四段：Excel 拆分 / Excel 汇总 / 数据脱敏 / 文件加密分发）：
+> `_desens_frame` 由 `_build_desens_steps` 搭（①表格或文件夹 ②用途段选 + 文字夹带开关 + 识别结果逐列下拉 + 「其他列」
+> + 结果卡片「打开脱敏报告」）；识别在子线程跑 `desens._tasks` + `inspect`（泵消息 `desens_scan`），
+> 输入另存 `desens_input_path`，`_out_row` 收起。拆分 ② 卡片 `_split_ds_row`：样本表认出个人信息列才出现
+> 「发出去时打码」，有身份证号 / 银行卡号默认勾上（`split_desens` = 用途或空，`_start` 里转成 `cfg["desens"]`）。
+> 汇总结果卡片「🛡 另存脱敏版（上报用）」走 `desens_copy`（泵消息 `desens_copy`）。**GUI 启动不 import core**，
+> 所以 `DS_SCENES` / `DS_METHODS` 在 app.py 里另抄一份，改用途名要两边一起改。
+> ④ **方案**：新模式 `desens`（键 desens_scene / desens_notes / desens_columns / keep_hidden / header_mode / header_row），
+> 拆分模式多 `split_desens`。
+> ⑤ **技能**：`er_desens.py`（`--dry-run` 先看、`--set` 逐列、`--scene 自定义`），`er_split.py --desens 用途 [--desens-set]`
+> （内核复检没过或停了时**包装层也不打组 ZIP、不打总包**，返回 `ok:false` + `desens_blocked`；脱敏报告不进总包），
+> `er_merge.py --desens 用途` 另存脱敏版。`--desens-set` 解析在 `_common.parse_desens_set`。技能测试
+> `tests/test_desens.py` 在 vendor 没有 desens.py（打 tag 同步前）时整份跳过——**本地验证要拿 core 同步到一份
+> 技能副本里跑**，别直接改 vendor。
+> ⑥ 不做：图片 / PDF / Word 脱敏、表头上方标题 / sheet 名 / 文件名、还原回填（第 4 期）、识别一个不漏的承诺。
+> 品牌特性行「保留原格式 · 多表合并汇总 · 查收通报 · 文件加密分发」**没加「数据脱敏」**——品牌文案要作者定。
 
 > **v3.0.0：拆分去掉 pandas、隐藏内容不外发、行数对账、填报规则、查收问题编码、方案（2026-10）**。
 > ① **拆分全程 openpyxl**：新模块 `core/xlio.py` 是拆分和汇总共用的读表层（表头识别搬到这里，splitter 再导出原名，
@@ -343,7 +368,7 @@ excel-router/
 │   ├── xlio.py                # v3.0：拆分和汇总共用的读表层（表头识别、只读流式读、隐藏信息、写值、ZIP）
 │   ├── compare.py             # 两表核对：按关键列对上两张表，找新增 / 没了 / 改过的格子（纯 openpyxl；GUI 暂未接入）
 │   ├── recipe.py              # v3.0：方案（存 / 读 / 套用 / 列检查），只用标准库
-│   ├── desens.py              # v3.1：数据脱敏（识别 / 打码 / 代号 / 泛化 / 清空 / 复检 / 报告；纯 openpyxl，GUI 暂未接入）
+│   ├── desens.py              # v3.1：数据脱敏（识别 / 打码 / 代号 / 泛化 / 清空 / 复检 / 报告；纯 openpyxl）
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
@@ -413,6 +438,8 @@ excel-router/
 | `collect_by` | 总表按哪一列分人（仅输入是单个文件时生效） | `""` |
 | `collect_title` / `collect_due` / `collect_record` | 通报标题 / 截止时间 / 下发记录路径（空 = 自动找） | `""` |
 | `desens` | 数据脱敏（v3.1）：用途名，或 `{scene, columns:{列名: mask/pseudo/generalize/clear/keep}, notes, seed}`；空 = 不脱敏，见 `docs/数据脱敏-设计方案.md` | `""`（不在 default_config 里） |
+| `split_desens` | 拆分 ②「发出去时打码」选的用途；空 = 不打码。`_start` 转成 `desens` 传给 run_split（v3.1） | `""` |
+| `desens_input_path` / `desens_scene` / `desens_notes` / `desens_columns` | 「数据脱敏」模式的输入 / 用途 / 文字夹带开关 / 逐列调整文字（`列名:处理方式、…`）（v3.1） | `""` / `"发群通报"` / `true` / `""` |
 | `recent_recipes` / `recipe_tip_off` | 最近用过的方案路径（最多 5 个）/ 跑完后不再提示「存成方案」（v3.0） | `[]` / `false` |
 
 ### core/splitter.py 的关键函数
@@ -532,7 +559,7 @@ excel-router/
 
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
 
-**Excel 汇总模式（v2.10）**：`MODE_LABELS` 三段，顺序「Excel 拆分 / Excel 汇总 / 文件加密分发」；
+**Excel 汇总模式（v2.10）**：`MODE_LABELS` 原为三段「Excel 拆分 / Excel 汇总 / 文件加密分发」（v3.1 在汇总后插入「数据脱敏」，见开头 v3.1 说明）；
 `_collect_frame` 由 `_build_collect_steps` 搭（①文件夹 / 一个文件 ②「先查收，再汇总」开关 `_col_check_var`，
 打开后才露出应交名单、截止时间和折叠的「更多设置」+ 不编号的结果卡片：查收后是通报 + 复制通报 / 打开进度表 /
 汇总已交的表，汇总后是汇总说明 + 打开汇总表）。主按钮文案随开关变（`_start_text`）；

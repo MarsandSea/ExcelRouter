@@ -38,11 +38,17 @@ back into one — free, open-source, no coding required.*
 无注册、无功能限制）。它把**一个或一整批** Excel 表格，按你指定的**任意一个字段**
 （部门 / 区域 / 门店 / 网格 / 工号 / 班级……）的取值自动拆成多个文件，**完整保留原有的复杂表头
 与单元格格式**，可选再按第二个字段拆到每个人，最后按组打包成 ZIP 直接分发。
-**全程在本机运行，不联网、不上传任何数据**，断网也能正常使用。另附两个模式：
+**全程在本机运行，不联网、不上传任何数据**，断网也能正常使用。另附三个模式：
 **Excel 汇总**——反过来把一个文件夹里同一套模板的表（或一个文件里的多个 sheet）合成一张，
 按列名对齐、每行标上来自哪个文件；如果表是发下去让大家填的，还能先「查收」：几秒查出谁没交、
 谁交了空表、谁哪一列漏了哪几行，生成能直接发群的通报和逐人催办话术；**文件加密分发**——同一批 PDF /
-Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还能加专属水印。
+Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还能加专属水印；**数据脱敏**——表里的身份证号、
+手机号、银行卡号、姓名、地址按用途打码、换代号或清空，处理完把结果重扫一遍，还有完整号码的不写出来。
+
+**v3.1 新增：数据脱敏**。顶部第四个模式「数据脱敏」：选表格 → 选用途（内部下发 / 发群通报 / 交给AI分析 / 对外报送）
+→ 认出来的列逐列可改处理方式 → 开始。拆分时②卡片认出个人信息列会多一行「发出去时打码」，
+有身份证号、银行卡号时默认勾上；汇总完结果卡片里可以「另存脱敏版（上报用）」。每次都会出一份「脱敏报告.xlsx」
+（逐列写识别成什么、怎么处理、处理了几格，示例是虚构的）；复检没过的不打 ZIP，并留下「未通过复检_请勿发出.txt」。
 
 **v3.0 新增**：发下去让大家填的表，可以在填写列后面的括号里写要求，比如「走访日期（日期）」
 「走访结果（已走访/未走访）」「联系电话（手机号）」——对方在 Excel 里直接从下拉框选、填错格式当场被拦；
@@ -70,6 +76,9 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
 > same-template workbooks (or the sheets of one workbook) into one, aligned by column name, with a
 > source column; when the sheets were sent out to be filled in, it can first report in seconds who
 > has not submitted, who returned an empty sheet and which rows of which required column are blank.
+> Since v3.1 it can also mask personal data (ID card, mobile and bank card numbers, names, addresses) by
+> purpose — internal hand-out, group chat, AI analysis or external reporting — on its own, while splitting
+> or after merging, re-scanning the output and refusing to package anything that still holds a full number.
 > Since v3.0 the fill-in columns can carry rules (date, number, mobile, a dropdown list), checked
 > again when the forms come back; hidden sheets and columns are not sent out by default; settings can
 > be saved as a reusable recipe.
@@ -91,11 +100,12 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
 - 各门店 / 各月份交上来几十张同样格式的表，**一键合并成一张**，每行标上来自哪个文件
 - 表格拆下去让各网格 / 各客户经理填，**收回来一键查谁没交、谁交了空表、谁哪一列漏了哪几行**，
   生成能直接发群的通报，全部合格后汇总成一张
+- 客户清单要发到群里、交给 AI 分析或往外报，**先把身份证号、手机号、银行卡号打码**，处理完自动复检
 
 > 如果你正在搜的是这些问题 ——「怎么把一个 Excel 按某一列拆分成多个文件」「一个工作表拆成多个
 > 工作簿」「批量拆分 Excel 不写 VBA / 不用 Power Query」「拆完还要保留原来的复杂表头和格式」
 > 「按部门把表格分开发给不同的人」「多个 Excel 表格怎么合并成一个」「收上来的表怎么快速查谁没交、
-> 谁没填完」—— 那这个工具就是干这个的。
+> 谁没填完」「Excel 里的身份证号、手机号怎么批量打码」—— 那这个工具就是干这个的。
 
 **下载**：[Gitee 直接下载](https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Windows.zip)（国内直连，免登录）· [Gitee 发行版页](https://gitee.com/Marsandsea/Excelrouter/releases/latest) ·
 国际用户：[GitHub Releases](../../releases)
@@ -142,6 +152,11 @@ Word / Excel / PPT 为每个网格生成带专属打开密码的副本，PDF 还
   「谁收什么、密码是什么」的分发清单，照着微信/邮件群发即可。
   *Secure distribution — per-group password-protected copies of PDF / Word / Excel / PowerPoint files
   (PDFs can also be watermarked), plus a distribution manifest.*
+- **数据脱敏（v3.1）** —— 按用途处理个人信息：**发群通报**全打码（138****5678、张*、证件号留前 6 后 4）、
+  **内部下发**只遮证件号和银行卡号、**交给AI分析**换成一致的代号（还能统计、关联）、**对外报送**整列清空；
+  备注里夹带的号码也就地打码。识别靠列名 + 号码校验（身份证校验码、银行卡 Luhn），每列可以手动改；
+  处理完重扫一遍，没洗干净的不写出来、不打包。单独用、拆分时顺带、汇总后另存都可以。
+  *Data masking by purpose, with a re-scan of the output that blocks anything still holding a full number.*
 
 > **关于格式保留的两点限制 / Limitations：**
 > ① `.xls` 转换后无法保留原格式（仅保留数据）；
@@ -257,7 +272,7 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
 | Power Query | ✅ | ❌ 输出是纯数据表 | ✅ 本地 | 中高（要学 M 语言、每次重配） |
 | **ExcelRouter** | ✅ **整个文件夹一次拆完** | ✅ 含多层复杂表头 | ✅ **全程本机，可断网** | 低（三步点击，零编程） |
 
-含敏感信息的报表（工资、结算、住户台账）尤其不建议走在线转换网站——**这也是本工具坚持不做
+含个人信息的报表（工资、结算、住户台账）尤其不建议走在线转换网站——**这也是本工具坚持不做
 在线版、不做任何遥测上报的原因**。
 
 ---
@@ -272,6 +287,9 @@ python examples/make_sample.py   # 生成 5 个月份的虚拟员工明细（1�
   不改造表头结构。
 - **`.xls` 老格式支持吗？** —— 能拆、数据完整，但转换后**无法保留原格式**；格式重要就先用
   Excel 另存为 `.xlsx`。
+- **能把身份证号、手机号打码再发吗？** —— 能（v3.1）。顶部切到「数据脱敏」，选用途就行；
+  拆分时②卡片也可以勾「发出去时打码」。识别靠列名和号码校验，不保证找全，开始前看一眼认出了哪些列。
+  只处理 Excel 里的文字和数字，图片、PDF、Word 不处理。详见 [FAQ](docs/FAQ.md#能把表里的身份证号手机号打码再发出去吗)。
 - **免费吗？公司内部能用吗？** —— 免费，MIT 协议，个人和商业使用都可以，保留版权声明即可。
 - **有麒麟 / 信创版吗？** —— 有。银河麒麟 V10 / 统信 UOS，x86_64 与 aarch64 双架构，
   下载对应的 `-linux-*.tar.gz`，解压后运行 `启动ExcelRouter.sh` 即可。
@@ -324,8 +342,10 @@ excel-router/
 ├── core/
 │   ├── splitter.py          # 核心拆分逻辑（表头识别 / 列枚举 / 跨文件合并）
 │   ├── pdf_dist.py          # PDF 按网格加密分发（密码 / 水印 / 分发清单）
+│   ├── collect.py           # Excel 汇总 / 查收通报 / 下发标记
+│   ├── desens.py            # 数据脱敏（识别 / 打码 / 代号 / 复检 / 报告）
 │   └── utils.py             # 文本清理 / 取值归并 / 文件名净化
-├── gui/app.py               # 三步卡片式图形界面（Excel 拆分 / Excel 汇总 / 文件加密分发 三模式）
+├── gui/app.py               # 三步卡片式图形界面（Excel 拆分 / Excel 汇总 / 数据脱敏 / 文件加密分发 四模式）
 ├── examples/make_sample.py  # 样本生成器
 ├── docs/                    # FAQ / 使用指引 / 发版手册 / 截图
 ├── llms.txt                 # 给 AI 助手与搜索引擎的项目事实卡
