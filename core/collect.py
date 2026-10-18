@@ -47,6 +47,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from core import splitter as sp
+from core.desens import desens_copy
 from core.utils import hard_clean, safe_filename, soft_clean
 from core.xlio import (HEAD_SCAN, _cell, _head_limit, _iter_sheets_ro, _load_sheets, _no_formulas, _nonempty,
                        col_keys, col_names, hidden_info, is_total_row, match)
@@ -1808,7 +1809,7 @@ def run_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
                       people=report["people"] if report["mode"] == "files" else None, stop=stop_flag,
                       rules=ctx["rules"])
     summary.update(counts(report))
-    return _finish_merge(st, done, output, ctx["title"], t0, summary, log, progress_fn)
+    return _finish_merge(st, done, output, ctx["title"], t0, summary, log, progress_fn, config.get("desens"))
 
 
 def _result_path(out_dir, title):
@@ -1822,8 +1823,10 @@ def _result_path(out_dir, title):
     return output
 
 
-def _finish_merge(st, done, output, title, t0, summary, log, progress_fn):
-    """合并收尾：打完成日志和 [SUMMARY]，返回汇总表路径（没生成返回 ""）。"""
+def _finish_merge(st, done, output, title, t0, summary, log, progress_fn, desens=None):
+    """合并收尾：打完成日志和 [SUMMARY]，返回汇总表路径（没生成返回 ""）。
+
+    desens（config['desens']，v3.1）：另存一份脱敏版，[SUMMARY] 多带 desens / desens_output。"""
     if not done:
         log("⛔ 已停止，没有生成汇总表")
         summary["stopped"] = True
@@ -1844,6 +1847,12 @@ def _finish_merge(st, done, output, title, t0, summary, log, progress_fn):
         output = ""
     summary.update(output=output, files=len({s["file"] for s in merged}), rows=rows,
                    failed_files=len(st["errors"]), title=title, report_text=text)
+    if output and desens:
+        try:
+            dout, job = desens_copy(output, desens, log)
+            summary.update(desens=job.summary(), desens_output=dout)
+        except Exception as e:
+            log(f"  ⚠️ 脱敏版没生成（汇总表不受影响）：{e}")
     log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
     return output
 
@@ -1889,7 +1898,7 @@ def merge_tables(config, log_fn=None, progress_fn=None, stop_flag=None):
             progress_fn(0.3 + 0.7 * frac)
 
     done = merge_step(st, files, config, mode, {}, log=log, progress=_prog, stop=stop_flag)
-    return _finish_merge(st, done, output, title, t0, summary, log, progress_fn)
+    return _finish_merge(st, done, output, title, t0, summary, log, progress_fn, config.get("desens"))
 
 
 # ---------- 合并：分段执行（内部技能 70 秒一段），桌面版一次做完 ----------

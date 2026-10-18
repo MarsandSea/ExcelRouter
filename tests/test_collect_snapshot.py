@@ -134,8 +134,10 @@ def _rows_mode(d):
 
 
 def _no_list(d):
-    for n in ("甲", "乙", "丙"):
-        _book(d / f"{n}.xlsx", _full(3))
+    # 内容一样的几份按字节复制：openpyxl 存盘时会写进当前时间，分开存只有恰好同一秒内才逐字节相同，快照会时过时不过
+    _book(d / "甲.xlsx", _full(3))
+    for n in ("乙", "丙"):
+        _write(d / f"{n}.xlsx", (d / "甲.xlsx").read_bytes())
     rows = _full(3)
     rows[0][3] = None
     _book(d / "丁.xlsx", rows)
@@ -144,8 +146,8 @@ def _no_list(d):
 
 
 def _all_ok(d):
-    for n in ("张三", "李四"):
-        _book(d / f"{n}.xlsx", _full(2))
+    _book(d / "张三.xlsx", _full(2))
+    _write(d / "李四.xlsx", (d / "张三.xlsx").read_bytes())       # 同上：按字节复制，不靠同一秒
     return {"input_path": str(d), "collect_expect": "张三、李四", "collect_title": "九月走访"}, False
 
 

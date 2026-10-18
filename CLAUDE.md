@@ -343,6 +343,7 @@ excel-router/
 │   ├── xlio.py                # v3.0：拆分和汇总共用的读表层（表头识别、只读流式读、隐藏信息、写值、ZIP）
 │   ├── compare.py             # 两表核对：按关键列对上两张表，找新增 / 没了 / 改过的格子（纯 openpyxl；GUI 暂未接入）
 │   ├── recipe.py              # v3.0：方案（存 / 读 / 套用 / 列检查），只用标准库
+│   ├── desens.py              # v3.1：数据脱敏（识别 / 打码 / 代号 / 泛化 / 清空 / 复检 / 报告；纯 openpyxl，GUI 暂未接入）
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
@@ -369,6 +370,7 @@ excel-router/
     ├── test_fill_rules.py     # 填报规则：解析、_coerce、下发验证、查收填写有误、汇总规整（v3.0）
     ├── test_recipe.py         # 方案：往返、外来数据、列检查（v3.0）
     ├── test_compare.py        # 两表核对：比较口径、关键列推荐、重复关键列、结果工作簿
+    ├── test_desens.py         # 数据脱敏：校验器、处理方式、夹带号码、拆分 / 单独 / 汇总脱敏版、复检拦截
     ├── test_xlio.py           # 读表层单测 + 「清洁度」检查（v3.0）
     ├── test_golden_split.py   # 拆分产物与 2.10.1 逐格比对（v3.0 去 pandas 的守卫）
     └── golden/                # 快照样本生成器与期望值（expected/*.json、collect/*.json）
@@ -410,6 +412,7 @@ excel-router/
 | `collect_expect` / `collect_required` | 应交名单 / 必须填的列（文字，`collect.split_names` 拆） | `""` |
 | `collect_by` | 总表按哪一列分人（仅输入是单个文件时生效） | `""` |
 | `collect_title` / `collect_due` / `collect_record` | 通报标题 / 截止时间 / 下发记录路径（空 = 自动找） | `""` |
+| `desens` | 数据脱敏（v3.1）：用途名，或 `{scene, columns:{列名: mask/pseudo/generalize/clear/keep}, notes, seed}`；空 = 不脱敏，见 `docs/数据脱敏-设计方案.md` | `""`（不在 default_config 里） |
 | `recent_recipes` / `recipe_tip_off` | 最近用过的方案路径（最多 5 个）/ 跑完后不再提示「存成方案」（v3.0） | `[]` / `false` |
 
 ### core/splitter.py 的关键函数
