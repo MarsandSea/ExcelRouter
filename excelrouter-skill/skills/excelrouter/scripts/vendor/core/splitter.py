@@ -60,6 +60,7 @@ from openpyxl.formula.translate import Translator
 from core.utils import soft_clean, hard_clean, apply_alias, is_skip_value, safe_filename
 # 表头识别在 core/xlio.py（汇总也用它）；这里照旧导出原名，collect / 技能 / 测试都按 splitter 的名字调用
 from core.xlio import resolve_header_row
+from core.desens import FAIL_NOTE as DESENS_FAIL, REPORT_NAME as DESENS_REPORT, SCENE_TEXT, Job, write_fail_note
 from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
 from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, hidden_info, is_total_row,
                        key_value, match, open_book, put, zip_folder)
@@ -946,7 +947,8 @@ def _column_values(ws, col, first_row, last_row):
 
 
 def process_file(file_path, rel_path, output_root, config, outputs,
-                 single_file=False, log_fn=None, stop_flag=None, tick_fn=None, stats=None, review=None):
+                 single_file=False, log_fn=None, stop_flag=None, tick_fn=None, stats=None, review=None,
+                 desens_job=None):
     """处理单个文件：始终产出『汇总』；满足条件时附加产出『到人』。返回写入总行数。
 
     stats 为可选的可变 dict（由 run_split 传入），用于跨文件累计「跳过 sheet 数 /
@@ -960,6 +962,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
       一个源 sheet 一页；为 None 时这些行只计数。
     · stats 里累计行数对账：source_rows（有内容的数据行）= routed（进了至少一个分组）+ skip_rows（合计等）
       + unassigned（没写分组）+ not_selected（选了只拆部分取值时没选上的）。隐藏的、跳过的 sheet 不计。
+    · desens_job 为 core.desens.Job（run_split 按 config['desens'] 建）：分好组、清完隐藏列之后，在内存里给
+      数据行脱敏，再往外复制——分组用的是真实值，产出（含「请核对_无归属」）里是脱敏后的值。
 
     读表：源文件只完整加载一次（open_book），值和格式都从这一份取；每个 sheet 先把拆分列读一遍、
     按取值分好桶（取值 → 原始行号），再按桶输出。输出顺序与旧版逐取值筛选完全一致。
@@ -1009,6 +1013,11 @@ def process_file(file_path, rel_path, output_root, config, outputs,
         if preserve_format and is_xls and log_fn:
             log_fn("  ⚠️ .xls 无法保留原始格式（仅保留数据，表头格式也会丢失）")
         keep_formulas_ok = keep_formulas and preserve_ok
+        if keep_formulas_ok and desens_job is not None:
+            # 同行公式在对方打开时会按脱敏前的写法重算，也可能把原值拼回来：脱敏时一律落成数值
+            keep_formulas_ok = False
+            if log_fn:
+                log_fn("  ℹ️ 开了数据脱敏，「保留公式」本次不生效，公式列落成数值")
         if keep_formulas and not preserve_ok and log_fn:
             log_fn("  ⚠️ 保留公式需同时开启保留格式（且不是 .xls 文件），本次已忽略该选项")
 
@@ -1124,6 +1133,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     msg = f"有 {len(hcols)} 列是隐藏的（{shown}），产出里这些列的内容已清空、仍然隐藏"
                 if log_fn:
                     log_fn(f"  🙈 sheet「{sn}」{msg}")
+            if desens_job is not None:
+                # 必须在算完分组键、清完隐藏列之后：分组按真实值，清掉的隐藏列不用再处理
+                desens_job.sheet(ws, h, last, tpl_names[sn], (rel_path, sn), log_fn)
             n_hidden_rows = _hidden_data_rows(ws, h, last)
             if n_hidden_rows:
                 if stats is not None:
@@ -1394,6 +1406,9 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
          + (f"｜到人：{config.get('person_column', '')}" if do_person else "")
          + f"｜跨文件合并：{'是' if config.get('merge_across_files', True) else '否'}\n")
 
+    desens_job = Job.from_config(config.get('desens'))
+    if desens_job is not None:
+        _log(f"🛡 数据脱敏：{desens_job.scene}（{SCENE_TEXT.get(desens_job.scene, '')}）")
     outputs = {}
     review = _OutputBook(os.path.join(output_path, UNASSIGNED))   # 没写分组的行；有才保存
     grand_total = 0
@@ -1421,7 +1436,7 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         try:
             grand_total += process_file(fp, rp, output_path, config, outputs,
                                         single_file, _log, stop_flag, tick_fn=_tick,
-                                        stats=stats, review=review)
+                                        stats=stats, review=review, desens_job=desens_job)
         except Exception as e:
             stats["failed_files"] += 1
             _log(f"  ❌ 处理失败：{e}")
@@ -1483,9 +1498,32 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         except Exception as e:
             _log(f"  ⚠️ 标出填写列失败（拆分结果不受影响）：{e}")
 
+    # ---------- 数据脱敏：落盘后复检，没洗干净就不打包 ----------
+    desens_ok = desens_job is None or not stopped     # 中途停了没复检过，不打包
+    if desens_job is not None and not stopped:
+        produced = [(os.path.relpath(ob.save_path, output_path), ob.save_path) for ob in outputs.values()
+                    if os.path.exists(ob.save_path)]
+        if unassigned_file:
+            produced.append((UNASSIGNED, unassigned_file))
+        desens_job.files = produced
+        hits = desens_job.scan_files(produced)
+        desens_ok = not hits
+        try:
+            desens_job.write_report(os.path.join(output_path, DESENS_REPORT))
+        except Exception as e:
+            _log(f"  ⚠️ 脱敏报告没写成：{e}")
+        if hits:
+            write_fail_note(output_path, hits)
+            _log(f"  ❌ 脱敏复检没过：还有 {sum(h['cells'] for h in hits)} 个格子有完整的号码，"
+                 f"这次不打 ZIP；见「{DESENS_FAIL}」和「{DESENS_REPORT}」")
+        else:
+            ds = desens_job.summary()
+            _log(f"  🛡 脱敏复检通过：处理 {ds['columns']} 列、{ds['cells']} 格，文字里夹带的号码 {ds['embedded']} 处；"
+                 f"明细见「{DESENS_REPORT}」")
+
     # ---------- 对每个生成了文件夹的主取值打包 ZIP（方便分发） ----------
     zips = 0
-    if make_zip and not single_file:
+    if make_zip and not single_file and desens_ok:
         for primary in primaries:
             folder = os.path.join(output_path, safe_filename(primary))
             if not os.path.isdir(folder):
@@ -1558,6 +1596,9 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
         summary["templates"] = len(groups)    # v3.0：跨文件合并时，这批表有几种模板
     if issued:
         summary["issued"] = True      # 写了下发记录：GUI 据此提示「收回来后用回收汇总查」
+    if desens_job is not None:
+        # v3.1：数据脱敏 {scene, columns, cells, embedded, residual, ok}；ok 为 False 时没打 ZIP
+        summary["desens"] = desens_job.summary()
     _log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
 
     return output_path
