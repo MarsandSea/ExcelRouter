@@ -1,8 +1,8 @@
 <svg viewBox="0 0 256 256" width="256" height="256" xmlns="http://www.w3.org/2000/svg" role="img">
   <!-- Copyright (c) 2026 AbeLin · MIT License -->
   <title>ExcelRouter（小尺寸简化版）</title>
-  <desc>16/24px 专用：只保留「一个源表 → 两个文件」三个块，去掉纸面行线与分叉连线
-        —— 16px 下每个块至少要 3 像素、间距至少 2 像素，连线再怎么加粗也排不下。
+  <desc>16/24px 专用：一个源表 → 三个文件，去掉纸面行线与分叉连线
+        —— 16px 下每个块至少要 3 像素、间距至少 2 像素，连线排不下。
         几何参数的真源是仓库根目录的 make_icons.py，改这份 SVG 不会影响
         app.ico / favicon.ico，要改请改脚本再重新生成。</desc>
   <defs>
@@ -12,8 +12,9 @@
       <stop offset="1" stop-color="#12603A"/>
     </linearGradient>
   </defs>
-  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"/>
-  <rect x="36" y="56" width="76" height="144" rx="16" fill="#FFFFFF"/>
-  <rect x="144" y="56" width="80" height="56" rx="14" fill="#FFFFFF"/>
-  <rect x="144" y="144" width="80" height="56" rx="14" fill="#FFFFFF"/>
+  <rect x="8" y="8" width="240" height="240" rx="40" fill="url(#bg)"/>
+  <rect x="32" y="48" width="96" height="160" rx="12" fill="#FFFFFF"/>
+  <rect x="160" y="16" width="64" height="48" rx="10" fill="#FFFFFF"/>
+  <rect x="160" y="96" width="64" height="48" rx="10" fill="#FFFFFF"/>
+  <rect x="160" y="176" width="64" height="48" rx="10" fill="#FFFFFF"/>
 </svg>
