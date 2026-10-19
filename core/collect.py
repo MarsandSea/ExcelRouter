@@ -47,7 +47,6 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from core import splitter as sp
-from core.desens import desens_copy
 from core.utils import hard_clean, safe_filename, soft_clean
 from core.xlio import (HEAD_SCAN, _cell, _head_limit, _iter_sheets_ro, _load_sheets, _no_formulas, _nonempty,
                        col_keys, col_names, hidden_info, is_total_row, match)
@@ -1849,6 +1848,7 @@ def _finish_merge(st, done, output, title, t0, summary, log, progress_fn, desens
                    failed_files=len(st["errors"]), title=title, report_text=text)
     if output and desens:
         try:
+            from core.desens import desens_copy   # 用到才导入：只做查收汇总的技能包可以不带 desens.py
             dout, job = desens_copy(output, desens, log)
             summary.update(desens=job.summary(), desens_output=dout)
         except Exception as e:
