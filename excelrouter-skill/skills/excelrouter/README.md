@@ -93,12 +93,6 @@ pip install -r requirements-pdf.txt    # 要做文件加密分发（PDF / Word /
 **大表能拆吗？** 没有硬性上限，约 1.5 万单元格/秒：1 万行 × 15 列约 11 秒，
 5 万行约 49 秒。跑的时候有进度心跳，不会让你对着静默的界面猜是不是卡死了。
 
-## 也有图形界面版（同一套内核）
+## 源码与反馈
 
-不想用命令行、或者要给不会装 Python 的同事用，有免费的 Windows 桌面版：
-选表格 → 选字段 → 点开始，解压双击即用，MIT 开源，数据同样不出本机。
-
-- 直接下载（点开即下，免安装免注册，约 29 MB）：
-  <https://gitee.com/marsandsea/ExcelRouter/releases/download/latest/ExcelRouter-Windows.zip>（国内直连；海外可用 <https://github.com/MarsandSea/ExcelRouter/releases/latest/download/ExcelRouter-Windows.zip>）
-- 介绍与使用说明：<https://marsandsea.github.io/ExcelRouter/>
-- 源码与反馈：<https://github.com/MarsandSea/ExcelRouter>
+本技能和 ExcelRouter 桌面版是同一套内核，MIT 开源：<https://github.com/MarsandSea/ExcelRouter>
