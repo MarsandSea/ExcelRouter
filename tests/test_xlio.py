@@ -150,3 +150,69 @@ def test_xlio_does_not_import_pandas():
     code = "import sys; import core.xlio; print('pandas' in sys.modules)"
     out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+def _hidden_book(path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "数据"
+    ws.append(["部门", "身份证", "金额"])
+    ws.column_dimensions["B"].hidden = True
+    wb.create_sheet("底稿").sheet_state = "hidden"
+    wb.save(path)
+
+
+def _swap_part(src, dst, part, fn):
+    """复制 xlsx，把其中一个 XML 部件按 fn 改写。"""
+    with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in zi.infolist():
+            data = zi.read(item.filename)
+            zo.writestr(item, fn(data) if item.filename == part else data)
+
+
+def test_hidden_info_reads_hidden_sheets_and_columns(tmp_path):
+    p = tmp_path / "h.xlsx"
+    _hidden_book(p)
+    info = xlio.hidden_info(str(p))
+    assert info["数据"] == ("visible", {2})
+    assert info["底稿"][0] == "hidden"
+
+
+def _with_dtd(data, body):
+    if not data.startswith(b"<?xml"):          # openpyxl 写的部件有的不带 XML 声明
+        return body + data
+    head, rest = data.split(b"?>", 1)
+    return head + b"?>" + body + rest
+
+
+def test_xml_with_dtd_is_refused_not_parsed(tmp_path):
+    """XXE：表格包里的 XML 带 DTD（引用本机文件的外部实体、实体膨胀）一律不解析，也不读那个外部文件。"""
+    p = tmp_path / "h.xlsx"
+    _hidden_book(p)
+    leak = tmp_path / "leak.txt"
+    leak.write_text("不该被读到", encoding="utf-8")
+    uri = leak.as_uri().encode()
+    cases = {
+        "外部实体": ("xl/workbook.xml", b'<!DOCTYPE r [<!ENTITY x SYSTEM "' + uri + b'">]>'),
+        "参数实体": ("xl/workbook.xml", b'<!DOCTYPE r [<!ENTITY % p SYSTEM "' + uri + b'"> %p;]>'),
+        "实体膨胀": ("xl/_rels/workbook.xml.rels", b'<!DOCTYPE r [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>'),
+        "工作表里": ("xl/worksheets/sheet1.xml", b"<!DOCTYPE worksheet>"),
+    }
+    for name, (part, dtd) in cases.items():
+        bad = tmp_path / f"{name}.xlsx"
+        _swap_part(p, bad, part, lambda d, dtd=dtd: _with_dtd(d, dtd))
+        try:
+            xlio._xlsx_hidden(str(bad))
+        except xlio.UnsafeXML:
+            pass
+        else:
+            raise AssertionError(f"{name}：带 DTD 的 XML 应该被拒绝")
+        assert xlio.hidden_info(str(bad)) == {}          # 对外和其他读不出的情况一样：当作没有隐藏
+
+
+def test_xml_starts_stops_early_and_resolves_namespaces():
+    data = (b'<?xml version="1.0" encoding="UTF-8"?><w xmlns="urn:m" xmlns:r="urn:r">'
+            b'<a r:id="1"/><stop/><b/></w>')
+    got = list(xlio._xml_starts(data, stop="{urn:m}stop"))
+    assert [t for t, _a in got] == ["{urn:m}w", "{urn:m}a", "{urn:m}stop"]
+    assert got[1][1] == {"{urn:r}id": "1"}
