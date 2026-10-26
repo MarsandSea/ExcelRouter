@@ -486,3 +486,28 @@ def test_merge_copies_each_cells_own_style(tmp_path):
         return c.fill.fgColor.rgb, c.font.bold, c.font.color.rgb
 
     assert all(sig(a.cell(r, c)) == sig(b.cell(r, c)) for r in range(2, 302) for c in (1, 2))
+
+
+def test_skill_options_keep_reads_writes_and_logs_inside(tmp_path):
+    """技能给的三个选项：只在工作文件夹里读写、通报不进日志、不写回收结果.json。"""
+    ws = tmp_path / "汇总文件"
+    src = ws / "九月"
+    src.mkdir(parents=True)
+    _book(src / "张三.xlsx", _full(2, "张三"))
+    cfg = {"input_path": str(src), "collect_expect": "张三、李四", "allowed_roots": [str(ws)],
+           "log_notice": False, "write_result": False}
+    out, summary, logs = _run(cfg)
+    assert summary["missing"] == 1 and "李四" in _notice(out)                 # 通报照写
+    assert not any("李四" in m for m in logs if not m.startswith("[SUMMARY]"))   # 日志里没有人名
+    assert not os.path.exists(os.path.join(out, collect.RESULT_NAME)) and summary["result"] == ""
+    other = tmp_path / "别处"
+    other.mkdir()
+    _book(other / "王五.xlsx", _full(1, "王五"))
+    for bad in ({"input_path": str(other)}, {"input_path": str(src), "output_path": str(other)},
+                {"input_path": str(src), "collect_record": str(other / "下发记录.json")}):
+        try:
+            check_collect(dict(cfg, **bad), lambda m: None)
+        except collect.OutsideWorkspace:
+            continue
+        raise AssertionError(bad)
+    assert not (other / collect.RESULT_DIR).exists()                         # 一个文件都没写

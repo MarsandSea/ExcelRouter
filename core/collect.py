@@ -1634,11 +1634,33 @@ def returned_files(input_path, output_root):
     return files, lists
 
 
+class OutsideWorkspace(ValueError):
+    """要读或要写的位置不在调用方允许的文件夹里。"""
+
+
+def _inside(path, roots):
+    p = os.path.normcase(os.path.realpath(path))
+    for r in roots:
+        r = os.path.normcase(os.path.realpath(r))
+        if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
 def _prepare(config, log):
-    """读配置，定下名单、该填的列、下发记录、输出目录，并扫描所有表。"""
+    """读配置，定下名单、该填的列、下发记录、输出目录，并扫描所有表。
+
+    config 里给了 allowed_roots（技能用：只许在工作文件夹里）时，输入、输出、下发记录都必须在这些文件夹里，
+    否则抛 OutsideWorkspace，一个文件都不读、不写。桌面版不给，由用户自己选文件夹。
+    """
     input_path = config["input_path"]
     base = input_path if os.path.isdir(input_path) else os.path.dirname(input_path)
     out_dir = config.get("output_path") or os.path.join(base, RESULT_DIR)
+    roots = config.get("allowed_roots")
+    if roots is not None:
+        for what, p in (("要查的表格", input_path), ("结果文件夹", out_dir), ("下发记录", config.get("collect_record"))):
+            if p and not _inside(p, roots):
+                raise OutsideWorkspace(f"{what}不在允许的文件夹里，不处理")
     files, lists = returned_files(input_path, out_dir)
     rec_path = config.get("collect_record") or find_record(input_path)
     record = load_record(rec_path) if rec_path else None
@@ -1711,6 +1733,8 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     collect_expect（应交名单）、collect_required（必须填的列）、collect_by（按哪一列分人）、
     collect_record（下发记录.json，留空自动找）、collect_title（通报标题）、collect_due（截止时间）；
     表头识别沿用 header_mode / header_row。
+    技能另给：allowed_roots（只许在这些文件夹里读写）、log_notice=False（通报不写进日志）、
+    write_result=False（不写回收结果.json）。
     """
     log = log_fn or (lambda m: None)
     now = datetime.datetime.now()
@@ -1746,21 +1770,23 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     except Exception as e:
         log(f"⚠️ 进度表没存成：{e}")
         progress = ""
-    result = os.path.join(out_dir, RESULT_NAME)
-    try:
-        with open(result, "w", encoding="utf-8") as f:
-            json.dump(result_data(report, ctx["title"], ctx["due"], now), f, ensure_ascii=False, indent=1)
-    except OSError as e:
-        log(f"⚠️ 回收结果.json 没写成：{e}")
-        result = ""
+    result = os.path.join(out_dir, RESULT_NAME) if config.get("write_result", True) else ""
+    if result:                                   # 技能用不到逐人明细的 json，传 write_result=False 就不写
+        try:
+            with open(result, "w", encoding="utf-8") as f:
+                json.dump(result_data(report, ctx["title"], ctx["due"], now), f, ensure_ascii=False, indent=1)
+        except OSError as e:
+            log(f"⚠️ 回收结果.json 没写成：{e}")
+            result = ""
     rounds.append({"time": now.isoformat(timespec="seconds"), "submitted": submitted,
                    "ok": [p["name"] for p in people if p["status"] == ST_OK], "issues": _round_issues(report)})
     _save_rounds(out_dir, rounds)
     if progress_fn:
         progress_fn(1.0)
-    log("")
-    for line in text.rstrip("\n").split("\n"):
-        log(line)
+    if config.get("log_notice", True):           # 桌面版在日志框里显示通报；技能传 False，人名不进日志
+        log("")
+        for line in text.rstrip("\n").split("\n"):
+            log(line)
     log(f"\n📁 进度表：{progress}" if progress else "")
     summary.update(counts(report), notice=notice, progress=progress, title=ctx["title"], result=result)
     log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
