@@ -312,7 +312,32 @@ def test_job_state_round_trip_keeps_codes():
     job = D.Job.from_config({"scene": "交给AI分析", "columns": {"备注": "clear"}})
     job.kept.add("联系电话")
     job.details.append({"file": "a", "sheet": "s", "column": "c", "kind": "姓名", "method": "pseudo", "cells": 2})
-    back = D.Job.from_state(json.loads(json.dumps(job.to_state())))
+    st = job.to_state(seal=bytes.hex)                    # 测试用一个可逆的「封」；技能用 core.seal（Windows 数据保护）
+    assert "key" not in st and job.key.hex() == st["sealed_key"]
+    back = D.Job.from_state(json.loads(json.dumps(st)), unseal=bytes.fromhex)
     assert back.scene == job.scene and back.columns == job.columns and back.kept == {"联系电话"}
     assert back.details == job.details and back.fixed_seed is False
     assert D.apply_value("张三", "姓名", "pseudo", back.key) == D.apply_value("张三", "姓名", "pseudo", job.key)
+
+
+def test_job_state_never_carries_plain_key():
+    """没给 seal 就不写种子：状态里找不到种子，也不能拿它接着做（启明星辰 2026-10-26：种子明文落盘）。"""
+    job = D.Job.from_config({"scene": "交给AI分析"})
+    st = job.to_state()
+    assert "sealed_key" not in st and "key" not in st and job.key.hex() not in json.dumps(st)
+    for bad in ({}, {"unseal": bytes.fromhex}):
+        try:
+            D.Job.from_state(st, **bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
+    sealed = job.to_state(seal=bytes.hex)
+
+    def wrong(_text):
+        raise ValueError("换了账户")
+    try:
+        D.Job.from_state(sealed, unseal=wrong)
+    except ValueError as e:
+        assert "解不开" in str(e)
+    else:
+        raise AssertionError("解不开也接着做了")

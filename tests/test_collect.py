@@ -511,3 +511,23 @@ def test_skill_options_keep_reads_writes_and_logs_inside(tmp_path):
             continue
         raise AssertionError(bad)
     assert not (other / collect.RESULT_DIR).exists()                         # 一个文件都没写
+
+
+def test_returned_files_skip_links_and_notice_not_logged_by_default(tmp_path):
+    """查收不跟链接（目录联接、符号链接）；通报默认不写进日志，桌面版传 log_notice=True 才写。"""
+    src = tmp_path / "收"
+    src.mkdir()
+    _book(src / "张三.xlsx", _full(1, "张三"))
+    other = tmp_path / "别处"
+    other.mkdir()
+    _book(other / "李四.xlsx", _full(1, "李四"))
+    if sys.platform == "win32":
+        import _winapi
+        _winapi.CreateJunction(str(other), str(src / "联接"))
+        files, _lists = collect.returned_files(str(src), "")
+        assert [r for _p, r in files] == ["张三.xlsx"]
+    cfg = {"input_path": str(src), "collect_expect": "张三、王五"}
+    _out, _summary, logs = _run(cfg)
+    assert not any("王五" in m for m in logs if not m.startswith("[SUMMARY]"))
+    _out, _summary, logs = _run(dict(cfg, log_notice=True))
+    assert any("王五" in m for m in logs if not m.startswith("[SUMMARY]"))

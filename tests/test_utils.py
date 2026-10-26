@@ -37,6 +37,12 @@ def test_is_skip_value():
     assert is_skip_value("", None) is True             # 空值永远跳过
 
 
+def test_safe_filename_windows_device_names():
+    """CON、NUL、COM1 这类设备名在 Windows 上建不出文件夹：前面加下划线（启明星辰 2026-10-26）。"""
+    assert [safe_filename(n) for n in ("CON", "nul", "Com1", "LPT9.txt", "AUX")] == ["_CON", "_nul", "_Com1", "_LPT9.txt", "_AUX"]
+    assert safe_filename("CONSOLE") == "CONSOLE" and safe_filename("东区COM1") == "东区COM1"
+
+
 def test_safe_filename():
     assert safe_filename("销售/部:东?区") == "销售_部_东_区"
     assert safe_filename("  ") == "未命名"

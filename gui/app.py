@@ -1647,7 +1647,7 @@ class App(_RootBase):
                     f"检测到以下文件正被 Excel/WPS 打开：{shown}\n"
                     "读到的是「打开前保存的内容」，刚改的不会算进去。\n\n建议先关闭这些文件。仍要继续吗？"):
                 return
-        run_cfg = dict(cfg, input_path=p, output_path="")
+        run_cfg = dict(cfg, input_path=p, output_path="", log_notice=True)   # 日志框里直接显示通报
         if action == "check":
             self._enter_running("⏳ 正在查收…", "已开始，正在清点收回来的表…")
         else:
