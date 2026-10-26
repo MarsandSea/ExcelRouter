@@ -99,7 +99,7 @@ def _changes(d):
         _book(p, rs)
         groups[n] = {"file": p.name, "sheets": collect.fingerprint_file(str(p), {}, keys)}
     record = {"title": "九月走访", "due": "10月15日", "fill_columns": fill, "lock_keys": keys,
-              "lock_columns": [h for h in HEAD if h not in fill], "groups": groups}
+              "lock_columns": [h for h in HEAD if h not in fill], "groups": groups, "fp_algo": collect.FP_ALGO}
     back = d / "回收"
     back.mkdir()
     (back / collect.RECORD_NAME).write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")

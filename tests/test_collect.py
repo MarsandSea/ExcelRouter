@@ -207,7 +207,7 @@ def test_changes_against_issued_record(tmp_path):
         groups[n] = {"file": p.name, "sheets": collect.fingerprint_file(str(p), {}, keys)}
     record = {"title": "九月走访", "due": "10月15日", "fill_columns": ["走访日期", "走访结果"],
               "lock_keys": keys, "lock_columns": [h for h in head if h not in ("走访日期", "走访结果")],
-              "groups": groups}
+              "groups": groups, "fp_algo": collect.FP_ALGO}
     back = tmp_path / "回收"
     back.mkdir()
     (back / collect.RECORD_NAME).write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
@@ -228,6 +228,12 @@ def test_changes_against_issued_record(tmp_path):
     out, summary, _ = _run({"input_path": str(back)})
     text = _notice(out)
     assert summary["changed"] == 2 and "【九月走访】" in text and "只填黄色的列" in text
+
+    del record["fp_algo"]                                               # 旧版（sha1 指纹）做的下发记录
+    (back / collect.RECORD_NAME).write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    people, report = _people({"input_path": str(back)})
+    assert report["required"] == ["走访日期", "走访结果"]                # 名单、必填列照用
+    assert all(p["status"] == ST_OK and not p.get("changes") for p in people.values())   # 指纹不比，不误报「改过」
 
 
 def test_run_collect_merges_and_reports(tmp_path):

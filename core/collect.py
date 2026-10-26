@@ -199,8 +199,11 @@ def _norm(v):
     return soft_clean(v)
 
 
+FP_ALGO = "sha256"     # 下发记录里的指纹算法；记录里没写的是旧版做的（算法不同、指纹对不上），查收时不比对
+
+
 def _digest(text):
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def fingerprint_file(path, cfg, keys):
@@ -773,6 +776,10 @@ def load_record(path):
         return None
     if not isinstance(rec, dict) or not isinstance(rec.get("groups"), dict):
         return None
+    if rec.get("fp_algo") != FP_ALGO:          # 旧版记录：名单、截止时间照用，指纹算法不同，拿掉免得每行都报「改过」
+        for g in rec["groups"].values():
+            if isinstance(g, dict):
+                g.pop("sheets", None)
     return rec
 
 
@@ -1471,7 +1478,8 @@ def prepare_issue(output_path, saved, config, log=None):
         g["file"] = g["files"][0]
     record = {"version": 1, "title": title, "due": due, "created": datetime.datetime.now().isoformat(timespec="seconds"),
               "split_column": soft_clean(config.get("split_column", "")), "fill_columns": fill,
-              "lock_keys": lock_order, "lock_columns": [lock_names[k] for k in lock_order], "groups": groups}
+              "lock_keys": lock_order, "lock_columns": [lock_names[k] for k in lock_order], "groups": groups,
+              "fp_algo": FP_ALGO}
     if rules or optional:            # 写了括号才有：不写括号时记录和 v2.10 一字不差
         record["required"] = [n for n in fill if n not in optional]
         record["rules"] = rules
