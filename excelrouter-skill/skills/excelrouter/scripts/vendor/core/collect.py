@@ -47,7 +47,6 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from core import splitter as sp
-from core.desens import desens_copy
 from core.utils import hard_clean, safe_filename, soft_clean
 from core.xlio import (HEAD_SCAN, _cell, _head_limit, _iter_sheets_ro, _load_sheets, _no_formulas, _nonempty,
                        col_keys, col_names, hidden_info, is_total_row, match)
@@ -200,8 +199,11 @@ def _norm(v):
     return soft_clean(v)
 
 
+FP_ALGO = "sha256"     # 下发记录里的指纹算法；记录里没写的是旧版做的（算法不同、指纹对不上），查收时不比对
+
+
 def _digest(text):
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def fingerprint_file(path, cfg, keys):
@@ -774,6 +776,10 @@ def load_record(path):
         return None
     if not isinstance(rec, dict) or not isinstance(rec.get("groups"), dict):
         return None
+    if rec.get("fp_algo") != FP_ALGO:          # 旧版记录：名单、截止时间照用，指纹算法不同，拿掉免得每行都报「改过」
+        for g in rec["groups"].values():
+            if isinstance(g, dict):
+                g.pop("sheets", None)
     return rec
 
 
@@ -1472,7 +1478,8 @@ def prepare_issue(output_path, saved, config, log=None):
         g["file"] = g["files"][0]
     record = {"version": 1, "title": title, "due": due, "created": datetime.datetime.now().isoformat(timespec="seconds"),
               "split_column": soft_clean(config.get("split_column", "")), "fill_columns": fill,
-              "lock_keys": lock_order, "lock_columns": [lock_names[k] for k in lock_order], "groups": groups}
+              "lock_keys": lock_order, "lock_columns": [lock_names[k] for k in lock_order], "groups": groups,
+              "fp_algo": FP_ALGO}
     if rules or optional:            # 写了括号才有：不写括号时记录和 v2.10 一字不差
         record["required"] = [n for n in fill if n not in optional]
         record["rules"] = rules
@@ -1600,6 +1607,12 @@ def _write_send_list(output_path, groups, saved):
 
 # ---------- 对外入口：查收 / 汇总（签名与 run_split 一致） ----------
 
+def _is_link(path):
+    """符号链接或目录联接（junction；os.path.isjunction 从 Python 3.12 起才有）。"""
+    isjunction = getattr(os.path, "isjunction", None)
+    return os.path.islink(path) or bool(isjunction and isjunction(path))
+
+
 def returned_files(input_path, output_root):
     """回收文件夹里的表：[(绝对路径, 相对路径)]，以及名单表的路径。跳过结果目录、锁文件和名单表。
 
@@ -1610,8 +1623,8 @@ def returned_files(input_path, output_root):
         return [(input_path, os.path.basename(input_path))], []
     out_abs = os.path.normcase(os.path.abspath(output_root)) if output_root else ""
     files, lists = [], []
-    for root, dirs, names in os.walk(input_path):
-        dirs[:] = sorted(d for d in dirs if d != RESULT_DIR and not (
+    for root, dirs, names in os.walk(input_path):           # 不跟链接：符号链接、目录联接的文件夹和文件都跳过
+        dirs[:] = sorted(d for d in dirs if d != RESULT_DIR and not _is_link(os.path.join(root, d)) and not (
             out_abs and os.path.normcase(os.path.abspath(os.path.join(root, d))).startswith(out_abs)))
         for f in sorted(names):
             lf = f.lower()
@@ -1620,6 +1633,8 @@ def returned_files(input_path, output_root):
                 continue
             stem = os.path.splitext(f)[0]
             path = os.path.join(root, f)
+            if _is_link(path):
+                continue
             if any(w in stem for w in LIST_WORDS):
                 lists.append(path)
             elif not stem.startswith(("回收进度", "汇总_")):
@@ -1627,11 +1642,33 @@ def returned_files(input_path, output_root):
     return files, lists
 
 
+class OutsideWorkspace(ValueError):
+    """要读或要写的位置不在调用方允许的文件夹里。"""
+
+
+def _inside(path, roots):
+    p = os.path.normcase(os.path.realpath(path))
+    for r in roots:
+        r = os.path.normcase(os.path.realpath(r))
+        if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
 def _prepare(config, log):
-    """读配置，定下名单、该填的列、下发记录、输出目录，并扫描所有表。"""
+    """读配置，定下名单、该填的列、下发记录、输出目录，并扫描所有表。
+
+    config 里给了 allowed_roots（技能用：只许在工作文件夹里）时，输入、输出、下发记录都必须在这些文件夹里，
+    否则抛 OutsideWorkspace，一个文件都不读、不写。桌面版不给，由用户自己选文件夹。
+    """
     input_path = config["input_path"]
     base = input_path if os.path.isdir(input_path) else os.path.dirname(input_path)
     out_dir = config.get("output_path") or os.path.join(base, RESULT_DIR)
+    roots = config.get("allowed_roots")
+    if roots is not None:
+        for what, p in (("要查的表格", input_path), ("结果文件夹", out_dir), ("下发记录", config.get("collect_record"))):
+            if p and not _inside(p, roots):
+                raise OutsideWorkspace(f"{what}不在允许的文件夹里，不处理")
     files, lists = returned_files(input_path, out_dir)
     rec_path = config.get("collect_record") or find_record(input_path)
     record = load_record(rec_path) if rec_path else None
@@ -1704,6 +1741,9 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     collect_expect（应交名单）、collect_required（必须填的列）、collect_by（按哪一列分人）、
     collect_record（下发记录.json，留空自动找）、collect_title（通报标题）、collect_due（截止时间）；
     表头识别沿用 header_mode / header_row。
+    log_notice：True 时把通报全文也写进日志（桌面版日志框用；默认不写，人名不进日志）。
+    技能另给：allowed_roots（只许在这些文件夹里读写）、
+    write_result=False（不写回收结果.json）。
     """
     log = log_fn or (lambda m: None)
     now = datetime.datetime.now()
@@ -1739,21 +1779,23 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     except Exception as e:
         log(f"⚠️ 进度表没存成：{e}")
         progress = ""
-    result = os.path.join(out_dir, RESULT_NAME)
-    try:
-        with open(result, "w", encoding="utf-8") as f:
-            json.dump(result_data(report, ctx["title"], ctx["due"], now), f, ensure_ascii=False, indent=1)
-    except OSError as e:
-        log(f"⚠️ 回收结果.json 没写成：{e}")
-        result = ""
+    result = os.path.join(out_dir, RESULT_NAME) if config.get("write_result", True) else ""
+    if result:                                   # 技能用不到逐人明细的 json，传 write_result=False 就不写
+        try:
+            with open(result, "w", encoding="utf-8") as f:
+                json.dump(result_data(report, ctx["title"], ctx["due"], now), f, ensure_ascii=False, indent=1)
+        except OSError as e:
+            log(f"⚠️ 回收结果.json 没写成：{e}")
+            result = ""
     rounds.append({"time": now.isoformat(timespec="seconds"), "submitted": submitted,
                    "ok": [p["name"] for p in people if p["status"] == ST_OK], "issues": _round_issues(report)})
     _save_rounds(out_dir, rounds)
     if progress_fn:
         progress_fn(1.0)
-    log("")
-    for line in text.rstrip("\n").split("\n"):
-        log(line)
+    if config.get("log_notice"):                 # 默认不把通报（有人名）写进日志；桌面版日志框要显示，自己传 True
+        log("")
+        for line in text.rstrip("\n").split("\n"):
+            log(line)
     log(f"\n📁 进度表：{progress}" if progress else "")
     summary.update(counts(report), notice=notice, progress=progress, title=ctx["title"], result=result)
     log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
@@ -1849,6 +1891,7 @@ def _finish_merge(st, done, output, title, t0, summary, log, progress_fn, desens
                    failed_files=len(st["errors"]), title=title, report_text=text)
     if output and desens:
         try:
+            from core.desens import desens_copy   # 用到才导入：只做查收汇总的技能包可以不带 desens.py
             dout, job = desens_copy(output, desens, log)
             summary.update(desens=job.summary(), desens_output=dout)
         except Exception as e:
