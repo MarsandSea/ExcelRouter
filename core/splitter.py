@@ -62,8 +62,8 @@ from core.utils import soft_clean, hard_clean, apply_alias, is_skip_value, safe_
 from core.xlio import resolve_header_row
 from core.desens import FAIL_NOTE as DESENS_FAIL, REPORT_NAME as DESENS_REPORT, SCENE_TEXT, Job, write_fail_note
 from core.xlio import _looks_numeric, detect_header_row_auto, find_header_row  # noqa: F401
-from core.xlio import (_head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, hidden_info, is_total_row,
-                       key_value, match, open_book, put, zip_folder)
+from core.xlio import (TOTAL_WORDS, _head_limit, _iter_sheets_ro, cell_value, col_keys, col_names, hidden_info,
+                       is_total_row, key_value, match, open_book, put, zip_folder)
 
 warnings.filterwarnings('ignore')
 
@@ -651,7 +651,7 @@ class _OutputBook:
         if info is None:
             ws = self.wb.create_sheet(title=_safe_sheet_title(sheet_name, self._used_titles))
             _write_header(ws, header_cells, merges, widths)
-            info = {'ws': ws, 'next_row': h_idx + 1}
+            info = {'ws': ws, 'next_row': h_idx + 1, 'first': h_idx + 1}
             self.sheets[sheet_name] = info
         return info
 
@@ -723,6 +723,7 @@ class _OutputBook:
             self.wb.close()
             return False
         for info in self.sheets.values():
+            _write_totals(info)         # group_totals：每组自己的合计行（没开时什么也不做）
             _flush_validations(info)
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         self.wb.save(self.save_path)
@@ -746,7 +747,7 @@ class _Rows:
 
 
 def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache,
-                 heartbeat=None, formula_ws=None, col_map=None):
+                 heartbeat=None, formula_ws=None, col_map=None, seq_col=None):
     """把选中的数据行追加到输出 sheet 的当前游标下。
 
     rows_df.index 是这些行在源表里的【原始 0 基行号】，excel_row = index + 1（只用 .index 和 len()，
@@ -757,10 +758,14 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
     「同行安全平移」：能平移则覆盖为新公式，不能则保留已写入的缓存数值（见 _safe_translate）。
     col_map 非 None 时（跨文件按列名对齐），源表第 c 列写到输出第 col_map[c-1] 列；这时调用方不传 formula_ws。
     heartbeat(n) 每写入一批行回调一次，用于向界面报进度并让出 GIL（保持界面响应）。
+    seq_col 非 None 时（renumber_seq，源表 1 基列号）：这一列不照抄，按这个产出 sheet 里的顺序从 1 往下编，
+    跨文件追加时接着编。
     """
     ws_out = sheet_info['ws']
     start = sheet_info['next_row']
     n = len(rows_df)
+    seq_d = None if seq_col is None or ws_src is None else (seq_col if col_map is None else col_map[seq_col - 1])
+    seq0 = sheet_info.get('seq', 0)
     # 心跳按「已处理单元格数」折算成行数阈值，而非固定行数：宽表（列数多）单元格
     # 级操作更贵，若仍按固定 200 行让一次 GIL，两次让出之间工作线程霸占 GIL 的时间会随列数
     # 线性变长，表现为列数越多界面越卡（甚至处理详情面板都打不开）。目标约 4000 格/次让出。
@@ -799,12 +804,18 @@ def _append_rows(sheet_info, rows_df, preserve, ws_src, src_max_col, style_cache
                     v = cell_value(ws_src.cell(row=excel_row, column=c))
                     if v is not None and v != "":
                         put(ws_out.cell(row=out_row, column=d), v)
+            if seq_d is not None and soft_clean(ws_src.cell(row=excel_row, column=seq_col).value) != "":
+                # 原来没写序号的行（如夹在中间的小计行）照旧空着，不占号
+                seq0 += 1
+                ws_out.cell(row=out_row, column=seq_d).value = seq0
             if heartbeat and (offset + 1) % batch == 0:
                 heartbeat(batch)
     if heartbeat and n % batch:
         heartbeat(n % batch)
 
     sheet_info['next_row'] = start + n
+    if seq_d is not None:
+        sheet_info['seq'] = seq0
 
 
 def _matches_filter(name, keywords):
@@ -890,6 +901,28 @@ def _clear_hidden(ws, h, hcols):
                 cell.value = None
 
 
+def _fill_vertical_merges(ws, h, last):
+    """数据区里上下合并的格子（如「镇区」一列几行合成一格）拆开，值和格式填到每一行，返回拆了几处。
+
+    不拆的话只有第一行有值：按这一列拆时其余行全进「请核对_无归属」，拆出去的表里这一格也是空的。
+    只动整个在表头以下、只占一列的合并；横着合并的（如一行备注占几列）不动，免得同一段字抄成好几格。
+    改的是内存里的源表，不写回源文件。
+    """
+    n = 0
+    for mr in list(ws.merged_cells.ranges):
+        if mr.min_col != mr.max_col or mr.max_row <= mr.min_row or mr.min_row <= h or mr.min_row > last:
+            continue
+        top = ws.cell(row=mr.min_row, column=mr.min_col)
+        v, style = top.value, copy(top._style)
+        ws.unmerge_cells(str(mr))
+        for r in range(mr.min_row + 1, mr.max_row + 1):
+            cell = ws.cell(row=r, column=mr.min_col)
+            cell.value = v
+            cell._style = copy(style)
+        n += 1
+    return n
+
+
 def _hidden_data_rows(ws, h, last):
     """表头以下、有内容的隐藏行（多半是筛选掉的）有几行。.xls 读成的内存工作簿没有行属性，算 0。"""
     hid = {r for r, dim in list(ws.row_dimensions.items()) if dim.hidden and h < r <= last}
@@ -946,6 +979,219 @@ def _column_values(ws, col, first_row, last_row):
                                            min_col=col, max_col=col, values_only=True)]
 
 
+# =====================================================
+# 通报表：拆完重新编号 / 每组重算合计行（v3.2，两个都默认关）
+# =====================================================
+# 通报表常见两样东西：第一列「序号」1～N，最后一行「合计」。拆开以后，原来的序号在每组里是断开的
+# （3、17、42…），原来的合计行（全市合计）不属于任何一组、被当成「合计等」跳过。
+# renumber_seq 打开：每个产出 sheet 里「序号」列从 1 重新编；
+# group_totals 打开：源表的合计行不再分进任何一组，每个产出 sheet 末尾（源表合计在表头下方时放在表头下方）
+# 照源表合计行的样子补一行，数字按这一组自己的行重算。哪一列怎么算，拿源表合计行和源表数据比出来：
+# 等于求和就求和、等于平均就平均、等于个数就数个数、等于另两列合计之比（完成率这类）就按比算；
+# 都对不上的留空并在日志里点名——宁可空着让人补，也不写一个算错的合计。
+
+SEQ_NAMES = ("序号", "序", "行号", "no", "no.", "#")    # 「编号」常是工号一类的编码，不算
+
+
+def _num(v):
+    """真正的数字（int / float，不含布尔），否则 None。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v if v == v else None
+
+
+def _close(a, b, exact=False):
+    """两个数相等：容得下浮点误差；数大（≥10）时也容得下手填合计四舍五入到分。
+
+    exact=True 只容浮点误差（比率一律用它：0.8512 和 0.8540 差不到 0.005，却是两种算法）。
+    """
+    m = max(abs(a), abs(b))
+    tol = 1e-9 * max(1.0, m) if exact else max(1e-6 * m, 0.005 if m >= 10 else 1e-9)
+    return abs(a - b) <= tol
+
+
+def seq_column(names, rows):
+    """「序号」列的 0 基列号：列名像序号、数据里八成以上是整数（至少 2 行）。认不出返回 None。
+
+    rows 是数据行（不含合计行）的值。
+    """
+    for c, name in enumerate(names):
+        if hard_clean(name).lower() not in SEQ_NAMES:
+            continue
+        vals = [key_value(r[c]) for r in rows if c < len(r) and soft_clean(r[c]) != ""]
+        ints = sum(1 for v in vals if isinstance(v, int) and not isinstance(v, bool))
+        if len(vals) >= 2 and ints >= 0.8 * len(vals):
+            return c
+    return None
+
+
+def _total_text(v):
+    """合计行里写着「合计 / 小计 / 总计」字样的文字：原样就是这三个词的照抄，「全市合计」「城区小计」这类写成「合计」。"""
+    t = hard_clean(v)
+    if not t or not any(w in t for w in TOTAL_WORDS):
+        return None
+    return t if t in TOTAL_WORDS else "合计"
+
+
+def _total_template(ws, h, tpl_row, cover, max_col):
+    """照源表第 tpl_row 行（合计行）定出每列怎么算，返回 (规则, 对不上的列号)。
+
+    规则 {列号: ('text', 文字) | ('sum',) | ('avg',) | ('count',) | ('ratio', 分子列, 分母列, 倍数)}；
+    cover 是这行合计覆盖的数据行号。空格子和别的文字不写（留空）。
+    """
+    row = [cell_value(ws.cell(row=tpl_row, column=c)) for c in range(1, max_col + 1)]
+    rules, totals, odd, data = {}, {}, [], {}
+    for c, v in enumerate(row, start=1):
+        if v is None or soft_clean(v) == "":
+            continue
+        n = _num(v)
+        if n is None:
+            t = _total_text(v)
+            if t:
+                rules[c] = ('text', t)
+            continue
+        col = [cell_value(ws.cell(row=r, column=c)) for r in cover]
+        nums = [x for x in (_num(x) for x in col) if x is not None]
+        filled = sum(1 for x in col if x is not None and soft_clean(x) != "")
+        data[c] = (n, nums)
+        if nums and _close(n, sum(nums)):
+            rules[c] = ('sum',)
+        elif not nums and filled and _close(n, filled):
+            rules[c] = ('count',)          # 这一列填的是文字（如姓名），合计行写的是人数
+        else:
+            odd.append(c)
+            continue
+        totals[c] = n
+    # 先认比率再认平均：完成率的合计（总完成 ÷ 总目标）和各行完成率的平均往往很接近，先认平均会认错
+    for c in list(odd):
+        n, nums = data[c]
+        hit = next(((a, b, k) for a in totals for b in totals if a != b and totals[b]
+                    for k in (1, 100) if _close(n, totals[a] / totals[b] * k, exact=True)), None)
+        if hit:
+            rules[c] = ('ratio',) + hit
+        elif nums and _close(n, sum(nums) / len(nums)):
+            rules[c] = ('avg',)
+        else:
+            continue
+        odd.remove(c)
+    if not any(r[0] == 'text' for r in rules.values()):
+        # 合计行里一个字也没有（只有数字）：在第一个空着的、不是数字的格子写上「合计」，
+        # 不然收回来查收、汇总时认不出这是合计行
+        free = next((c for c in range(1, max_col + 1) if c not in rules and c not in odd), None)
+        if free:
+            rules[free] = ('text', "合计")
+    styles = {}
+    for c in range(1, max_col + 1):
+        src = ws.cell(row=tpl_row, column=c)
+        if not src.has_style:
+            continue
+        # 合并区里被盖住的格子也记下：边框要靠它们画（不然合并后右边、下边的框线缺一截）
+        styles[c] = (copy(src.font), copy(src.fill), copy(src.border), copy(src.alignment),
+                     src.number_format, copy(src.protection))
+    # 合计行里横着合并的格子（如 A:C 合并写「合计」）：只认这一行之内的；里面除了左上角还有要算的数就不合，免得盖住
+    merges = []
+    for mr in list(ws.merged_cells.ranges):
+        if mr.min_row == mr.max_row == tpl_row and mr.max_col > mr.min_col:
+            if not any(c in rules for c in range(mr.min_col + 1, mr.max_col + 1)):
+                merges.append((mr.min_col, mr.max_col))
+    height = ws.row_dimensions[tpl_row].height if tpl_row in ws.row_dimensions else None
+    return {'rules': rules, 'styles': styles, 'height': height, 'merges': merges,
+            'top': tpl_row <= min(cover, default=tpl_row)}, odd
+
+
+def _attach_totals(sinfo, spec, col_map):
+    """第一次往这个产出 sheet 写、且这个来源有合计行：记下合计行的规则（换成产出的列号）。
+
+    合计行在表头下方时，在还没写数据之前先占住表头下面那一行。
+    """
+    if spec is None or 'totals' in sinfo:
+        return
+    m = (lambda c: c) if col_map is None else (lambda c: col_map[c - 1])
+    rules = {}
+    for c, r in spec['rules'].items():
+        rules[m(c)] = (r[0], m(r[1]), m(r[2]), r[3]) if r[0] == 'ratio' else r
+    # 合并区换到产出的列号后还得是连着的一段（列换了位置就不合，值照样在）
+    merges = [(m(a), m(b)) for a, b in spec.get('merges', ())
+              if [m(c) for c in range(a, b + 1)] == list(range(m(a), m(a) + b - a + 1))]
+    sinfo['totals'] = {'rules': rules, 'styles': {m(c): s for c, s in spec['styles'].items()},
+                       'height': spec['height'], 'merges': merges}
+    sinfo.setdefault('first', sinfo['next_row'])
+    if spec['top'] and sinfo['next_row'] == sinfo['first']:
+        sinfo['total_at'] = sinfo['next_row']
+        sinfo['next_row'] += 1
+
+
+def _write_totals(info):
+    """保存前给这个产出 sheet 写上合计行：数字按这个 sheet 里自己的数据行重算。"""
+    spec = info.get('totals')
+    if not spec:
+        return
+    ws, at = info['ws'], info.get('total_at')
+    rows = [r for r in range(info['first'], info['next_row']) if r != at]
+    if not rows:
+        return
+    r_out = at or info['next_row']
+    got = {}
+    for d, rule in spec['rules'].items():
+        if rule[0] == 'ratio':
+            continue
+        if rule[0] == 'text':
+            put(ws.cell(row=r_out, column=d), rule[1])
+            continue
+        col = [ws.cell(row=r, column=d).value for r in rows]
+        nums = [x for x in (_num(x) for x in col) if x is not None]
+        if rule[0] == 'sum':
+            v = sum(nums)
+        elif rule[0] == 'avg':
+            v = sum(nums) / len(nums) if nums else None
+        else:
+            v = sum(1 for x in col if x is not None and soft_clean(x) != "")
+        if isinstance(v, float):
+            v = round(v, 10)
+        got[d] = v
+        if v is not None:
+            ws.cell(row=r_out, column=d).value = v
+    for d, rule in spec['rules'].items():
+        if rule[0] == 'ratio':
+            a, b = got.get(rule[1]), got.get(rule[2])
+            if a is not None and b:
+                ws.cell(row=r_out, column=d).value = round(a / b * rule[3], 10)
+    for d, (font, fill, border, align, fmt, prot) in spec['styles'].items():
+        cell = ws.cell(row=r_out, column=d)
+        cell.font, cell.fill, cell.border = copy(font), copy(fill), copy(border)
+        cell.alignment, cell.number_format, cell.protection = copy(align), fmt, copy(prot)
+    if spec['height'] is not None:
+        ws.row_dimensions[r_out].height = spec['height']
+    for a, b in spec.get('merges', ()):
+        ws.merge_cells(start_row=r_out, start_column=a, end_row=r_out, end_column=b)
+        for d in range(a + 1, b + 1):      # 合并后盖住的格子重建过，边框照源表补回去
+            if d in spec['styles']:
+                ws.cell(row=r_out, column=d).border = copy(spec['styles'][d][2])
+    if at is None:
+        info['next_row'] += 1
+
+
+def report_hints(file_path, config):
+    """样本表里有没有「序号」列、合计行（给界面决定要不要露出那两个勾选框）。只读、快。
+
+    返回 {"seq_column": 序号列名或 "", "total_rows": 合计行几行}；看第一个认得出表头的 sheet。
+    """
+    for _sn, h, names, head, it in _sheet_heads(file_path, config):
+        if not 0 < h <= len(head):
+            continue
+        rows, totals = [], 0
+        for row in chain(head[h:], islice(it, 20000)):
+            if all(soft_clean(v) == "" for v in row):
+                continue
+            if is_total_row(row):
+                totals += 1
+            else:
+                rows.append(row)
+        c = seq_column(names, rows)
+        return {"seq_column": names[c] if c is not None else "", "total_rows": totals}
+    return {"seq_column": "", "total_rows": 0}
+
+
 def process_file(file_path, rel_path, output_root, config, outputs,
                  single_file=False, log_fn=None, stop_flag=None, tick_fn=None, stats=None, review=None,
                  desens_job=None):
@@ -977,6 +1223,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
     skip            = config.get('skip_values', [])
     merge           = config.get('merge_across_files', True)
     keep_hidden     = config.get('keep_hidden', False)
+    renumber        = config.get('renumber_seq', False)      # v3.2 通报表：拆完「序号」每组从 1 编
+    group_totals    = config.get('group_totals', False)      # v3.2 通报表：每组重算合计行
     selected = [v for v in (apply_alias(x, alias) for x in config.get('selected_values', [])) if v]
     selected_set = set(selected)
 
@@ -1103,6 +1351,9 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                            f"「{split_column}」，已跳过该 sheet")
                 continue
             pcol_idx = _find_col(names, person_column) if do_person else None
+            n_merged = _fill_vertical_merges(ws, h, last)     # 要在读分组键之前
+            if n_merged and log_fn:
+                log_fn(f"  ℹ️ sheet「{sn}」有 {n_merged} 处上下合并的格子，已把值填到合并的每一行再拆")
             # 数据行是 Excel 第 h+1 ~ last 行；第 j 个数据行的 0 基源行号是 h + j
             keys = ([apply_alias(key_value(v), alias) for v in _column_values(ws, col_idx + 1, h + 1, last)]
                     if last > h else [])
@@ -1175,6 +1426,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 log_fn(f"    …已拆分写入 {rows_written} 行")
 
         notes = {}         # 这个 sheet 跨文件对齐的情况 -> 涉及几个输出文件；拆完一个 sheet 合成几行日志
+        cur = {'spec': None, 'seq': None}    # 当前 sheet 的合计行规则 / 序号列（1 基），见「通报表」一节
 
         def emit(key, save_path, sheet_name, h_idx, rows, ws_src, src_max_col, formula_ws):
             nonlocal total_rows
@@ -1200,6 +1452,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             for c in hidden_cols.get(sheet_name, ()):              # 源表隐藏的列，产出里照样隐藏
                 d = c if col_map is None else col_map[c - 1]
                 sinfo['ws'].column_dimensions[get_column_letter(d)].hidden = True
+            _attach_totals(sinfo, cur['spec'], col_map)            # 要在记数据验证位置之前：可能占掉表头下面一行
             dv_head, dv_data = validations.get(sheet_name, ((), ()))
             if 'dv' not in sinfo:      # 第一次往这个产出 sheet 写：表头区的数据验证照原位置带上
                 sinfo['dv'] = {}
@@ -1211,7 +1464,7 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             _note_validations(sinfo, dv_data, rows.index, sinfo['next_row'],
                               (lambda c: c) if col_map is None else (lambda c: col_map[c - 1]), src_max_col)
             _append_rows(sinfo, rows, preserve_ok, ws_src, src_max_col, style_cache,
-                         heartbeat=heartbeat, formula_ws=formula_ws, col_map=col_map)
+                         heartbeat=heartbeat, formula_ws=formula_ws, col_map=col_map, seq_col=cur['seq'])
             total_rows += len(rows)
             touched_keys.add(key)
 
@@ -1248,11 +1501,50 @@ def process_file(file_path, rel_path, output_root, config, outputs,
             tally = {'source_rows': 0, 'routed': 0, 'skip_rows': 0, 'unassigned': 0, 'not_selected': 0}
             blank = []         # 拆分字段没写、但有内容的行（0 基数据行序号）
             end = max(content) if content else 0
+            # 通报表两个选项：先认出这张表的合计行（写了合计 / 小计 / 总计的行，没写分组的最后一行纯数字）
+            tot, data_vals = set(), []
+            if group_totals or renumber:
+                for j, row in enumerate(ws.iter_rows(min_row=h + 1, max_row=last, values_only=True)):
+                    r = h + 1 + j
+                    if r not in content:
+                        continue
+                    if is_total_row(row) or (kind(keys[j]) == 'unassigned' and _looks_like_total(ws, r, end)):
+                        tot.add(r)
+                    else:
+                        data_vals.append(row)
+            cur['seq'] = None
+            if renumber:
+                sc = seq_column(tpl_names[sn], data_vals)
+                if sc is not None:
+                    cur['seq'] = sc + 1
+                    if log_fn:
+                        log_fn(f"  🔢 sheet「{sn}」：「{tpl_names[sn][sc]}」列拆完每组从 1 重新编号")
+            cur['spec'] = None
+            if group_totals and tot:
+                t = max(tot)
+                data_rows = sorted(content - tot)
+                prev = max((x for x in tot if x < t), default=h)
+                cover = [r for r in data_rows if prev < r < t] or data_rows
+                if cover:
+                    cur['spec'], odd = _total_template(ws, h, t, cover, ws.max_column)
+                    if log_fn:
+                        n_num = sum(1 for r in cur['spec']['rules'].values() if r[0] != 'text')
+                        log_fn(f"  🧮 sheet「{sn}」：源表的合计行（第 {t} 行）不分进任何一组，每组照它补一行合计，"
+                               f"{n_num} 列按这一组自己的行重算")
+                        if odd:
+                            shown = "、".join(f"「{tpl_names[sn][c - 1]}」" if tpl_names[sn][c - 1] else f"第 {c} 列"
+                                             for c in odd[:5]) + ("等" if len(odd) > 5 else "")
+                            log_fn(f"  ⚠️ sheet「{sn}」合计行里 {shown} 不是求和、平均、个数或两列之比，"
+                                   f"算不出每组的数，拆出去的合计行这几格留空了，请自己补")
+            elif group_totals and log_fn:
+                log_fn(f"  ℹ️ sheet「{sn}」没找到合计行，不补合计")
             for j, k in enumerate(keys):
                 if h + 1 + j in content:
                     c = kind(k)
                     if c == 'unassigned' and _looks_like_total(ws, h + 1 + j, end):
                         c = 'skip_rows'
+                    elif cur['spec'] is not None and h + 1 + j in tot:
+                        c = 'skip_rows'       # 每组重算合计：源表的合计 / 小计行不再分进组里
                     tally['source_rows'] += 1
                     tally[c] += 1
                     if c == 'unassigned':
@@ -1262,9 +1554,11 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                     stats[tk] = stats.get(tk, 0) + tv
             targets = selected if selected_set else sorted({k for k in keys if not is_skip_value(k, skip)})
             buckets = {}
+            drop = tot if cur['spec'] is not None else ()     # 每组重算合计时，源表的合计行不分进组
             if not contains:
                 for j, k in enumerate(keys):
-                    buckets.setdefault(k, []).append(j)
+                    if h + 1 + j not in drop:
+                        buckets.setdefault(k, []).append(j)
             src_max_col = ws.max_column
             formula_ws = (wb_formula[sn] if (keep_formulas_ok and wb_formula is not None
                           and sn in wb_formula.sheetnames) else None)
@@ -1276,7 +1570,8 @@ def process_file(file_path, rel_path, output_root, config, outputs,
                 tick(0.55 + 0.44 * ((si + ti / max(1, len(targets))) / n_sheets))
                 if is_skip_value(pval, skip):
                     continue
-                idxs = [j for j, k in enumerate(keys) if pval in k] if contains else buckets.get(pval)
+                idxs = ([j for j, k in enumerate(keys) if pval in k and h + 1 + j not in drop] if contains
+                        else buckets.get(pval))
                 if not idxs:
                     continue
 
@@ -1409,6 +1704,9 @@ def run_split(config, log_fn=None, progress_fn=None, stop_flag=None):
     desens_job = Job.from_config(config.get('desens'))
     if desens_job is not None:
         _log(f"🛡 数据脱敏：{desens_job.scene}（{SCENE_TEXT.get(desens_job.scene, '')}）")
+    if config.get('renumber_seq') or config.get('group_totals'):
+        _log("📋 通报表：" + "、".join(t for on, t in ((config.get('renumber_seq'), "序号每组从 1 重新编"),
+                                                     (config.get('group_totals'), "每组重算合计行")) if on))
     outputs = {}
     review = _OutputBook(os.path.join(output_path, UNASSIGNED))   # 没写分组的行；有才保存
     grand_total = 0

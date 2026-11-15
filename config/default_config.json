@@ -17,6 +17,8 @@
   "exact_match": true,
   "preserve_format": true,
   "keep_formulas": false,
+  "renumber_seq": false,
+  "group_totals": false,
   "keep_hidden": false,
   "auto_open_output": true,
   "ui_mode": "excel",

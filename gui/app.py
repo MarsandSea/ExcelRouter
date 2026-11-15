@@ -178,6 +178,8 @@ FALLBACK_CONFIG = {
     "exact_match": True,
     "preserve_format": True,
     "keep_formulas": False,
+    "renumber_seq": False,         # v3.2 通报表：拆完「序号」每组从 1 重新编号
+    "group_totals": False,         # v3.2 通报表：每组重算合计行
     "keep_hidden": False,          # v3.0：隐藏的 sheet 和列也照样发出（默认不发 sheet、清空列）
     "auto_open_output": True,
     # ── 文件加密分发（v2.6 起 PDF，v2.10 起也收 Word/Excel/PPT；键名沿用 pdf_*）──
@@ -290,6 +292,7 @@ class App(_RootBase):
         self._ds_overrides: dict[str, str] = {}   # 逐列调整：{列名: 处理方式}，和用途默认一样的不记
         self._ds_report = ""          # 最近一次脱敏报告路径
         self._split_ds_cols = []      # 拆分：样本表里认出的个人信息列 [(列名, 类型)]
+        self._rpt_hints = {"seq_column": "", "total_rows": 0}   # 拆分：样本表里的序号列 / 合计行（v3.2 通报表）
         self._pdf_paths = [p for p in self.cfg.get("pdf_input_paths", []) if os.path.exists(p)]
         self._scanned_map_path = None   # 最近扫描过的映射清单路径（防过期结果）
         self._columns = []
@@ -594,6 +597,23 @@ class App(_RootBase):
                                           anchor="w", justify="left", wraplength=640)
         self._split_ds_tip.grid(row=2, column=0, columnspan=3, sticky="w")
         drow.grid_remove()
+
+        # 通报表（v3.2）：样本表里认出「序号」列或合计行才出现；两个都默认不勾，不勾时和以前完全一样
+        rrow = self._rpt_row = ctk.CTkFrame(card, fg_color="transparent")
+        rrow.grid(row=10, column=0, padx=12, pady=(0, 10), sticky="ew")
+        self._rpt_lbl = ctk.CTkLabel(rrow, text="", anchor="w", justify="left", wraplength=640)
+        self._rpt_lbl.grid(row=0, column=0, columnspan=2, sticky="w")
+        self._renumber_var = ctk.BooleanVar(value=bool(self.cfg.get("renumber_seq", False)))
+        self._renumber_cb = ctk.CTkCheckBox(rrow, text="拆完序号每组从 1 重新编", variable=self._renumber_var)
+        self._renumber_cb.grid(row=1, column=0, sticky="w", pady=(4, 0), padx=(0, 16))
+        self._totals_var = ctk.BooleanVar(value=bool(self.cfg.get("group_totals", False)))
+        self._totals_cb = ctk.CTkCheckBox(rrow, text="每组补一行自己的合计", variable=self._totals_var)
+        self._totals_cb.grid(row=1, column=1, sticky="w", pady=(4, 0))
+        ctk.CTkLabel(rrow, text="不勾：序号照抄原表、原表的合计行不发（和以前一样）。勾上合计：按每组自己的行重算"
+                                "求和、平均、人数、完成率这类两列之比，算不出的格子留空并在处理详情里点名",
+                     font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w", justify="left",
+                     wraplength=640).grid(row=2, column=0, columnspan=2, sticky="w")
+        rrow.grid_remove()
 
     def _build_batch(self, parent):
         f = ctk.CTkFrame(parent)
@@ -2144,6 +2164,50 @@ class App(_RootBase):
         self._split_ds_row.grid()
         self._on_split_desens_toggle()
 
+    # 拆分 ② 卡片里的「通报表」一行：样本表有序号列或合计行才出现（v3.2）
+    def _scan_report_hints(self, tpl_path, p):
+        if not tpl_path:
+            self._rpt_row.grid_remove()
+            return
+        cfg = self._header_cfg()
+
+        def work():
+            try:
+                from core.splitter import report_hints
+                hints = report_hints(tpl_path, cfg)
+            except Exception:
+                hints = {"seq_column": "", "total_rows": 0}
+            self._ui_q.put(("report_hints", (p, hints)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_report_hints(self, payload):
+        p, hints = payload
+        if p != self._input_var.get().strip():
+            return
+        self._rpt_hints = hints
+        seq, tot = hints.get("seq_column"), hints.get("total_rows")
+        if not (seq or tot):
+            self._rpt_row.grid_remove()
+            return
+        found = "、".join(([f"「{seq}」列"] if seq else []) + (["合计行"] if tot else []))
+        self._rpt_lbl.configure(text=f"📋 这张表有{found}，像是通报表")
+        if seq:
+            self._renumber_cb.grid()
+        else:
+            self._renumber_cb.grid_remove()
+        if tot:
+            self._totals_cb.grid()
+        else:
+            self._totals_cb.grid_remove()
+        self._rpt_row.grid()
+
+    def _report_value(self, key):
+        """renumber_seq / group_totals：提示行没出现（样本表没有序号列 / 合计行）时一律 False，和以前一样。"""
+        if key == "renumber_seq":
+            return bool(self._rpt_hints.get("seq_column")) and self._renumber_var.get()
+        return bool(self._rpt_hints.get("total_rows")) and self._totals_var.get()
+
     def _on_split_desens_toggle(self):
         on = self._split_ds_var.get()
         self._split_ds_scene.configure(state="normal" if on else "disabled")
@@ -2525,6 +2589,10 @@ class App(_RootBase):
             if has("fill_columns"):
                 self._fill_var.set(st["fill_columns"])
             self._due_var.set("")
+            if has("renumber_seq"):
+                self._renumber_var.set(st["renumber_seq"])
+            if has("group_totals"):
+                self._totals_var.set(st["group_totals"])
             if has("split_desens") and self._split_ds_cols:
                 self._split_ds_var.set(bool(st["split_desens"]))
                 if st["split_desens"]:
@@ -2850,6 +2918,8 @@ class App(_RootBase):
         self._on_columns(cols, tpl_name)
         self._split_ds_cols = []
         self._scan_split_desens(tpl_full, p)
+        self._rpt_hints = {"seq_column": "", "total_rows": 0}
+        self._scan_report_hints(tpl_full, p)
 
     def _on_columns(self, cols, tpl_name=None):
         self._columns = cols
@@ -3016,6 +3086,8 @@ class App(_RootBase):
             "fill_columns": self._fill_var.get().strip(),
             "due": self._due_var.get().strip(),
             "split_desens": self._split_desens_value(),
+            "renumber_seq": self._report_value("renumber_seq"),
+            "group_totals": self._report_value("group_totals"),
             "desens_input_path": self._ds_in_var.get().strip(),
             "desens_scene": self._ds_scene_seg.get(),
             "desens_notes": self._ds_notes_var.get(),
@@ -3083,6 +3155,7 @@ class App(_RootBase):
         col_scan: Any = _MISSING
         ds_scan: Any = _MISSING
         split_ds: Any = _MISSING
+        rpt_hints: Any = _MISSING
         ds_copy: Any = _MISSING
         try:
             while True:
@@ -3109,6 +3182,8 @@ class App(_RootBase):
                     ds_scan = payload
                 elif kind == "split_desens":
                     split_ds = payload
+                elif kind == "report_hints":
+                    rpt_hints = payload
                 elif kind == "desens_copy":
                     ds_copy = payload
         except queue.Empty:
@@ -3155,6 +3230,8 @@ class App(_RootBase):
             self._on_desens_scan(ds_scan)
         if split_ds is not _MISSING:
             self._on_split_desens(split_ds)
+        if rpt_hints is not _MISSING:
+            self._on_report_hints(rpt_hints)
         if ds_copy is not _MISSING:
             self._on_desens_copy(ds_copy)
         if done is not _MISSING:

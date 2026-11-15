@@ -108,6 +108,11 @@ def main():
     ap.add_argument("--fast", action="store_true", help="快速模式：数据行只写值不保留格式，速度换取不保留样式")
     ap.add_argument("--keep-formulas", action="store_true",
                      help="尽量保留同行公式（跨行/汇总/跨表公式仍会落成当前缓存数值，不会发送算错的公式）")
+    ap.add_argument("--renumber", action="store_true",
+                    help="通报表：拆完「序号」列每组从 1 重新编号（默认照抄源表序号；认不出序号列时不动）")
+    ap.add_argument("--group-totals", action="store_true",
+                    help="通报表：源表的合计行不分进任何一组，每组照它补一行合计，数字按这一组自己的行重算"
+                         "（求和 / 平均 / 个数 / 两列之比；算不出的格子留空并在日志里点名）")
     ap.add_argument("--keep-hidden", action="store_true",
                     help="隐藏的 sheet 和列也照样发出（默认：隐藏的 sheet 不发，隐藏列的内容清空、仍隐藏）")
     ap.add_argument("--desens", default="", choices=("",) + DESENS_SCENES, metavar="用途",
@@ -141,6 +146,8 @@ def main():
         "preserve_format": ("fast", lambda v, s: not v),
         "keep_formulas": ("keep_formulas", lambda v, s: v),
         "keep_hidden": ("keep_hidden", lambda v, s: v),
+        "renumber_seq": ("renumber", lambda v, s: v),
+        "group_totals": ("group_totals", lambda v, s: v),
         "exact_match": ("fuzzy_match", lambda v, s: not v),
         "header_mode": ("header_mode", lambda v, s: v),
         "header_row": ("header_row", lambda v, s: v),
@@ -204,6 +211,8 @@ def main():
             preserve_format=not args.fast,
             keep_formulas=args.keep_formulas,
             keep_hidden=args.keep_hidden or None,
+            renumber_seq=args.renumber or None,
+            group_totals=args.group_totals or None,
             no_timestamp=args.no_timestamp,
             exact_match=(False if args.fuzzy_match else None),
             header_mode=args.header_mode,

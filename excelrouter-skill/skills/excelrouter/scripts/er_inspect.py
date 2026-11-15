@@ -202,6 +202,17 @@ def _add_suggestion(result, template, files, config):
             f"{c}（{counts[c]} {'人' if c == person else '组'}）" for c in others[:8]))
     if person and person != split:
         lines.append(f"要一人一份，可以按「{person}」拆，或先按上面的字段拆、组内再按「{person}」拆到人")
+    # 通报表（v3.2 内核才有 report_hints）：有序号列 / 合计行时提一句可选项，默认不开
+    try:
+        from core.splitter import report_hints
+        hints = report_hints(template, config)
+    except Exception:
+        hints = None
+    if hints and (hints["seq_column"] or hints["total_rows"]):
+        result["report_hints"] = hints
+        bits = ([f"拆完「{hints['seq_column']}」每组从 1 重新编号（--renumber）"] if hints["seq_column"] else []) + \
+               (["每组补一行按自己的数重算的合计（--group-totals）"] if hints["total_rows"] else [])
+        lines.append("这张表像通报表，可以问一下要不要：" + "；".join(bits) + "。默认都不开，序号照抄、合计行不发")
     if lines:
         result["message"] = "\n".join(lines)
 
