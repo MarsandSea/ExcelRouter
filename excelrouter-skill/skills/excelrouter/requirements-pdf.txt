@@ -1,7 +1,8 @@
 # PDF 批量加密分发的可选依赖 —— 只在需要 PDF 功能时才装：
 #   pip install -r requirements-pdf.txt
 # 只做 Excel 拆分时不需要，跳过即可（脚本内置依赖自检，用到时才提示）。
-pypdf>=6.0.0
+# pypdf 7 起水印盖不上（test_pdf_dist 两条用例挂），适配前先封顶
+pypdf>=6.0.0,<7
 fpdf2>=2.8.0
 cryptography>=42.0.0
 msoffcrypto-tool>=5.0.0
