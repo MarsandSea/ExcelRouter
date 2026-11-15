@@ -70,9 +70,14 @@ def is_skip_value(value, skip_set=None):
     return vc in {hard_clean(s).lower() for s in skip_set if hard_clean(s)}
 
 
+_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(\..*)?", re.I)
+
+
 def safe_filename(name, fallback="未命名"):
     """把任意取值转成合法的 Windows 文件名/文件夹名片段。"""
     s = soft_clean(name)
     s = re.sub(r'[\\/:*?"<>|]', '_', s)   # Windows 非法字符
     s = s.strip('. ')                      # 结尾的点和空格在 Windows 上非法
+    if _RESERVED.fullmatch(s):             # CON、NUL、COM1 这类设备名（带扩展名也算）建不出文件
+        s = "_" + s
     return s or fallback

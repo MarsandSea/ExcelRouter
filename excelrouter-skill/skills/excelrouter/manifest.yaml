@@ -6,7 +6,7 @@
 name: excelrouter
 # 显示名为什么这样排，见 docs/RELEASING.md「技能市场显示名与审核」。
 display_name: Excel拆分合并、表格拆分汇总、PDF加密分发 — ExcelRouter
-version: "3.1.1"
+version: "3.2.0"
 slug: excelrouter
 description: >
   发出去、收回来都交给 AI。拆分——总表按任意字段拆成多个文件：工资条、绩效表一人一份，

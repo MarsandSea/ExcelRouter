@@ -243,34 +243,68 @@ _NS_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}
 _NS_PKG = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 
+class UnsafeXML(Exception):
+    """表格包里的 XML 带 DTD 或实体声明：Excel、WPS 存的表从来没有（ECMA-376 也不用 DTD），为安全起见不解析。"""
+
+
+def _xml_starts(src, stop=None):
+    """逐个产出 XML 的开始标签 (标签, 属性)，写法同 ElementTree：{命名空间}名字。
+
+    直接用 expat，并且关掉 DTD：遇到 <!DOCTYPE、实体声明或外部实体引用就抛 UnsafeXML，不读外部文件、
+    不展开实体（防 XXE 与实体膨胀）。src 是 bytes 或文件对象；读到 stop 标签就停，后面不再读。
+    """
+    from xml.parsers import expat
+
+    def refuse(*_args):
+        raise UnsafeXML("表格内部的 XML 带 DTD 或实体声明，为安全起见不处理")
+
+    def name(n):
+        return "{" + n if "}" in n else n
+
+    found = []
+    p = expat.ParserCreate(namespace_separator="}")
+    p.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    p.StartDoctypeDeclHandler = refuse
+    p.EntityDeclHandler = refuse
+    p.ExternalEntityRefHandler = refuse
+    p.StartElementHandler = lambda tag, attrs: found.append((name(tag), {name(k): v for k, v in attrs.items()}))
+    chunks = iter(lambda: src.read(65536), b"") if hasattr(src, "read") else iter([src])
+    for chunk in chunks:
+        p.Parse(chunk, False)
+        for item in found:
+            yield item
+            if item[0] == stop:
+                return
+        found.clear()
+    p.Parse(b"", True)
+    yield from found
+
+
 def _xlsx_hidden(path):
     """直接读 xlsx 包里的 XML：{sheet 名: (状态, {隐藏列 1 基列号})}。
 
     只读模式拿不到列属性，整本加载又太慢；<cols> 在 <sheetData> 之前，读到那里就停。
-    列宽小到看不见（< 0.5）的列也算隐藏。
+    列宽小到看不见（< 0.5）的列也算隐藏。XML 用 _xml_starts 读（不认 DTD）。
     """
     import posixpath
-    from xml.etree.ElementTree import fromstring, iterparse
     out = {}
     with zipfile.ZipFile(path) as z:
-        rels = {r.get("Id"): r.get("Target") for r in fromstring(z.read("xl/_rels/workbook.xml.rels"))
-                if r.tag == _NS_PKG + "Relationship"}
-        sheets = fromstring(z.read("xl/workbook.xml")).find(_NS_MAIN + "sheets")
-        for sh in (sheets if sheets is not None else []):
+        rels = {a.get("Id"): a.get("Target") for tag, a in _xml_starts(z.read("xl/_rels/workbook.xml.rels"))
+                if tag == _NS_PKG + "Relationship"}
+        sheets = [a for tag, a in _xml_starts(z.read("xl/workbook.xml")) if tag == _NS_MAIN + "sheet"]
+        for sh in sheets:
             target = rels.get(sh.get(_NS_REL + "id"), "")
             part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
             cols = set()
             try:
                 with z.open(part) as f:
-                    for _ev, el in iterparse(f, events=("start",)):
-                        if el.tag == _NS_MAIN + "sheetData":
-                            break
-                        if el.tag == _NS_MAIN + "col":
-                            width = el.get("width")
-                            hidden = el.get("hidden") in ("1", "true") or (
-                                el.get("customWidth") in ("1", "true") and width is not None and float(width) < 0.5)
+                    for tag, a in _xml_starts(f, stop=_NS_MAIN + "sheetData"):
+                        if tag == _NS_MAIN + "col":
+                            width = a.get("width")
+                            hidden = a.get("hidden") in ("1", "true") or (
+                                a.get("customWidth") in ("1", "true") and width is not None and float(width) < 0.5)
                             if hidden:
-                                cols.update(range(int(el.get("min")), int(el.get("max")) + 1))
+                                cols.update(range(int(a.get("min")), int(a.get("max")) + 1))
             except (KeyError, ValueError):
                 pass
             out[sh.get("name")] = (sh.get("state") or "visible", cols)

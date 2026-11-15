@@ -503,15 +503,29 @@ class Job:
         return cls(scene, cols, d.get("notes", True) is not False, str(d.get("seed") or ""))
 
     # ---------- 分段做：存进度 / 读回 ----------
-    def to_state(self):
-        """存成能写进 JSON 的样子（技能分几条命令做完一批时用）。含代号种子：做完后调用方应把它去掉。"""
-        return {"scene": self.scene, "columns": self.columns, "notes": self.notes, "key": self.key.hex(),
-                "fixed": self.fixed_seed, "kept": sorted(self.kept), "details": self.details,
-                "embedded": self.embedded, "hits": self.hits, "files": [list(f) for f in self.files]}
+    def to_state(self, seal=None):
+        """存成能写进 JSON 的样子（技能分几条命令做完一批时用）。
+
+        代号种子不原样写：给了 seal（字节 → 字符串，技能用 core.seal 的 Windows 数据保护）才写封好的 sealed_key；
+        不给就不带种子，这份状态只能看进度、不能接着做。做完后调用方仍应把整份状态去掉。
+        """
+        st = {"scene": self.scene, "columns": self.columns, "notes": self.notes,
+              "fixed": self.fixed_seed, "kept": sorted(self.kept), "details": self.details,
+              "embedded": self.embedded, "hits": self.hits, "files": [list(f) for f in self.files]}
+        if seal:
+            st["sealed_key"] = seal(self.key)
+        return st
 
     @classmethod
-    def from_state(cls, d):
-        job = cls(d.get("scene") or "自定义", d.get("columns"), d.get("notes", True), d.get("key") or "")
+    def from_state(cls, d, unseal=None):
+        """to_state 的反过程。接着做要用 unseal 解开种子；没有种子或解不开抛 ValueError（代号前后会对不上，不能硬做）。"""
+        try:
+            key = unseal(d["sealed_key"]) if unseal and d.get("sealed_key") else b""
+        except Exception as e:
+            raise ValueError("这一批的代号种子解不开（换了电脑或 Windows 账户？），请重新开始这一批") from e
+        if not key:
+            raise ValueError("进度里没有这一批的代号种子，没法接着做，请重新开始这一批")
+        job = cls(d.get("scene") or "自定义", d.get("columns"), d.get("notes", True), key.hex())
         job.fixed_seed = bool(d.get("fixed"))
         job.kept = set(d.get("kept") or [])
         job.details = list(d.get("details") or [])
