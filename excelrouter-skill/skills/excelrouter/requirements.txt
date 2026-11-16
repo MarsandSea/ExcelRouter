@@ -4,3 +4,4 @@
 # 已去掉桌面版 GUI 专用依赖 customtkinter / tkinterdnd2 —— skill 是命令行形态。
 openpyxl>=3.1.0
 xlrd>=2.0.1
+# pypdf 7 起水印盖不上（test_pdf_dist 两条用例挂），适配前先封顶

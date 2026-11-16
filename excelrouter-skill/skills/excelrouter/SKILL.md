@@ -1,7 +1,7 @@
 ---
 name: excelrouter
 slug: excelrouter
-version: "3.2.0"
+version: "3.2.2"
 displayName: Excel拆分合并、表格拆分汇总、PDF加密分发 — ExcelRouter
 author: AbeLin
 license: MIT

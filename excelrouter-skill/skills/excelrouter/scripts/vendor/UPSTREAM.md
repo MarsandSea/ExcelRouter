@@ -16,9 +16,9 @@
 <!-- SYNC:BEGIN 以下内容由 publish-skill.yml 每次发布自动重写，手改无效 -->
 ## 当前同步状态
 
-- 对应本仓库 tag：`v3.2.0`
-- 对应 commit：`cfcccd69c9464be1975953a397cfa62f933f7e08`
-- 同步时间：2026-11-15 05:47 UTC
+- 对应本仓库 tag：`v3.2.2`
+- 对应 commit：`d5f11c99f09af2ebe1a98eb229b45e1b7478c5d4`
+- 同步时间：2026-11-16 03:35 UTC
 - 来源：与本仓库 `core/` 同一套代码（skill 与桌面版同仓，无需跨仓拉取）
 <!-- SYNC:END -->
 
