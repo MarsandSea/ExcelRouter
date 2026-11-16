@@ -11,13 +11,14 @@ make_icons.py —— 生成 ExcelRouter 的多尺寸图标。
   约 10% 透明边、还带一圈投影——缩到桌面的 48px 后投影糊成灰色脏边，绿块也
   比旁边的 Windows 图标小一圈。Windows 图标不带投影、底板铺满画布，这里照做。
 
-两档画法（分界线在 24）：
-  · 32px 及以上（完整版）：带行线的源表 + 分叉连线 + 三个文件块。
-  · 16/24px（简化版）：去掉连线和行线，只剩「一个高块 → 三个小块」。
-    尺子来自 16px：256 坐标系里 16 个单位 = 1 像素，每个块至少 3px 高、
-    块间至少 2px 才不粘连。三块 3+2+3+2+3 = 13px，正好放进 16px 里，
-    所以简化版也能保住「三」，不用再减成两块。坐标都取 16 的倍数，16px 帧
-    像素对齐，不会糊边。
+两档画法（分界线在 24），**图形结构一样**：源表 → 分叉连线 → 三个文件块。
+  · 32px 及以上（完整版）：源表带行线、分叉拐角是圆弧。
+  · 16/20/24px（像素版）：同一个结构按 16px 的像素格重画——源表 4×10、
+    连线 1px、三个文件块 4×3（块间 2px）。256 坐标系里 16 个单位 = 1 像素，
+    坐标都取 16 的倍数，16px 帧像素对齐不糊边；去掉的只有行线和圆角。
+    v3.2.1 之前这一档只画「一个高块 → 三个小块」、没有连线，任务栏（16/24px）
+    和桌面（48px 起）看着像两个图标，作者两次指出过——**别再把连线去掉**，
+    tests/test_icons.py 会检查小帧里有没有连线。
 
 用法：
   py make_icons.py                  # 重新生成所有图标
@@ -27,7 +28,7 @@ make_icons.py —— 生成 ExcelRouter 的多尺寸图标。
   app.ico               Windows exe / 窗口图标，10 个尺寸帧
   app.png               Linux 窗口与开始菜单图标（256px）
   docs/favicon.ico      落地页 favicon
-  docs/logo-small.svg   简化版矢量源（只是给人看的，真源是本文件）
+  docs/logo-small.svg   像素版矢量源（只是给人看的，真源是本文件）
   docs/logo.png / logo.svg 是网页上的大图，带投影的 macOS 风格，不由本脚本生成。
 
 依赖：只要 Pillow。
@@ -64,11 +65,18 @@ TRUNK_X = 136                        # 分叉竖线的 x
 BEND_R = 14                          # 分叉拐角半径
 LINE_W = 8                           # 行线粗细
 
-# ---- 简化版几何（16/24px；坐标是 16 的倍数，16px 帧像素对齐）----
+# ---- 像素版几何（16/20/24px；坐标是 16 的倍数，16px 帧像素对齐）----
 SMALL_PLATE_R = 40                   # 圆角收小一点，右上 / 右下角的块才不会被切
-SMALL_SRC = (32, 48, 128, 208)       # 源表：6 × 10 px@16
-SMALL_TGT_X = (160, 224)             # 文件块：4 × 3 px@16，与源表隔 2px
+SMALL_SRC = (32, 48, 96, 208)        # 源表：4 × 10 px@16（第 2～5 列）
+SMALL_TGT_X = (160, 224)             # 文件块：4 × 3 px@16（第 10～13 列）
 SMALL_TGT_YS = ((16, 64), (96, 144), (176, 224))   # 3px 高、间隔 2px
+SMALL_LINKS = (                      # 连线，全是 1px 宽的矩形
+    (96, 112, 128, 128),             #   源表 → 竖线（第 7 行）
+    (128, 32, 144, 208),             #   分叉竖线（第 8 列，第 2～12 行）
+    (144, 32, 160, 48),              #   → 上块
+    (144, 112, 160, 128),            #   → 中块
+    (144, 192, 160, 208),            #   → 下块
+)
 
 
 def _plate(size: int, radius: float) -> Image.Image:
@@ -142,16 +150,18 @@ def render_full(size: int) -> Image.Image:
 
 
 def render_small(size: int) -> Image.Image:
-    """简化版：一个高块 → 三个小块，没有连线和行线。"""
+    """像素版：源表 → 分叉 → 三个文件，和完整版同一个结构，只去掉行线和圆弧。"""
     big = size * SS
     s = big / 256
     im = _plate(big, SMALL_PLATE_R)
     d = ImageDraw.Draw(im)
     white = PAPER + (255,)
-    d.rounded_rectangle([v * s for v in SMALL_SRC], radius=12 * s, fill=white)
+    d.rounded_rectangle([v * s for v in SMALL_SRC], radius=8 * s, fill=white)
+    for r in SMALL_LINKS:
+        d.rectangle([v * s for v in r], fill=white)
     for y0, y1 in SMALL_TGT_YS:
         d.rounded_rectangle([SMALL_TGT_X[0] * s, y0 * s, SMALL_TGT_X[1] * s, y1 * s],
-                            radius=10 * s, fill=white)
+                            radius=8 * s, fill=white)
     return im.resize((size, size), Image.LANCZOS)
 
 
@@ -168,9 +178,9 @@ def render(size: int) -> Image.Image:
 
 SVG_TEMPLATE = '''<svg viewBox="0 0 256 256" width="256" height="256" xmlns="http://www.w3.org/2000/svg" role="img">
   <!-- Copyright (c) 2026 AbeLin · MIT License -->
-  <title>ExcelRouter（小尺寸简化版）</title>
-  <desc>16/24px 专用：一个源表 → 三个文件，去掉纸面行线与分叉连线
-        —— 16px 下每个块至少要 3 像素、间距至少 2 像素，连线排不下。
+  <title>ExcelRouter（小尺寸像素版）</title>
+  <desc>16/20/24px 专用：源表 → 分叉连线 → 三个文件，和大图标同一个结构，
+        只去掉纸面行线和圆弧拐角，按 16px 像素格对齐。
         几何参数的真源是仓库根目录的 make_icons.py，改这份 SVG 不会影响
         app.ico / favicon.ico，要改请改脚本再重新生成。</desc>
   <defs>
@@ -181,7 +191,8 @@ SVG_TEMPLATE = '''<svg viewBox="0 0 256 256" width="256" height="256" xmlns="htt
     </linearGradient>
   </defs>
   <rect x="{px}" y="{py}" width="{pw}" height="{ph}" rx="{pr}" fill="url(#bg)"/>
-  <rect x="{sx}" y="{sy}" width="{sw}" height="{sh}" rx="12" fill="#FFFFFF"/>
+  <rect x="{sx}" y="{sy}" width="{sw}" height="{sh}" rx="8" fill="#FFFFFF"/>
+{links}
 {targets}
 </svg>
 '''
@@ -190,14 +201,17 @@ SVG_TEMPLATE = '''<svg viewBox="0 0 256 256" width="256" height="256" xmlns="htt
 def write_svg(path: str) -> None:
     tx0, tx1 = SMALL_TGT_X
     targets = "\n".join(
-        f'  <rect x="{tx0}" y="{y0}" width="{tx1 - tx0}" height="{y1 - y0}" rx="10" fill="#FFFFFF"/>'
+        f'  <rect x="{tx0}" y="{y0}" width="{tx1 - tx0}" height="{y1 - y0}" rx="8" fill="#FFFFFF"/>'
         for y0, y1 in SMALL_TGT_YS)
+    links = "\n".join(
+        f'  <rect x="{x0}" y="{y0}" width="{x1 - x0}" height="{y1 - y0}" fill="#FFFFFF"/>'
+        for x0, y0, x1, y1 in SMALL_LINKS)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(SVG_TEMPLATE.format(
             px=PLATE[0], py=PLATE[1], pw=PLATE[2] - PLATE[0], ph=PLATE[3] - PLATE[1], pr=SMALL_PLATE_R,
             sx=SMALL_SRC[0], sy=SMALL_SRC[1],
             sw=SMALL_SRC[2] - SMALL_SRC[0], sh=SMALL_SRC[3] - SMALL_SRC[1],
-            targets=targets,
+            links=links, targets=targets,
         ))
 
 

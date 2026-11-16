@@ -11,7 +11,9 @@
 字段做二级拆分（「到人」），并保留原始表头格式。面向不会编程的普通办公人员，v2.1 起界面已改为
 **单屏自适应**（不再是三层分档 Tab），v2.4 后期进一步重构为**三步卡片式**：
 ①选表格 → ②选字段 → ③开始拆分，主按钮固定底部，高级设置与日志默认折叠。
-当前版本 **v3.2.1**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+当前版本 **v3.2.2**，GitHub 仓库：`MarsandSea/ExcelRouter`。
+
+> **v3.2.2：任务栏小图标和桌面图标统一（2026-11）**：`app.ico` 的 16/20/24px 帧原来只画「一个高块 → 三个小块」，任务栏和桌面看着像两个图标。`make_icons.py` 的小帧改成同一个「源表 → 分叉连线 → 三个文件」结构（按 16px 像素格对齐），`tests/test_icons.py` 逐帧比对生成结果并检查小帧有连线。
 
 > **v3.2.1：pypdf 封顶 <7**（2026-11）：v3.2.0 打 tag 后发版 CI 装到 pypdf 7.1.0，PDF 水印盖不上、`test_pdf_dist` 两条挂，没发出 Release；v3.2.0 这个 tag 留着没删（不出 Release），桌面版直接发 3.2.1。适配 pypdf 7 之前别去掉上限。
 
@@ -365,8 +367,11 @@ excel-router/
 │   │                          #   而解压到哪儿只有用户机器上才知道
 │   └── README-Linux.txt       # 随 tar.gz 一起分发的「使用说明.txt」
 ├── .gitattributes             # ★ 钉死 *.sh 为 LF：本机 autocrlf=true，CRLF 的 sh 在麒麟上直接起不来
-├── app.ico                    # 程序图标（Windows；占位，用户可替换）
-├── app.png                    # 程序图标（Linux/X11 用 iconphoto，拷自 docs/logo.png）
+├── make_icons.py              # ★ 图标唯一真源：app.ico / app.png / docs/favicon.ico / logo-small.svg 都由它画，
+│                              #   改图标只改脚本再 `py make_icons.py`；tests/test_icons.py 逐帧比对，手改会红。
+│                              #   16/20/24px 小帧也必须带分叉连线（和桌面大图标同一个图形，别再简化成三块）
+├── app.ico                    # 程序图标（Windows exe + 窗口 / 任务栏，10 个尺寸帧，make_icons.py 生成）
+├── app.png                    # 程序图标（Linux/X11 iconphoto + 开始菜单，make_icons.py 生成）
 ├── version.txt                # ★ 仅 Windows 用（PyInstaller --version-file 是 PE 资源）。
 │                              #   不要为 Linux 另造版本文件，build_linux.sh 从 APP_VERSION 解析
 ├── config/
