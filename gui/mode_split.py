@@ -1090,6 +1090,8 @@ class SplitModeMixin:
             return self._start_collect("check" if self._col_check_var.get() else "merge")
         if self._mode == "desens":
             return self._start_desens()
+        if self._mode == "compare":
+            return self._start_compare()
         cfg = self._collect_config()
         cfg["desens"] = cfg["split_desens"]       # 拆分时顺带脱敏：空 = 不脱敏，和以前一样
         if not cfg["input_path"] or not os.path.exists(cfg["input_path"]):

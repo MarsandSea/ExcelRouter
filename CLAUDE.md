@@ -383,7 +383,7 @@ excel-router/
 │   ├── pdf_dist.py            # PDF 按网格加密分发（密码/水印/分发清单）
 │   ├── collect.py             # Excel 汇总 + 查收通报 + 下发标记 + 填报规则（纯 openpyxl，不导入 pandas）
 │   ├── xlio.py                # v3.0：拆分和汇总共用的读表层（表头识别、只读流式读、隐藏信息、写值、ZIP）
-│   ├── compare.py             # 两表核对：按关键列对上两张表，找新增 / 没了 / 改过的格子（纯 openpyxl；GUI 暂未接入）
+│   ├── compare.py             # 两表核对：按关键列对上两张表，找新增 / 没了 / 改过的格子（纯 openpyxl；界面入口 run_compare / scan_pair）
 │   ├── recipe.py              # v3.0：方案（存 / 读 / 套用 / 列检查），只用标准库
 │   ├── desens.py              # v3.1：数据脱敏（识别 / 打码 / 代号 / 泛化 / 清空 / 复检 / 报告；纯 openpyxl）
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
@@ -393,9 +393,11 @@ excel-router/
 │   ├── common.py              # 界面公用：路径（打包适配）、文案常量、配色、按钮工厂、配置读写
 │   ├── mode_split.py          # 「Excel 拆分」模式（SplitModeMixin；含按模式分派的 _start）
 │   ├── mode_collect.py        # 「Excel 汇总」模式（CollectModeMixin）
+│   ├── mode_compare.py        # 「两表核对」模式（CompareModeMixin）
 │   ├── mode_desens.py         # 「数据脱敏」模式（DesensModeMixin；含汇总结果「另存脱敏版」）
 │   ├── mode_pdf.py            # 「文件加密分发」模式（PdfModeMixin）
-│   └── platform_compat.py     # 平台兼容层（打开文件管理器/拖放解析/UI字体/窗口图标/锁文件）
+│   ├── platform_compat.py     # 平台兼容层（打开文件管理器/拖放解析/UI字体/窗口图标/锁文件）
+│   └── compare_text.py        # 两表核对的界面文案（关键列下拉选项、结果卡片几行字；不 import tkinter）
 ├── examples/
 │   ├── make_sample.py         # 可复现样本生成器：5 个月份 × 55 名虚拟员工，3 行合并表头
 │   └── {1-5}月A分公司明细.xlsx # 生成的演示样本（跨文件合并 + 到人演示用）
@@ -417,7 +419,8 @@ excel-router/
     ├── test_collect_snapshot.py # 查收通报 / 催办 / 进度表全文快照 + 问题编码 + 多轮对比（v3.0）
     ├── test_fill_rules.py     # 填报规则：解析、_coerce、下发验证、查收填写有误、汇总规整（v3.0）
     ├── test_recipe.py         # 方案：往返、外来数据、列检查（v3.0）
-    ├── test_compare.py        # 两表核对：比较口径、关键列推荐、重复关键列、结果工作簿
+    ├── test_compare.py        # 两表核对：比较口径、关键列推荐、重复关键列、结果工作簿、run_compare
+    ├── test_compare_text.py   # 两表核对界面文案（无头）
     ├── test_desens.py         # 数据脱敏：校验器、处理方式、夹带号码、拆分 / 单独 / 汇总脱敏版、复检拦截
     ├── test_xlio.py           # 读表层单测 + 「清洁度」检查（v3.0）
     ├── test_golden_split.py   # 拆分产物与 2.10.1 逐格比对（v3.0 去 pandas 的守卫）
@@ -465,6 +468,7 @@ excel-router/
 | `desens` | 数据脱敏（v3.1）：用途名，或 `{scene, columns:{列名: mask/pseudo/generalize/clear/keep}, notes, seed}`；空 = 不脱敏，见 `docs/数据脱敏-设计方案.md` | `""`（不在 default_config 里） |
 | `split_desens` | 拆分 ②「发出去时打码」选的用途；空 = 不打码。`_start` 转成 `desens` 传给 run_split（v3.1） | `""` |
 | `desens_input_path` / `desens_scene` / `desens_notes` / `desens_columns` | 「数据脱敏」模式的输入 / 用途 / 文字夹带开关 / 逐列调整文字（`列名:处理方式、…`）（v3.1） | `""` / `"发群通报"` / `true` / `""` |
+| `compare_a` / `compare_b` / `compare_key` | 两表核对：原来的表 / 新的表 / 关键列（列名列表，空 = 用推荐的第一个） | `""` / `""` / `[]` |
 | `recent_recipes` / `recipe_tip_off` | 最近用过的方案路径（最多 5 个）/ 跑完后不再提示「存成方案」（v3.0） | `[]` / `false` |
 
 ### core/splitter.py 的关键函数
@@ -584,12 +588,19 @@ excel-router/
 
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
 
-> **2026-11 按模式拆文件（纯重构，行为不变）**：`App` = `SplitModeMixin, CollectModeMixin, DesensModeMixin,
-> PdfModeMixin, _RootBase`，四个模式的方法原样搬进 `gui/mode_*.py`，公用常量 / 配色 / 配置读写搬进 `gui/common.py`；
+> **2026-11 按模式拆文件（纯重构，行为不变）**：`App` = `SplitModeMixin, CollectModeMixin, CompareModeMixin, DesensModeMixin,
+> PdfModeMixin, _RootBase`，各模式的方法原样搬进 `gui/mode_*.py`，公用常量 / 配色 / 配置读写搬进 `gui/common.py`；
 > 下文提到的方法名都还在，只是可能在对应的 mode 文件里。mixin 没有自己的状态和 `__init__`，控件都挂在同一个 App 上。
 > 规矩：**同一个方法名只写在一个文件里**（写两处时 MRO 前面的静默覆盖后面的，`tests/test_gui_layout.py` 守着）；
 > `APP_VERSION` 留在 app.py（`build_linux.sh` 用正则读它）；mode 文件顶部关了 pyright 的 `reportAttributeAccessIssue`
 >（别处定义的 `self.xxx` 它看不到），app.py 照常全查。
+
+**两表核对模式**：`MODE_LABELS` 第三段「两表核对」（内部名 `compare`），`_compare_frame` 由 `gui/mode_compare.py` 的 `_build_compare_steps` 搭
+（①原来的表 A / 新的表 B，拖两个文件进卡片按顺序填 ②关键列下拉——`scan_pair` 在子线程跑，泵消息 `compare_scan`，
+选项文字由 `gui/compare_text.key_options` 生成 + 结果卡片：`result_lines` 按新增绿 / 没了红 / 改过橙逐行列出、「打开核对结果」）。
+核对走 `core.compare.run_compare`（签名同 run_split，结果固定在 B 表旁「核对结果」，同一分钟重跑加序号，收尾 `[SUMMARY]`
+带计数和每类最多 8 条示例 `preview`）。界面放宽到 `CMP_MAX_CELLS`=300 万格（技能仍是 `MAX_CELLS` 100 万）。
+③卡片收起「结果保存到」；这个模式没有方案（`recipe.MODE_NAMES` 里没有，`_save_recipe` 直接提示）。
 
 **Excel 汇总模式（v2.10）**：`MODE_LABELS` 原为三段「Excel 拆分 / Excel 汇总 / 文件加密分发」（v3.1 在汇总后插入「数据脱敏」，见开头 v3.1 说明）；
 `_collect_frame` 由 `_build_collect_steps` 搭（①文件夹 / 一个文件 ②「先查收，再汇总」开关 `_col_check_var`，

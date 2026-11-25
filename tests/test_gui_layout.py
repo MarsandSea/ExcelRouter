@@ -13,7 +13,7 @@ import os
 import re
 
 GUI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gui")
-MODES = ("mode_split", "mode_collect", "mode_desens", "mode_pdf")
+MODES = ("mode_split", "mode_collect", "mode_compare", "mode_desens", "mode_pdf")
 
 
 def _methods(fname, cls_suffix):

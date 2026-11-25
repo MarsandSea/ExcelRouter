@@ -48,7 +48,14 @@ PDF_COL_PLACEHOLDER = "（选清单后自动识别）"
 # 「collect」对外叫「Excel 汇总」：默认是普通的合并汇总，查收（谁没交、谁漏填）是 ② 里的可选开关
 # 「pdf」对外叫「文件加密分发」（v2.10 起也收 Word / Excel / PPT，内部名不改，ui_mode 已存进用户配置）
 # 「desens」对外叫「数据脱敏」（v3.1）：单独给表格打码 / 换代号 / 清空，处理完复检
-MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "desens": "数据脱敏", "pdf": "文件加密分发"}
+# 「compare」对外叫「两表核对」：两张表按关键列对上，列出新增 / 没了 / 改过的行（core/compare.py）
+MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "compare": "两表核对", "desens": "数据脱敏",
+               "pdf": "文件加密分发"}
+CMP_IN_TIP = "选同一张表的两个版本（比如上个月和这个月）；结果放在新表旁边的「核对结果」，两张表都不改"
+CMP_KEY_PLACEHOLDER = "（选好两张表后自动推荐）"
+CMP_MAX_CELLS = 3_000_000   # 界面不受技能一条命令 70 秒的限制，放宽到 300 万格（约 6 万行 × 50 列）
+CMP_COLORS = {"add": ("#15803d", "#4ade80"), "del": ("#b91c1c", "#f87171"), "chg": ("#b45309", "#fbbf24"),
+              "warn": ("#b45309", "#fbbf24"), "info": ("gray40", "gray60")}
 COL_IN_TIP = "把要合并的表放进一个文件夹再选它；选一个文件时，把它的各个 sheet 合成一张"
 DS_IN_TIP = "选一个表或一个文件夹；结果放在旁边的「脱敏结果」里，原表不改"
 # 数据脱敏的用途与处理方式（与 core/desens.py 一致；GUI 启动时不 import core）
@@ -162,6 +169,10 @@ FALLBACK_CONFIG = {
     "collect_title": "",
     "collect_due": "",
     "collect_record": "",
+    # ── 两表核对：A 是原来的表，B 是新的表，关键列是列名列表（空 = 用推荐的）──
+    "compare_a": "",
+    "compare_b": "",
+    "compare_key": [],
     "fill_columns": "",       # 拆分时让对方填写的列（选填）：标黄、其余列锁定、写下发记录
     "due": "",
     # ── 方案（v3.0）：最近打开 / 存过的方案文件路径，跑完后「存成方案」的提示点过不再提示 ──

@@ -3,6 +3,8 @@
 Copyright (c) 2026 AbeLin · MIT License
 """
 import datetime
+import json
+import os
 
 import openpyxl
 
@@ -187,3 +189,91 @@ def test_a_few_duplicate_keys_still_suggested(tmp_path):
     b = cp.read_table(_xlsx(tmp_path / "b.xlsx", [("工号", "数量")] + rows))
     k = cp.suggest_keys(a, b)[0]
     assert k["cols"] == ["工号"] and k["dup_a"] == 2
+
+
+# =====================================================
+# 界面入口：scan_pair / run_compare（v3.3）
+# =====================================================
+
+def _pair(tmp_path):
+    rows = _rows()
+    brows = [list(r) for r in rows[:5]] + [[7, "E007", "人7", "东城", 107.5, datetime.date(2026, 9, 7)]]
+    brows[1][4] = 999           # E002 金额改了
+    a = _xlsx(tmp_path / "九月.xlsx", [HEAD] + rows)
+    b = _xlsx(tmp_path / "十月.xlsx", [HEAD] + brows)
+    return a, b
+
+
+def test_scan_pair_reports_columns_and_keys(tmp_path):
+    a, b = _pair(tmp_path)
+    info = cp.scan_pair(a, b)
+    assert info["keys"][0]["cols"] == ["工号"]
+    assert info["columns"] == list(HEAD)
+    assert (info["rows_a"], info["rows_b"]) == (6, 6)
+    assert info["sheet_a"] == info["sheet_b"] == "Sheet1"
+
+
+def _run(cfg):
+    logs = []
+    out = cp.run_compare(cfg, log_fn=logs.append, progress_fn=lambda v: None)
+    summ = [json.loads(m[len("[SUMMARY] "):]) for m in logs if m.startswith("[SUMMARY] ")]
+    return out, logs, summ[0] if summ else None
+
+
+def test_run_compare_writes_result_next_to_b(tmp_path):
+    a, b = _pair(tmp_path)
+    out, _logs, s = _run({"compare_a": a, "compare_b": b, "compare_key": ["工号"]})
+    assert out == str(tmp_path / cp.RESULT_DIR)
+    assert s["mode"] == "compare" and s["key"] == ["工号"]
+    assert (s["only_a"], s["only_b"], s["changed_rows"], s["changed_cells"]) == (1, 1, 1, 1)
+    assert s["preview"] == {"only_a": ["E006"], "only_b": ["E007"], "changed": [["E002", ["金额"]]]}
+    assert s["per_col"] == {"金额": 1}
+    wb = openpyxl.load_workbook(s["result"])
+    assert wb.sheetnames == list(cp.SHEETS)
+    # 同一分钟再跑一次：另起一个文件，不覆盖上一次的
+    _out, _logs, s2 = _run({"compare_a": a, "compare_b": b, "compare_key": "工号"})
+    assert s2["result"] != s["result"] and os.path.exists(s["result"])
+
+
+def test_run_compare_uses_suggested_key_when_empty(tmp_path):
+    a, b = _pair(tmp_path)
+    out, logs, s = _run({"compare_a": a, "compare_b": b})
+    assert out and s["key"] == ["工号"]
+    assert any("推荐" in m for m in logs)
+
+
+def test_run_compare_key_text_with_plus(tmp_path):
+    head = ("姓名", "部门", "金额")
+    a = _xlsx(tmp_path / "a.xlsx", [head, ("张三", "东城", 1), ("张三", "西城", 2)])
+    b = _xlsx(tmp_path / "b.xlsx", [head, ("张三", "东城", 1), ("张三", "西城", 3)])
+    _out, _logs, s = _run({"compare_a": a, "compare_b": b, "compare_key": "姓名+部门"})
+    assert s["key"] == ["姓名", "部门"] and s["changed_rows"] == 1
+    assert s["preview"]["changed"] == [["张三 / 西城", ["金额"]]]
+
+
+def test_run_compare_fails_politely(tmp_path):
+    a, b = _pair(tmp_path)
+    big = _xlsx(tmp_path / "大表.xlsx", [HEAD] + [(i, f"E{i:03d}", "人", "东城", i, None) for i in range(60)])
+    for cfg, word in (({"compare_a": a, "compare_b": a}, "同一个文件"),
+                      ({"compare_a": a, "compare_b": str(tmp_path / "没有.xlsx")}, "选好两张表"),
+                      ({"compare_a": a, "compare_b": b, "compare_key": ["不存在"]}, "找不到关键列"),
+                      ({"compare_a": a, "compare_b": big, "max_cells": 60}, "表太大")):
+        out, logs, s = _run(cfg)
+        assert out is None and s is None
+        assert any(word in m for m in logs), (word, logs)
+    assert not os.path.exists(tmp_path / cp.RESULT_DIR)
+
+
+def test_run_compare_stops(tmp_path):
+    a, b = _pair(tmp_path)
+    out = cp.run_compare({"compare_a": a, "compare_b": b}, stop_flag=lambda: True)
+    assert out is None and not os.path.exists(tmp_path / cp.RESULT_DIR)
+
+
+def test_run_compare_header_row(tmp_path):
+    rows = _rows()
+    a = _xlsx(tmp_path / "a.xlsx", [HEAD] + rows, top=[("标题",), ("说明",)])
+    b = _xlsx(tmp_path / "b.xlsx", [HEAD] + rows, top=[("标题",), ("说明",)])
+    _out, _logs, s = _run({"compare_a": a, "compare_b": b, "compare_key": ["工号"],
+                           "header_mode": "row", "header_row": 3})
+    assert s["matched"] == 6 and s["changed_rows"] == 0

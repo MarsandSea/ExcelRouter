@@ -34,6 +34,7 @@ from gui.common import (
     load_config, save_config,
 )
 from gui.mode_collect import CollectModeMixin
+from gui.mode_compare import CompareModeMixin
 from gui.mode_desens import DesensModeMixin
 from gui.mode_pdf import PdfModeMixin
 from gui.mode_split import SplitModeMixin
@@ -67,7 +68,7 @@ ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 
-class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _RootBase):
+class App(SplitModeMixin, CollectModeMixin, CompareModeMixin, DesensModeMixin, PdfModeMixin, _RootBase):
     def __init__(self):
         super().__init__()
         # 字体统一必须在任何组件创建前、root 建立后执行：
@@ -120,6 +121,10 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
         self._ds_info: dict[str, Any] = {}   # 最近一次识别的结果（只有列名、类型和计数）
         self._ds_overrides: dict[str, str] = {}   # 逐列调整：{列名: 处理方式}，和用途默认一样的不记
         self._ds_report = ""          # 最近一次脱敏报告路径
+        self._cmp_scanned = None      # 两表核对：最近看过的 (A, B)，防重复 / 过期结果
+        self._cmp_info: dict[str, Any] = {}   # 最近一次 scan_pair 的结果（列名、推荐关键列、行数）
+        self._cmp_keymap: dict[str, list] = {}   # 关键列下拉：选项文字 → 列名列表
+        self._cmp_result = ""         # 最近一次核对结果文件
         self._split_ds_cols = []      # 拆分：样本表里认出的个人信息列 [(列名, 类型)]
         self._rpt_hints = {"seq_column": "", "total_rows": 0}   # 拆分：样本表里的序号列 / 合计行（v3.2 通报表）
         self._pdf_paths = [p for p in self.cfg.get("pdf_input_paths", []) if os.path.exists(p)]
@@ -256,6 +261,9 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
         self._desens_frame = ctk.CTkFrame(self._body, fg_color="transparent")
         self._desens_frame.grid(row=0, column=0, sticky="ew")
         self._desens_frame.grid_columnconfigure(0, weight=1)
+        self._compare_frame = ctk.CTkFrame(self._body, fg_color="transparent")
+        self._compare_frame.grid(row=0, column=0, sticky="ew")
+        self._compare_frame.grid_columnconfigure(0, weight=1)
         self._build_step_input(self._excel_frame)              # ① 选表格
         self._build_step_field(self._excel_frame)              # ② 选字段（含批量选项）
         self._build_adv_area(self._excel_frame)                # ▸ 高级设置
@@ -263,6 +271,7 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
         self._build_pdf_step_map(self._pdf_frame)              # PDF ② 选映射清单
         self._build_collect_steps(self._collect_frame)         # 汇总 ①② + 结果卡片
         self._build_desens_steps(self._desens_frame)           # 脱敏 ①② + 结果卡片
+        self._build_compare_steps(self._compare_frame)         # 核对 ①② + 结果卡片
         self._build_action(self)                               # row 2 ③ 开始（固定底部）
         self._build_bottom(self)                               # row 3-5 工具条 / 日志 / 页脚
 
@@ -362,15 +371,15 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
     def _start_text(self):
         if self._mode == "collect":
             return "🔍 查收（看谁没交、谁漏填）" if self._col_check_var.get() else "▶ 开始汇总"
-        return {"pdf": "🔐 开始分发", "desens": "🛡 开始脱敏"}.get(self._mode, "▶ 开始拆分")
+        return {"pdf": "🔐 开始分发", "desens": "🛡 开始脱敏", "compare": "🔍 开始核对"}.get(self._mode, "▶ 开始拆分")
 
     def _apply_mode(self):
         """按当前模式显示对应步骤区并更新③卡片文案；运行中禁止切换按钮已够复杂，
         简单起见运行中也允许切界面，但开始按钮在运行中本来就是禁用态。"""
-        for fr in (self._excel_frame, self._pdf_frame, self._collect_frame, self._desens_frame):
+        for fr in (self._excel_frame, self._pdf_frame, self._collect_frame, self._desens_frame, self._compare_frame):
             fr.grid_remove()
         # Excel 汇总的结果固定放在输入旁的「汇总结果」：收起保存位置；拆分速度只有拆分模式有意义
-        for w, show in ((self._out_row, self._mode not in ("collect", "desens")),
+        for w, show in ((self._out_row, self._mode not in ("collect", "desens", "compare")),
                         (self._speed_row, self._mode == "excel"),
                         (self._speed_hint, self._mode == "excel")):
             if show:
@@ -386,6 +395,15 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
                 self._run_status.configure(
                     text="收回几份就点一次「查收」；交齐后在结果里点「汇总成一张」" if check else
                     "选好表格直接点「开始汇总」：同一套模板的表合成一张，每行标上来自哪个文件，列顺序不同也能对齐",
+                    text_color=C_MUTED)
+        elif self._mode == "compare":
+            self._compare_frame.grid()
+            self._scan_compare()      # 只在切到这个模式时读表：两张大表读一遍要几十秒，别的模式用不上
+            self._action_title.configure(text="开始核对")
+            if not self._running:
+                self._start_btn.configure(text="🔍 开始核对")
+                self._run_status.configure(
+                    text="选好两张表、确认关键列后点「开始核对」：结果放在新表旁边的「核对结果」，两张表都不改",
                     text_color=C_MUTED)
         elif self._mode == "desens":
             self._desens_frame.grid()
@@ -541,6 +559,9 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
 
     def _save_recipe(self):
         from core import recipe as R
+        if self._mode not in R.MODE_NAMES:
+            messagebox.showinfo("这个模式没有方案", f"「{MODE_LABELS[self._mode]}」只要选两张表，不用存方案。")
+            return
         cfg = self._collect_config()
         base = os.path.basename(os.path.normpath(self._recipe_input_name())) if self._recipe_input_name() else ""
         default = os.path.splitext(base)[0] or R.MODE_NAMES[self._mode]
@@ -832,6 +853,9 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
             "split_desens": self._split_desens_value(),
             "renumber_seq": self._report_value("renumber_seq"),
             "group_totals": self._report_value("group_totals"),
+            "compare_a": self._cmp_a_var.get().strip(),
+            "compare_b": self._cmp_b_var.get().strip(),
+            "compare_key": self._cmp_key_cols(),
             "desens_input_path": self._ds_in_var.get().strip(),
             "desens_scene": self._ds_scene_seg.get(),
             "desens_notes": self._ds_notes_var.get(),
@@ -901,6 +925,7 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
         split_ds: Any = _MISSING
         rpt_hints: Any = _MISSING
         ds_copy: Any = _MISSING
+        cmp_scan: Any = _MISSING
         try:
             while True:
                 kind, payload = self._ui_q.get_nowait()
@@ -930,6 +955,8 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
                     rpt_hints = payload
                 elif kind == "desens_copy":
                     ds_copy = payload
+                elif kind == "compare_scan":
+                    cmp_scan = payload
         except queue.Empty:
             pass
         if logs:
@@ -978,6 +1005,8 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
             self._on_report_hints(rpt_hints)
         if ds_copy is not _MISSING:
             self._on_desens_copy(ds_copy)
+        if cmp_scan is not _MISSING:
+            self._on_compare_scan(cmp_scan)
         if done is not _MISSING:
             self._on_done(*done)
         self.after(100, self._pump_ui)
@@ -1176,6 +1205,9 @@ class App(SplitModeMixin, CollectModeMixin, DesensModeMixin, PdfModeMixin, _Root
             return
         if cfg.get("ui_mode") == "desens":
             self._on_desens_done(cfg, output_path)
+            return
+        if cfg.get("ui_mode") == "compare":
+            self._on_compare_done(cfg, output_path)
             return
         if output_path:
             self._last_output = output_path
