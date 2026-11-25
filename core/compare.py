@@ -8,6 +8,8 @@ Copyright (c) 2026 AbeLin · MIT License
     res = compare(ta, tb, keys[0]["cols"])
     write_result(res, ta, tb, out_path)
 
+    run_compare(config, log_fn, progress_fn, stop_flag)   # 界面用：签名同 run_split，收尾打 [SUMMARY]
+
 比较口径：数字按数值比（千分位、货币符号、文字形式的数字、百分号都先换成数值），相差不到 TOL 算一样；
 日期格和「2026-10-01」这类文字按日期比；文字统一全角半角、去掉首尾空白再比；空格子和空文字算一样。
 关键列的值统一全角半角、去掉空白、字母大写；123 和「123」是同一个，前导零保留（00123 和 123 不同）。
@@ -17,6 +19,8 @@ Copyright (c) 2026 AbeLin · MIT License
 """
 import datetime
 import itertools
+import json
+import os
 import re
 import unicodedata
 
@@ -24,10 +28,12 @@ import openpyxl
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Font, PatternFill
 
-from core.utils import hard_clean, soft_clean
+from core.utils import hard_clean, safe_filename, soft_clean
 from core.xlio import (HEAD_SCAN, _iter_sheets_ro, _legal, col_keys, col_names, hidden_info, is_total_row,
                        key_value, put, resolve_header_row)
 
+RESULT_DIR = "核对结果"     # 结果放在 B 表旁边的这个文件夹里
+PREVIEW_N = 8             # [SUMMARY] 里每类最多带几条示例（界面结果卡片里直接显示）
 MAX_CELLS = 1_000_000    # 两张表合起来最多这么多个格子（本机读 100 万格约 26 秒，内部技能一条命令要在 70 秒内做完）
 TOL = 0.005               # 数字相差不到这么多算一样
 KEY_RATIO = 0.95          # 推荐关键列：两表都至少这么多行填了、且不重复（个别重复的照样推荐，重复行单独列出）
@@ -486,3 +492,130 @@ def _text(v):
     if isinstance(v, float) and v.is_integer():
         return str(int(v))
     return soft_clean(v)
+
+
+# =====================================================
+# 界面入口：先看两张表（推荐关键列），再核对
+# =====================================================
+
+def _header_row_of(config):
+    return int(config.get("header_row") or 0) if config.get("header_mode") == "row" else 0
+
+
+def scan_pair(path_a, path_b, header_row=0, max_cells=MAX_CELLS):
+    """选好两张表后先看一眼：两表都有的列、推荐关键列、各自几行。读不了时抛 TableError（消息给用户看）。"""
+    ta = read_table(path_a, header_row=header_row, max_cells=max_cells)
+    tb = read_table(path_b, header_row=header_row, max_cells=max_cells)
+    both, only_a, only_b = common_columns(ta, tb)
+    return {"columns": [c[0] for c in both if not _UNNAMED.fullmatch(c[0])], "only_a_cols": only_a,
+            "only_b_cols": only_b, "keys": suggest_keys(ta, tb), "rows_a": len(ta["rows"]),
+            "rows_b": len(tb["rows"]), "sheet_a": ta["sheet"], "sheet_b": tb["sheet"]}
+
+
+def _key_label(t, n, kcols, pos):
+    row = t["rows"][n][1]
+    return " / ".join(_text(_cell(row, k[pos])) for k in kcols)
+
+
+def preview(res, ta, tb, n=PREVIEW_N):
+    """结果卡片里的示例：{"only_a": [关键列的值], "only_b": [...], "changed": [(关键列的值, [改了的列])]}，每类最多 n 条。"""
+    kc = res["kcols"]
+    return {"only_a": [_key_label(ta, i, kc, 1) for i in res["only_a"][:n]],
+            "only_b": [_key_label(tb, i, kc, 2) for i in res["only_b"][:n]],
+            "changed": [(_key_label(tb, nb, kc, 2), cols) for _na, nb, cols in res["changed_rows"][:n]]}
+
+
+def result_path(path_a, path_b, now=None):
+    """B 表旁「核对结果」里的结果文件名；同一分钟重跑加序号，不覆盖上一次的。"""
+    now = now or datetime.datetime.now()
+    out = os.path.join(os.path.dirname(os.path.abspath(path_b)), RESULT_DIR)
+    sa = os.path.splitext(os.path.basename(path_a))[0]
+    sb = os.path.splitext(os.path.basename(path_b))[0]
+    stem = safe_filename(f"核对_{sa}_对比_{sb}_{now:%m%d%H%M}")
+    p, i = os.path.join(out, stem + ".xlsx"), 2
+    while os.path.exists(p):
+        p, i = os.path.join(out, f"{stem}_{i}.xlsx"), i + 1
+    return p
+
+
+def _keys_of(config):
+    k = config.get("compare_key") or []
+    if isinstance(k, str):
+        k = [x.strip() for x in re.split(r"[+＋、,，]", k) if x.strip()]
+    return list(k)
+
+
+def run_compare(config, log_fn=None, progress_fn=None, stop_flag=None):
+    """两表核对入口，签名同 run_split。config：compare_a（原来的表）、compare_b（新的表）、
+    compare_key（关键列名列表，或「工号」「姓名+部门」这样的文字；空 = 用推荐的第一个）、
+    可选 header_mode / header_row、max_cells。结果写进 B 表旁的「核对结果」，返回这个文件夹；没做成返回 None。
+    """
+    log = log_fn or (lambda m: None)
+    prog = progress_fn or (lambda v: None)
+    stop = stop_flag or (lambda: False)
+    pa, pb = config.get("compare_a", ""), config.get("compare_b", "")
+    hr, cap = _header_row_of(config), config.get("max_cells") or MAX_CELLS
+    if not pa or not pb or not os.path.isfile(pa) or not os.path.isfile(pb):
+        log("❌ 请先选好两张表")
+        return None
+    if os.path.normcase(os.path.abspath(pa)) == os.path.normcase(os.path.abspath(pb)):
+        log("❌ 两次选的是同一个文件，请选两张不同的表")
+        return None
+    try:
+        log(f"读取 A 表：{os.path.basename(pa)}")
+        ta = read_table(pa, header_row=hr, max_cells=cap)
+        prog(0.3)
+        if stop():
+            log("⛔ 已停止")
+            return None
+        log(f"读取 B 表：{os.path.basename(pb)}")
+        tb = read_table(pb, header_row=hr, max_cells=cap)
+        prog(0.6)
+    except TooBig as e:
+        log(f"❌ 表太大：{e}，请先删掉用不到的列或拆成几张再核对")
+        return None
+    except TableError as e:
+        log(f"❌ {e}")
+        return None
+    if stop():
+        log("⛔ 已停止")
+        return None
+    keys = _keys_of(config)
+    if not keys:
+        sug = suggest_keys(ta, tb)
+        if not sug:
+            log("❌ 找不到能把两张表一行行对上的列（工号、编号这类每行都不一样的列），请自己指定关键列")
+            return None
+        keys = sug[0]["cols"]
+        log(f"关键列用推荐的「{'、'.join(keys)}」")
+    try:
+        res = compare(ta, tb, keys)
+    except TableError as e:
+        log(f"❌ {e}")
+        return None
+    prog(0.8)
+    c = counts(res)
+    log(f"A 表 {c['rows_a']} 行，B 表 {c['rows_b']} 行，按「{'、'.join(res['key'])}」对上 {c['matched']} 行")
+    log(f"  B 表新增 {c['only_b']} 行，B 表没了 {c['only_a']} 行，改过的 {c['changed_rows']} 行（{c['changed_cells']} 个格子）")
+    if c["unpaired"]:
+        log(f"  ⚠ {c['unpaired']} 行关键列重复或空着，没有配对，单独列在「{SHEETS[5]}」")
+    for side, cols in (("A", res["only_a_cols"]), ("B", res["only_b_cols"])):
+        if cols:
+            log(f"  ℹ 只在 {side} 表有的列不比较：{'、'.join(cols[:8])}" + (" 等" if len(cols) > 8 else ""))
+    out = result_path(pa, pb)
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        write_result(res, ta, tb, out, name_a=os.path.basename(pa), name_b=os.path.basename(pb))
+    except Exception as e:
+        log(f"❌ 核对结果没写成：{type(e).__name__}: {e}")
+        return None
+    prog(1.0)
+    folder = os.path.dirname(out)
+    log(f"\n✅ 核对完成：{os.path.basename(out)}")
+    log(f"📁 结果：{folder}")
+    summary = dict(c, mode="compare", key=res["key"], result=out, output=folder,
+                   per_col=dict(list(res["per_col"].items())[:5]), only_a_cols=res["only_a_cols"],
+                   only_b_cols=res["only_b_cols"], sheet_a=ta["sheet"], sheet_b=tb["sheet"],
+                   preview=preview(res, ta, tb))
+    log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False, default=str)}")
+    return folder

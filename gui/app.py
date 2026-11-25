@@ -29,6 +29,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+from gui import compare_text as CT
 from gui.platform_compat import (
     lock_owner_name, open_folder, parse_drop_paths, pick_ui_font, set_window_icon,
 )
@@ -82,7 +83,14 @@ PDF_COL_PLACEHOLDER = "（选清单后自动识别）"
 # 「collect」对外叫「Excel 汇总」：默认是普通的合并汇总，查收（谁没交、谁漏填）是 ② 里的可选开关
 # 「pdf」对外叫「文件加密分发」（v2.10 起也收 Word / Excel / PPT，内部名不改，ui_mode 已存进用户配置）
 # 「desens」对外叫「数据脱敏」（v3.1）：单独给表格打码 / 换代号 / 清空，处理完复检
-MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "desens": "数据脱敏", "pdf": "文件加密分发"}
+# 「compare」对外叫「两表核对」：两张表按关键列对上，列出新增 / 没了 / 改过的行（core/compare.py）
+MODE_LABELS = {"excel": "Excel 拆分", "collect": "Excel 汇总", "compare": "两表核对", "desens": "数据脱敏",
+               "pdf": "文件加密分发"}
+CMP_IN_TIP = "选同一张表的两个版本（比如上个月和这个月）；结果放在新表旁边的「核对结果」，两张表都不改"
+CMP_KEY_PLACEHOLDER = "（选好两张表后自动推荐）"
+CMP_MAX_CELLS = 3_000_000   # 界面不受技能一条命令 70 秒的限制，放宽到 300 万格（约 6 万行 × 50 列）
+CMP_COLORS = {"add": ("#15803d", "#4ade80"), "del": ("#b91c1c", "#f87171"), "chg": ("#b45309", "#fbbf24"),
+              "warn": ("#b45309", "#fbbf24"), "info": ("gray40", "gray60")}
 COL_IN_TIP = "把要合并的表放进一个文件夹再选它；选一个文件时，把它的各个 sheet 合成一张"
 DS_IN_TIP = "选一个表或一个文件夹；结果放在旁边的「脱敏结果」里，原表不改"
 # 数据脱敏的用途与处理方式（与 core/desens.py 一致；GUI 启动时不 import core）
@@ -203,6 +211,10 @@ FALLBACK_CONFIG = {
     "collect_title": "",
     "collect_due": "",
     "collect_record": "",
+    # ── 两表核对：A 是原来的表，B 是新的表，关键列是列名列表（空 = 用推荐的）──
+    "compare_a": "",
+    "compare_b": "",
+    "compare_key": [],
     "fill_columns": "",       # 拆分时让对方填写的列（选填）：标黄、其余列锁定、写下发记录
     "due": "",
     # ── 方案（v3.0）：最近打开 / 存过的方案文件路径，跑完后「存成方案」的提示点过不再提示 ──
@@ -291,6 +303,10 @@ class App(_RootBase):
         self._ds_info: dict[str, Any] = {}   # 最近一次识别的结果（只有列名、类型和计数）
         self._ds_overrides: dict[str, str] = {}   # 逐列调整：{列名: 处理方式}，和用途默认一样的不记
         self._ds_report = ""          # 最近一次脱敏报告路径
+        self._cmp_scanned = None      # 两表核对：最近看过的 (A, B)，防重复 / 过期结果
+        self._cmp_info: dict[str, Any] = {}   # 最近一次 scan_pair 的结果（列名、推荐关键列、行数）
+        self._cmp_keymap: dict[str, list] = {}   # 关键列下拉：选项文字 → 列名列表
+        self._cmp_result = ""         # 最近一次核对结果文件
         self._split_ds_cols = []      # 拆分：样本表里认出的个人信息列 [(列名, 类型)]
         self._rpt_hints = {"seq_column": "", "total_rows": 0}   # 拆分：样本表里的序号列 / 合计行（v3.2 通报表）
         self._pdf_paths = [p for p in self.cfg.get("pdf_input_paths", []) if os.path.exists(p)]
@@ -427,6 +443,9 @@ class App(_RootBase):
         self._desens_frame = ctk.CTkFrame(self._body, fg_color="transparent")
         self._desens_frame.grid(row=0, column=0, sticky="ew")
         self._desens_frame.grid_columnconfigure(0, weight=1)
+        self._compare_frame = ctk.CTkFrame(self._body, fg_color="transparent")
+        self._compare_frame.grid(row=0, column=0, sticky="ew")
+        self._compare_frame.grid_columnconfigure(0, weight=1)
         self._build_step_input(self._excel_frame)              # ① 选表格
         self._build_step_field(self._excel_frame)              # ② 选字段（含批量选项）
         self._build_adv_area(self._excel_frame)                # ▸ 高级设置
@@ -434,6 +453,7 @@ class App(_RootBase):
         self._build_pdf_step_map(self._pdf_frame)              # PDF ② 选映射清单
         self._build_collect_steps(self._collect_frame)         # 汇总 ①② + 结果卡片
         self._build_desens_steps(self._desens_frame)           # 脱敏 ①② + 结果卡片
+        self._build_compare_steps(self._compare_frame)         # 核对 ①② + 结果卡片
         self._build_action(self)                               # row 2 ③ 开始（固定底部）
         self._build_bottom(self)                               # row 3-5 工具条 / 日志 / 页脚
 
@@ -2257,6 +2277,235 @@ class App(_RootBase):
             self._run_status.configure(text="❌ 脱敏版没生成，原因见「处理详情」", text_color=C_ERR)
             self._toggle_log(show=True)
 
+    # ── 两表核对 ─────────────────────────────────────────
+    # ① 选原来的表和新的表 → ② 确认按哪一列对上每一行 → ③ 开始核对；结果固定在新表旁的「核对结果」
+    def _build_compare_steps(self, parent):
+        card, _ = self._step_card(parent, 0, 1, "选两张要核对的表")
+        self._cmp_a_var = ctk.StringVar(value=self.cfg.get("compare_a", ""))
+        self._cmp_b_var = ctk.StringVar(value=self.cfg.get("compare_b", ""))
+        for i, (label, var, side) in enumerate((("原来的表（A）", self._cmp_a_var, "a"),
+                                                 ("新的表（B）", self._cmp_b_var, "b"))):
+            row = ctk.CTkFrame(card, fg_color="transparent")
+            row.grid(row=1 + i, column=0, padx=12, pady=(6 if i == 0 else 4, 0), sticky="ew")
+            row.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(row, text=label, width=96, anchor="w").grid(row=0, column=0, sticky="w")
+            entry = ctk.CTkEntry(row, textvariable=var, placeholder_text="选一个 Excel 文件，或拖到这里")
+            entry.grid(row=0, column=1, padx=8, sticky="ew")
+            entry.bind("<Return>", lambda e: self._scan_compare())
+            entry.bind("<FocusOut>", lambda e: self._scan_compare())
+            self._enable_drop(entry, lambda e, s=side: self._on_drop_compare(e, s))
+            _ghost_button(row, text="📄 选择", width=70,
+                          command=lambda s=side: self._pick_compare(s)).grid(row=0, column=2)
+        self._enable_drop(card, lambda e: self._on_drop_compare(e, None))
+        self._cmp_in_status = ctk.CTkLabel(card, text=CMP_IN_TIP, font=ctk.CTkFont(size=11), text_color=C_MUTED,
+                                           anchor="w", justify="left", wraplength=640)
+        self._cmp_in_status.grid(row=3, column=0, padx=12, pady=(4, 10), sticky="w")
+
+        card2, _ = self._step_card(parent, 1, 2, "按哪一列对上每一行")
+        krow = ctk.CTkFrame(card2, fg_color="transparent")
+        krow.grid(row=1, column=0, padx=12, pady=(6, 0), sticky="w")
+        ctk.CTkLabel(krow, text="关键列").pack(side="left")
+        self._cmp_key_var = ctk.StringVar(value=CMP_KEY_PLACEHOLDER)
+        self._cmp_key_menu = ctk.CTkOptionMenu(krow, variable=self._cmp_key_var, values=[CMP_KEY_PLACEHOLDER],
+                                               width=320, dynamic_resizing=False)
+        self._cmp_key_menu.pack(side="left", padx=(8, 0))
+        _flat_button(krow, text="🔄 重新识别", width=90,
+                     command=lambda: self._scan_compare(force=True)).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(card2, text="关键列是每行都不一样、两张表里都有的列，比如工号、编号、身份证号。"
+                                 "数字按数值比（100 和 100.00 一样），文字不分全角半角、不看首尾空格；"
+                                 "关键列重复或空着的行不配对，单独列出来，免得配错。",
+                     font=ctk.CTkFont(size=11), text_color=C_MUTED, anchor="w", justify="left",
+                     wraplength=640).grid(row=2, column=0, padx=12, pady=(4, 10), sticky="w")
+
+        res = self._cmp_result_card = ctk.CTkFrame(parent, corner_radius=12, border_width=1,
+                                                   border_color=CARD_BORDER)
+        res.grid(row=2, column=0, padx=8, pady=(0, 10), sticky="ew")
+        res.grid_columnconfigure(0, weight=1)
+        self._cmp_result_title = ctk.CTkLabel(res, text="", font=ctk.CTkFont(size=14, weight="bold"))
+        self._cmp_result_title.grid(row=0, column=0, padx=14, pady=(10, 2), sticky="w")
+        self._cmp_lines_box = ctk.CTkFrame(res, fg_color="transparent")
+        self._cmp_lines_box.grid(row=1, column=0, padx=14, pady=(2, 6), sticky="ew")
+        rb = ctk.CTkFrame(res, fg_color="transparent")
+        rb.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="w")
+        ctk.CTkButton(rb, text="📄 打开核对结果", width=130, fg_color=PRIMARY, hover_color=PRIMARY_HOVER,
+                      command=self._open_compare_result).pack(side="left")
+        ctk.CTkLabel(rb, text="「有变化」逐格列出原值、新值和差额，「变化行」把改过的格子标红",
+                     font=ctk.CTkFont(size=11), text_color=C_MUTED).pack(side="left", padx=(10, 0))
+        res.grid_remove()
+
+    def _pick_compare(self, side):
+        p = filedialog.askopenfilename(filetypes=[("Excel 文件", "*.xlsx *.xlsm *.xls")])
+        if p:
+            (self._cmp_a_var if side == "a" else self._cmp_b_var).set(os.path.normpath(p))
+            self._scan_compare()
+
+    def _on_drop_compare(self, event, side):
+        """拖进来两个表：先拖的当原来的表；拖一个到某一行就填那一行，拖到卡片上就填还空着的那一行。"""
+        paths = [p for p in self._parse_drop_paths(getattr(event, "data", ""))
+                 if p.lower().endswith((".xlsx", ".xlsm", ".xls"))]
+        if not paths:
+            self._cmp_in_status.configure(text="⚠ 请拖入 Excel 文件（.xlsx / .xls）", text_color=C_WARN)
+            return
+        if len(paths) >= 2:
+            self._cmp_a_var.set(os.path.normpath(paths[0]))
+            self._cmp_b_var.set(os.path.normpath(paths[1]))
+        else:
+            if side is None:
+                side = "a" if not self._cmp_a_var.get().strip() else "b"
+            (self._cmp_a_var if side == "a" else self._cmp_b_var).set(os.path.normpath(paths[0]))
+        self._scan_compare()
+
+    def _cmp_header_row(self):
+        h = self._header_cfg()
+        return h["header_row"] if h["header_mode"] == "row" else 0
+
+    def _scan_compare(self, force=False):
+        """两张表都选好后在子线程读一遍：两表都有的列、推荐关键列（只回列名和计数）。"""
+        a, b = self._cmp_a_var.get().strip(), self._cmp_b_var.get().strip()
+        if not a or not b:
+            if a or b:
+                self._cmp_in_status.configure(text="再选另一张表", text_color=C_MUTED)
+            return
+        if (a, b) == self._cmp_scanned and not force:
+            return
+        self._cmp_scanned = (a, b)
+        self._cmp_result_card.grid_remove()
+        missing = [p for p in (a, b) if not os.path.isfile(p)]
+        if missing:
+            self._cmp_info = {}
+            self._cmp_in_status.configure(text=f"⚠ 找不到文件：{os.path.basename(missing[0])}", text_color=C_WARN)
+            return
+        if os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b)):
+            self._cmp_info = {}
+            self._cmp_in_status.configure(text="⚠ 两次选的是同一个文件，请选两张不同的表", text_color=C_WARN)
+            return
+        self._cmp_in_status.configure(text="正在读两张表、找能对上的列…", text_color=C_MUTED)
+        hr = self._cmp_header_row()
+
+        def work():
+            info: dict[str, Any] = {"a": a, "b": b}
+            try:
+                from core import compare
+                info.update(compare.scan_pair(a, b, header_row=hr, max_cells=CMP_MAX_CELLS))
+            except Exception as e:
+                info["error"] = str(e)
+            self._ui_q.put(("compare_scan", info))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_compare_scan(self, info):
+        if (info["a"], info["b"]) != (self._cmp_a_var.get().strip(), self._cmp_b_var.get().strip()):
+            return    # 结果已过期
+        self._cmp_info = info
+        if info.get("error"):
+            self._cmp_set_keys([], {}, CMP_KEY_PLACEHOLDER)
+            self._cmp_in_status.configure(text=f"⚠ 读不了：{info['error']}", text_color=C_WARN)
+            return
+        saved = self.cfg.get("compare_key") or []
+        labels, mapping, default = CT.key_options(info, saved if isinstance(saved, list) else [])
+        self._cmp_set_keys(labels, mapping, default or CMP_KEY_PLACEHOLDER)
+        text = (f"✓ 原来的表 {info['rows_a']} 行（{info['sheet_a']}），新的表 {info['rows_b']} 行（{info['sheet_b']}），"
+                f"两表都有的列 {len(info['columns'])} 个")
+        color = C_OK
+        if not info.get("keys"):
+            text += "；⚠ 没找到每行都不一样、两边能对上的列，请在 ② 里自己选关键列"
+            color = C_WARN
+        self._cmp_in_status.configure(text=text, text_color=color)
+
+    def _cmp_set_keys(self, labels, mapping, current):
+        self._cmp_keymap = mapping
+        self._cmp_key_menu.configure(values=labels or [CMP_KEY_PLACEHOLDER])
+        self._cmp_key_var.set(current)
+
+    def _cmp_key_cols(self):
+        """关键列下拉当前选的列名列表；还没识别时沿用上次存的。"""
+        cols = self._cmp_keymap.get(self._cmp_key_var.get())
+        if cols:
+            return list(cols)
+        saved = self.cfg.get("compare_key") or []
+        return list(saved) if isinstance(saved, list) else []
+
+    def _start_compare(self):
+        a, b = self._cmp_a_var.get().strip(), self._cmp_b_var.get().strip()
+        if not a or not b or not os.path.isfile(a) or not os.path.isfile(b):
+            messagebox.showwarning("先选两张表", "请在第 ① 步选好「原来的表」和「新的表」。")
+            return
+        if os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b)):
+            messagebox.showwarning("选了同一个文件", "两次选的是同一个文件，请选两张不同的表。")
+            return
+        key = self._cmp_keymap.get(self._cmp_key_var.get())
+        if not key:
+            messagebox.showwarning("先选关键列", "请在第 ② 步选「关键列」——按哪一列把两张表的行一一对上"
+                                               "（工号、编号这类每行都不一样的列）。")
+            return
+        locks = self._find_open_locks(a) + self._find_open_locks(b)
+        if locks and not messagebox.askyesno(
+                "文件正被打开",
+                f"检测到 {'、'.join(locks)} 正被 Excel/WPS 打开：读到的是「打开前保存的内容」，刚改的不会算进去。\n\n"
+                "建议先关闭。仍要继续吗？"):
+            return
+        cfg = self._collect_config()
+        run_cfg = {"compare_a": a, "compare_b": b, "compare_key": list(key), "max_cells": CMP_MAX_CELLS,
+                   **self._header_cfg()}
+        self._enter_running("⏳ 正在核对…", "已开始，正在读取两张表…")
+        self._cmp_result_card.grid_remove()
+
+        def run():
+            try:
+                from core.compare import run_compare
+                output_path = run_compare(run_cfg,
+                                          log_fn=lambda m: self._ui_q.put(("log", m)),
+                                          progress_fn=lambda v: self._ui_q.put(("progress", v)),
+                                          stop_flag=lambda: self._stop_flag)
+            except Exception as e:
+                self._ui_q.put(("log", f"\n❌ 运行出错：{e}"))
+                output_path = None
+            self._ui_q.put(("done", (cfg, output_path)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_compare_done(self, cfg, output_path):
+        s = self._last_summary or {}
+        if not output_path or s.get("mode") != "compare":
+            if self._stop_flag:
+                self._run_status.configure(text="⏹ 已停止，没有写核对结果", text_color=C_WARN)
+                return
+            self._run_status.configure(
+                text="❌ 没有完成：原因见下方「处理详情」；可点「复制日志」连同反馈一起发给作者", text_color=C_ERR)
+            self._copylog_btn.grid()
+            self._toggle_log(show=True)
+            return
+        self._last_output = output_path
+        self._cmp_result = s.get("result", "")
+        self._open_btn.grid()
+        try:
+            save_config(cfg)
+        except Exception:
+            pass
+        for w in self._cmp_lines_box.winfo_children():
+            w.destroy()
+        for i, (text, kind) in enumerate(CT.result_lines(s)):
+            ctk.CTkLabel(self._cmp_lines_box, text=text, anchor="w", justify="left", wraplength=620, height=22,
+                         font=ctk.CTkFont(size=12, weight="bold" if not text.startswith(" ") else "normal"),
+                         text_color=CMP_COLORS.get(kind, C_MUTED)).grid(row=i, column=0, sticky="w")
+        same = not (s.get("only_a") or s.get("only_b") or s.get("changed_rows"))
+        self._cmp_result_title.configure(text="✅ 两张表一样" if same else "🔍 核对完成：这些地方不一样")
+        self._cmp_result_card.grid()
+        text, warn = CT.banner_lines(s, output_path)
+        self._summary_lbl.configure(text=text, text_color=C_WARN if warn else C_OK)
+        self._summary_banner.configure(fg_color=("gray90", "gray20") if warn else OK_BANNER_BG)
+        self._show_summary_banner()
+        self._run_status.configure(text="✅ 核对完成！点「打开核对结果」看逐格对比", text_color=C_OK)
+        self._log("💬 用得顺手或踩了坑？点「反馈建议」匿名告诉作者（1 分钟）。")
+
+    def _open_compare_result(self):
+        p = self._cmp_result
+        if not p or not os.path.exists(p):
+            self._run_status.configure(text="⚠ 核对结果不在了，请重新核对一次", text_color=C_WARN)
+            return
+        if not open_folder(p):
+            self._run_status.configure(text=f"⚠ 打不开核对结果，文件在：{p}", text_color=C_WARN)
+
     # ── 模式切换 ─────────────────────────────────────────
     # ③卡片里只属于上一轮的结果控件（完成摘要、打开输出文件夹、存方案提示、复制日志）
     _RESULT_WIDGETS = ("_summary_banner", "_open_btn", "_recipe_tip", "_copylog_btn")
@@ -2290,15 +2539,15 @@ class App(_RootBase):
     def _start_text(self):
         if self._mode == "collect":
             return "🔍 查收（看谁没交、谁漏填）" if self._col_check_var.get() else "▶ 开始汇总"
-        return {"pdf": "🔐 开始分发", "desens": "🛡 开始脱敏"}.get(self._mode, "▶ 开始拆分")
+        return {"pdf": "🔐 开始分发", "desens": "🛡 开始脱敏", "compare": "🔍 开始核对"}.get(self._mode, "▶ 开始拆分")
 
     def _apply_mode(self):
         """按当前模式显示对应步骤区并更新③卡片文案；运行中禁止切换按钮已够复杂，
         简单起见运行中也允许切界面，但开始按钮在运行中本来就是禁用态。"""
-        for fr in (self._excel_frame, self._pdf_frame, self._collect_frame, self._desens_frame):
+        for fr in (self._excel_frame, self._pdf_frame, self._collect_frame, self._desens_frame, self._compare_frame):
             fr.grid_remove()
         # Excel 汇总的结果固定放在输入旁的「汇总结果」：收起保存位置；拆分速度只有拆分模式有意义
-        for w, show in ((self._out_row, self._mode not in ("collect", "desens")),
+        for w, show in ((self._out_row, self._mode not in ("collect", "desens", "compare")),
                         (self._speed_row, self._mode == "excel"),
                         (self._speed_hint, self._mode == "excel")):
             if show:
@@ -2314,6 +2563,15 @@ class App(_RootBase):
                 self._run_status.configure(
                     text="收回几份就点一次「查收」；交齐后在结果里点「汇总成一张」" if check else
                     "选好表格直接点「开始汇总」：同一套模板的表合成一张，每行标上来自哪个文件，列顺序不同也能对齐",
+                    text_color=C_MUTED)
+        elif self._mode == "compare":
+            self._compare_frame.grid()
+            self._scan_compare()      # 只在切到这个模式时读表：两张大表读一遍要几十秒，别的模式用不上
+            self._action_title.configure(text="开始核对")
+            if not self._running:
+                self._start_btn.configure(text="🔍 开始核对")
+                self._run_status.configure(
+                    text="选好两张表、确认关键列后点「开始核对」：结果放在新表旁边的「核对结果」，两张表都不改",
                     text_color=C_MUTED)
         elif self._mode == "desens":
             self._desens_frame.grid()
@@ -2469,6 +2727,9 @@ class App(_RootBase):
 
     def _save_recipe(self):
         from core import recipe as R
+        if self._mode not in R.MODE_NAMES:
+            messagebox.showinfo("这个模式没有方案", f"「{MODE_LABELS[self._mode]}」只要选两张表，不用存方案。")
+            return
         cfg = self._collect_config()
         base = os.path.basename(os.path.normpath(self._recipe_input_name())) if self._recipe_input_name() else ""
         default = os.path.splitext(base)[0] or R.MODE_NAMES[self._mode]
@@ -3088,6 +3349,9 @@ class App(_RootBase):
             "split_desens": self._split_desens_value(),
             "renumber_seq": self._report_value("renumber_seq"),
             "group_totals": self._report_value("group_totals"),
+            "compare_a": self._cmp_a_var.get().strip(),
+            "compare_b": self._cmp_b_var.get().strip(),
+            "compare_key": self._cmp_key_cols(),
             "desens_input_path": self._ds_in_var.get().strip(),
             "desens_scene": self._ds_scene_seg.get(),
             "desens_notes": self._ds_notes_var.get(),
@@ -3157,6 +3421,7 @@ class App(_RootBase):
         split_ds: Any = _MISSING
         rpt_hints: Any = _MISSING
         ds_copy: Any = _MISSING
+        cmp_scan: Any = _MISSING
         try:
             while True:
                 kind, payload = self._ui_q.get_nowait()
@@ -3186,6 +3451,8 @@ class App(_RootBase):
                     rpt_hints = payload
                 elif kind == "desens_copy":
                     ds_copy = payload
+                elif kind == "compare_scan":
+                    cmp_scan = payload
         except queue.Empty:
             pass
         if logs:
@@ -3234,6 +3501,8 @@ class App(_RootBase):
             self._on_report_hints(rpt_hints)
         if ds_copy is not _MISSING:
             self._on_desens_copy(ds_copy)
+        if cmp_scan is not _MISSING:
+            self._on_compare_scan(cmp_scan)
         if done is not _MISSING:
             self._on_done(*done)
         self.after(100, self._pump_ui)
@@ -3344,6 +3613,8 @@ class App(_RootBase):
             return self._start_collect("check" if self._col_check_var.get() else "merge")
         if self._mode == "desens":
             return self._start_desens()
+        if self._mode == "compare":
+            return self._start_compare()
         cfg = self._collect_config()
         cfg["desens"] = cfg["split_desens"]       # 拆分时顺带脱敏：空 = 不脱敏，和以前一样
         if not cfg["input_path"] or not os.path.exists(cfg["input_path"]):
@@ -3616,6 +3887,9 @@ class App(_RootBase):
             return
         if cfg.get("ui_mode") == "desens":
             self._on_desens_done(cfg, output_path)
+            return
+        if cfg.get("ui_mode") == "compare":
+            self._on_compare_done(cfg, output_path)
             return
         if output_path:
             self._last_output = output_path
