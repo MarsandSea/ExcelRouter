@@ -389,7 +389,13 @@ excel-router/
 │   └── utils.py               # 文本清理 + 取值归并 + 文件名净化
 ├── gui/
 │   ├── __init__.py
-│   ├── app.py                 # customtkinter 三步卡片式界面（Excel/PDF 双模式、打包路径适配、队列泵）
+│   ├── app.py                 # 主窗口：品牌区、模式切换、③操作区、方案、日志、队列泵、完成摘要；APP_VERSION 在这里
+│   ├── common.py              # 界面公用：路径（打包适配）、文案常量、配色、按钮工厂、配置读写
+│   ├── mode_split.py          # 「Excel 拆分」模式（SplitModeMixin；含按模式分派的 _start）
+│   ├── mode_collect.py        # 「Excel 汇总」模式（CollectModeMixin）
+│   ├── mode_compare.py        # 「两表核对」模式（CompareModeMixin）
+│   ├── mode_desens.py         # 「数据脱敏」模式（DesensModeMixin；含汇总结果「另存脱敏版」）
+│   ├── mode_pdf.py            # 「文件加密分发」模式（PdfModeMixin）
 │   ├── platform_compat.py     # 平台兼容层（打开文件管理器/拖放解析/UI字体/窗口图标/锁文件）
 │   └── compare_text.py        # 两表核对的界面文案（关键列下拉选项、结果卡片几行字；不 import tkinter）
 ├── examples/
@@ -405,6 +411,7 @@ excel-router/
 │   └── ISSUE_TEMPLATE/        # Bug/Question 结构化表单，config.yml 禁用空白 issue
 └── tests/
     ├── test_platform_compat.py # 平台兼容层单测（纯函数，无 Tk、可无头跑）
+    ├── test_gui_layout.py     # 界面 mixin 结构守卫：同名方法不许写两处、APP_VERSION 留在 app.py（AST，无头）
     ├── test_utils.py          # utils 单元测试
     ├── test_splitter.py       # splitter 集成测试（单文件/合并、到人双产出、格式保留）
     ├── test_pdf_dist.py       # pdf_dist 集成测试（加密/水印/清单/容错/停止）
@@ -581,7 +588,14 @@ excel-router/
 
 ### gui/app.py（v2.4 后期：三步卡片式重构；队列泵机制不变）
 
-**两表核对模式**：`MODE_LABELS` 第三段「两表核对」（内部名 `compare`），`_compare_frame` 由 `_build_compare_steps` 搭
+> **2026-11 按模式拆文件（纯重构，行为不变）**：`App` = `SplitModeMixin, CollectModeMixin, CompareModeMixin, DesensModeMixin,
+> PdfModeMixin, _RootBase`，各模式的方法原样搬进 `gui/mode_*.py`，公用常量 / 配色 / 配置读写搬进 `gui/common.py`；
+> 下文提到的方法名都还在，只是可能在对应的 mode 文件里。mixin 没有自己的状态和 `__init__`，控件都挂在同一个 App 上。
+> 规矩：**同一个方法名只写在一个文件里**（写两处时 MRO 前面的静默覆盖后面的，`tests/test_gui_layout.py` 守着）；
+> `APP_VERSION` 留在 app.py（`build_linux.sh` 用正则读它）；mode 文件顶部关了 pyright 的 `reportAttributeAccessIssue`
+>（别处定义的 `self.xxx` 它看不到），app.py 照常全查。
+
+**两表核对模式**：`MODE_LABELS` 第三段「两表核对」（内部名 `compare`），`_compare_frame` 由 `gui/mode_compare.py` 的 `_build_compare_steps` 搭
 （①原来的表 A / 新的表 B，拖两个文件进卡片按顺序填 ②关键列下拉——`scan_pair` 在子线程跑，泵消息 `compare_scan`，
 选项文字由 `gui/compare_text.key_options` 生成 + 结果卡片：`result_lines` 按新增绿 / 没了红 / 改过橙逐行列出、「打开核对结果」）。
 核对走 `core.compare.run_compare`（签名同 run_split，结果固定在 B 表旁「核对结果」，同一分钟重跑加序号，收尾 `[SUMMARY]`
