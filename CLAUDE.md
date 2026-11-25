@@ -810,6 +810,10 @@ PyInstaller 致命坑仍然成立、缺一不可：
   `list_mapping_columns()` / `read_mapping()` 的函数签名和 config 字段已经是对外契约**——
   改函数签名、改字段名、改默认值语义，都要想一下下游 skill 会不会跟着崩（下游有自己的
   `pytest`，签名对不上会在下游 CI 上报错，但语义变了未必报错，人肉过一遍更保险）。
+- **内网版还直接调用 splitter / pdf_dist 的几个下划线函数和字体候选表**（`_OutputBook`、`_append_rows`、
+  `_read_header_format`、`_summary_key_path`、`_person_key_path`、`_dedupe_path`、`_find_cjk_font`、
+  `_make_watermark_pdf`、`_FONT_CANDIDATES` 等）。`tests/test_internal_contract.py` 守着：已有参数别改名改序，
+  新增参数要带默认值。
 - **`core/` 不许引入对 `gui/` 的任何依赖**（哪怕只是延迟 import），否则下游 vendor 整个
   `core/` 目录时会直接带进 customtkinter 依赖，skill 装不起来。这条本来就是现有架构
   （GUI 对 core 单向依赖），只是现在多了一个不能违反的理由。
