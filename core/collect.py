@@ -81,6 +81,7 @@ def _load_checked(path, **kw):
             pass
     return openpyxl.load_workbook(path, **kw)
 
+
 SOURCE_COL = "来源"
 REPORT_SHEET = "汇总说明"
 GUIDE_SHEET = "填报说明"
