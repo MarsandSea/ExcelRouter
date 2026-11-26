@@ -444,6 +444,40 @@ def test_find_cjk_font_rejects_unloadable(tmp_path, monkeypatch):
     assert pdf_dist._find_cjk_font_posix() is None
 
 
+def test_font_file_ok_checks_header_size_and_root(tmp_path):
+    """字体文件只读核对：文件头、大小、真实路径在不在指定文件夹里；文件夹、坏文件、超大文件都不要。"""
+    good = tmp_path / "fonts" / "a.ttf"
+    good.parent.mkdir()
+    good.write_bytes(b"\x00\x01\x00\x00" + b"\0" * 60)
+    (tmp_path / "fonts" / "b.ttc").write_bytes(b"ttcf" + b"\0" * 60)
+    (tmp_path / "fonts" / "c.otf").write_bytes(b"OTTO" + b"\0" * 60)
+    bad = tmp_path / "fonts" / "bad.ttf"
+    bad.write_bytes(b"NOT A FONT")
+    outside = tmp_path / "x.ttf"
+    outside.write_bytes(b"\x00\x01\x00\x00" + b"\0" * 60)
+    for n in ("a.ttf", "b.ttc", "c.otf"):
+        assert pdf_dist.font_file_ok(str(tmp_path / "fonts" / n), root=str(tmp_path / "fonts"))
+    assert not pdf_dist.font_file_ok(str(bad))
+    assert not pdf_dist.font_file_ok(str(tmp_path / "fonts"))
+    assert not pdf_dist.font_file_ok(str(tmp_path / "fonts" / "没有.ttf"))
+    assert not pdf_dist.font_file_ok(str(outside), root=str(tmp_path / "fonts"))
+    assert not pdf_dist.font_file_ok(str(tmp_path / "fonts" / ".." / "x.ttf"), root=str(tmp_path / "fonts"))
+    assert pdf_dist.font_file_ok(str(outside))
+    assert not pdf_dist.font_file_ok(str(good), max_mb=0)
+
+
+def test_font_file_ok_links(tmp_path):
+    real = tmp_path / "real.ttf"
+    real.write_bytes(b"\x00\x01\x00\x00" + b"\0" * 60)
+    link = tmp_path / "link.ttf"
+    try:
+        os.symlink(real, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("这台机器建不了符号链接")
+    assert not pdf_dist.font_file_ok(str(link))
+    assert pdf_dist.font_file_ok(str(link), allow_link=True)
+
+
 def test_watermark_survives_broken_font(workspace, monkeypatch):
     """坏字体不能中断整轮分发：降级成 Helvetica 继续跑完，所有网格都要产出。"""
     tmp_path, cfg = workspace

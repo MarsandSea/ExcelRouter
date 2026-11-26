@@ -80,6 +80,10 @@ _LINUX_FONT_DIRS = [
     os.path.expanduser("~/.fonts"),
 ]
 
+# 字体文件核对（font_file_ok）：中文字体一般 10～30 MB；文件头是 TrueType / OpenType / 字体集合
+FONT_MAX_MB = 64
+_FONT_MAGIC = (b"\x00\x01\x00\x00", b"OTTO", b"true", b"ttcf")
+
 # 用户指定水印字体的逃生口：信创机器的字体配置千奇百怪，自动探测不中时用它。
 _FONT_ENV = "ER_CJK_FONT"
 
@@ -263,13 +267,45 @@ def fill_random_passwords(mapping_path, grid_col, password_col="", out_path=None
     finally:
         wb.close()
 
+def font_file_ok(path, root=None, allow_link=False, system_owned=False, max_mb=FONT_MAX_MB):
+    """字体文件用之前的只读核对：是普通文件、不超过 max_mb、文件头是 TrueType / OpenType / 字体集合。
+
+    可选的更严格要求（给只许用系统字体的场景）：
+      root          —— 真实路径必须还在这个文件夹里（防止链接 / 「..」指到别处）；
+      allow_link    —— False 时文件本身是符号链接就不要；
+      system_owned  —— 非 Windows 上要求属 root、组和其他人不可写（普通用户放不进去、改不了）。
+    任何读不了、对不上的情况都返回 False，调用方换下一个候选即可。只用标准库，不起进程、不读环境变量。
+    """
+    try:
+        if (not allow_link and os.path.islink(path)) or not os.path.isfile(path):
+            return False
+        real = os.path.realpath(path)
+        if root is not None:
+            base = os.path.realpath(root)
+            if os.path.commonpath([real, base]) != base:
+                return False
+        st = os.stat(real)
+        if st.st_size > max_mb << 20:
+            return False
+        if system_owned and os.name != "nt" and (st.st_uid != 0 or st.st_mode & 0o022):
+            return False
+        with open(real, "rb") as f:
+            return f.read(4) in _FONT_MAGIC
+    except (OSError, ValueError):
+        return False
+
+
 def _font_usable(path):
     """fpdf2 到底能不能加载这个字体文件——让它自己回答，别靠扩展名猜。
 
     requirements.txt 只钉了 fpdf2>=2.8.0，旧版对 .ttc 的支持不一定齐；
     而且 /usr/share/fonts 下也可能躺着损坏的字体文件。这一关是
     「优雅降级成 ???」和「分发跑到一半崩掉」的分界线。
+    先过一遍 font_file_ok（文件头、大小；链接照收，用户指的字体常是链接），
+    不是字体的文件根本不交给 fpdf2 解析。
     """
+    if not font_file_ok(path, allow_link=True):
+        return False
     try:
         from fpdf import FPDF
         probe = FPDF()
