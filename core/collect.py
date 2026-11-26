@@ -49,7 +49,37 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from core import splitter as sp
 from core.utils import hard_clean, safe_filename, soft_clean
 from core.xlio import (HEAD_SCAN, _cell, _head_limit, _iter_sheets_ro, _load_sheets, _no_formulas, _nonempty,
-                       col_keys, col_names, hidden_info, is_total_row, match)
+                       _xml_starts, col_keys, col_names, hidden_info, is_total_row, match)
+
+# ---------- 嵌入别的程序时可打开的加固开关（桌面版都不开，行为不变） ----------
+
+CHECK_XML = False         # True：用 openpyxl 打开 .xlsx 前先用 expat 把包里的 XML 过一遍，带 DTD / 实体声明就拒绝（xlio.UnsafeXML）
+_SUMMARY_SINK = None      # 给了函数：汇总字典交给它，不再以 [SUMMARY] 行写进日志（日志里只留过程提示）
+
+
+def _emit_summary(log, summary):
+    """收尾的汇总字典：默认写一行 [SUMMARY] {json} 进日志（桌面版据此画完成摘要）；设了 _SUMMARY_SINK 就交给它。"""
+    if _SUMMARY_SINK is not None:
+        _SUMMARY_SINK(summary)
+    else:
+        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+
+
+def _load_checked(path, **kw):
+    """openpyxl.load_workbook；CHECK_XML 打开时先查包里的 XML（不认 DTD、不展开实体），坏包照旧交给 openpyxl 报错。"""
+    if CHECK_XML and str(path).lower().endswith((".xlsx", ".xlsm")):
+        import zipfile
+        from xml.parsers import expat
+        try:
+            with zipfile.ZipFile(path) as z:
+                for i in z.infolist():
+                    if i.filename.lower().endswith((".xml", ".rels")):
+                        with z.open(i) as f:
+                            for _tag, _attrs in _xml_starts(f):
+                                pass
+        except (zipfile.BadZipFile, expat.ExpatError):
+            pass
+    return openpyxl.load_workbook(path, **kw)
 
 SOURCE_COL = "来源"
 REPORT_SHEET = "汇总说明"
@@ -1505,7 +1535,7 @@ def _mark_fill(path, group, fill, title, due, cfg, specs=None, log=None):
     from openpyxl.styles import Protection
     rules = dict(specs or [])
     noted = set()
-    wb = openpyxl.load_workbook(path)
+    wb = _load_checked(path)
     yellow = PatternFill("solid", fgColor=FILL_COLOR)
     unlocked = Protection(locked=False)
     out = []
@@ -1608,9 +1638,16 @@ def _write_send_list(output_path, groups, saved):
 # ---------- 对外入口：查收 / 汇总（签名与 run_split 一致） ----------
 
 def _is_link(path):
-    """符号链接或目录联接（junction；os.path.isjunction 从 Python 3.12 起才有）。"""
+    """符号链接或目录联接（junction）。Python 3.12 以下没有 os.path.isjunction，所以也看 Windows 的重解析点属性。"""
+    if os.path.islink(path):
+        return True
     isjunction = getattr(os.path, "isjunction", None)
-    return os.path.islink(path) or bool(isjunction and isjunction(path))
+    if isjunction:
+        return bool(isjunction(path))
+    try:
+        return bool(getattr(os.lstat(path), "st_file_attributes", 0) & 0x400)   # FILE_ATTRIBUTE_REPARSE_POINT
+    except OSError:
+        return False
 
 
 def returned_files(input_path, output_root):
@@ -1660,11 +1697,14 @@ def _prepare(config, log):
 
     config 里给了 allowed_roots（技能用：只许在工作文件夹里）时，输入、输出、下发记录都必须在这些文件夹里，
     否则抛 OutsideWorkspace，一个文件都不读、不写。桌面版不给，由用户自己选文件夹。
+    require_roots=True 时 allowed_roots 必须给、不能是空的，否则同样抛 OutsideWorkspace（防止调用方漏传就放开）。
     """
     input_path = config["input_path"]
     base = input_path if os.path.isdir(input_path) else os.path.dirname(input_path)
     out_dir = config.get("output_path") or os.path.join(base, RESULT_DIR)
     roots = config.get("allowed_roots")
+    if config.get("require_roots") and not roots:
+        raise OutsideWorkspace("没有给出允许的文件夹，不处理")
     if roots is not None:
         for what, p in (("要查的表格", input_path), ("结果文件夹", out_dir), ("下发记录", config.get("collect_record"))):
             if p and not _inside(p, roots):
@@ -1752,7 +1792,7 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     summary = {"mode": "collect_check", "output": out_dir, "stopped": report is None}
     if report is None:
         log("⛔ 已停止，这一轮没有生成通报")
-        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+        _emit_summary(log, summary)
         return out_dir
     os.makedirs(out_dir, exist_ok=True)
     rounds = _load_rounds(out_dir)
@@ -1798,7 +1838,7 @@ def check_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
             log(line)
     log(f"\n📁 进度表：{progress}" if progress else "")
     summary.update(counts(report), notice=notice, progress=progress, title=ctx["title"], result=result)
-    log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+    _emit_summary(log, summary)
     return out_dir
 
 
@@ -1811,7 +1851,7 @@ def run_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     summary = {"mode": "collect", "output": "", "stopped": report is None}
     if report is None:
         log("⛔ 已停止，没有生成汇总表")
-        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+        _emit_summary(log, summary)
         return ""
     files = ctx["files"]
     rel_idx = {rel: i for i, (_p, rel) in enumerate(files)}
@@ -1829,7 +1869,7 @@ def run_collect(config, log_fn=None, progress_fn=None, stop_flag=None):
     sel = [files[i] for i in sorted(take)]
     if not sel:
         log("⚠️ 还没有可以汇总的表")
-        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+        _emit_summary(log, summary)
         return ""
     sel_idx = {files[i][1]: n for n, i in enumerate(sorted(take))}
     sel_sheets = [dict(s, file=sel_idx[s["rel"]]) for s in res["sheets"] if s["rel"] in sel_idx]
@@ -1872,7 +1912,7 @@ def _finish_merge(st, done, output, title, t0, summary, log, progress_fn, desens
     if not done:
         log("⛔ 已停止，没有生成汇总表")
         summary["stopped"] = True
-        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+        _emit_summary(log, summary)
         return ""
     if progress_fn:
         progress_fn(1.0)
@@ -1896,7 +1936,7 @@ def _finish_merge(st, done, output, title, t0, summary, log, progress_fn, desens
             summary.update(desens=job.summary(), desens_output=dout)
         except Exception as e:
             log(f"  ⚠️ 脱敏版没生成（汇总表不受影响）：{e}")
-    log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+    _emit_summary(log, summary)
     return output
 
 
@@ -1922,14 +1962,14 @@ def merge_tables(config, log_fn=None, progress_fn=None, stop_flag=None):
     summary = {"mode": "merge", "output": "", "stopped": False}
     if not files:
         log("⚠️ 没有找到表格（.xlsx / .xls），请检查文件夹")
-        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+        _emit_summary(log, summary)
         return ""
     log(f"共找到 {len(files)} 个表" if is_dir else f"把「{os.path.basename(input_path)}」里的各个 sheet 合成一张")
     res = scan(files, config, log=log, stop=stop_flag, progress=lambda f: progress_fn and progress_fn(f * 0.3))
     if not res["complete"]:
         log("⛔ 已停止，没有生成汇总表")
         summary["stopped"] = True
-        log(f"[SUMMARY] {json.dumps(summary, ensure_ascii=False)}")
+        _emit_summary(log, summary)
         return ""
     mode = pick_mode(len(files), res["sheets"])
     output = _result_path(out_dir, title)
@@ -1965,7 +2005,7 @@ def merge_start(output):
 def _open_output(st):
     """新建结果工作簿；续做时读回上次存的，去掉上次中断时多写、没记进度的 sheet、行和列。"""
     if os.path.isfile(st["output"]):
-        wb = openpyxl.load_workbook(st["output"])
+        wb = _load_checked(st["output"])
         titles = {s["title"] for s in st["sheets"].values()}
         for ws in list(wb.worksheets):
             if ws.title not in titles:

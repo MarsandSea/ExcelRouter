@@ -531,3 +531,73 @@ def test_returned_files_skip_links_and_notice_not_logged_by_default(tmp_path):
     assert not any("王五" in m for m in logs if not m.startswith("[SUMMARY]"))
     _out, _summary, logs = _run(dict(cfg, log_notice=True))
     assert any("王五" in m for m in logs if not m.startswith("[SUMMARY]"))
+
+
+def test_require_roots_refuses_when_roots_missing_or_empty(tmp_path):
+    """嵌入时可要求必须给 allowed_roots：没给、给了空的，一律不读不写；不开这个开关时照旧（桌面版）。"""
+    src = tmp_path / "收"
+    src.mkdir()
+    _book(src / "张三.xlsx", _full(1, "张三"))
+    for roots in (None, []):
+        cfg = {"input_path": str(src), "collect_expect": "张三", "require_roots": True}
+        if roots is not None:
+            cfg["allowed_roots"] = roots
+        try:
+            check_collect(cfg, lambda m: None)
+        except collect.OutsideWorkspace:
+            continue
+        raise AssertionError(roots)
+    assert not (src / collect.RESULT_DIR).exists()
+    out, summary, _logs = _run({"input_path": str(src), "collect_expect": "张三"})
+    assert summary["missing"] == 0 and os.path.isdir(out)
+
+
+def test_summary_sink_takes_summary_out_of_log(tmp_path, monkeypatch):
+    """设了 _SUMMARY_SINK：汇总字典交给它，日志里不再有 [SUMMARY] 行；默认照旧写进日志。"""
+    _book(tmp_path / "明细_1.xlsx", _full(2))
+    got, logs = [], []
+    monkeypatch.setattr(collect, "_SUMMARY_SINK", got.append)
+    collect.merge_tables({"input_path": str(tmp_path)}, logs.append)
+    assert len(got) == 1 and got[0]["mode"] == "merge"
+    assert not any(m.startswith("[SUMMARY]") for m in logs)
+
+
+def _xlsx_with_doctype(path):
+    import zipfile
+    _book(path, _full(1))
+    with zipfile.ZipFile(path) as z:
+        parts = {i.filename: z.read(i) for i in z.infolist()}
+    parts["docProps/app.xml"] = (b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]>'
+                                 b'<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"/>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, b in parts.items():
+            z.writestr(n, b)
+
+
+def test_check_xml_refuses_doctype_only_when_turned_on(tmp_path, monkeypatch):
+    """CHECK_XML 打开时，包里 XML 带 DTD / 实体声明的表格不交给 openpyxl；正常的表照样能开。默认不查（桌面版不变）。"""
+    from core.xlio import UnsafeXML
+    bad, good = tmp_path / "bad.xlsx", tmp_path / "good.xlsx"
+    _xlsx_with_doctype(bad)
+    _book(good, _full(1))
+    calls = []
+    monkeypatch.setattr(collect, "_xml_starts", lambda f: calls.append(1) or iter(()))
+    collect._load_checked(str(good)).close()
+    assert calls == []                                  # 默认不查
+    monkeypatch.undo()
+    monkeypatch.setattr(collect, "CHECK_XML", True)
+    collect._load_checked(str(good)).close()
+    try:
+        collect._load_checked(str(bad))
+    except UnsafeXML:
+        return
+    raise AssertionError("带 DTD 的表格被打开了")
+
+
+def test_is_link_without_isjunction_reads_reparse_flag(tmp_path, monkeypatch):
+    """Python 3.12 以下没有 os.path.isjunction：普通文件夹不算链接（重解析点属性只在 Windows 上有）。"""
+    d = tmp_path / "普通"
+    d.mkdir()
+    monkeypatch.delattr(collect.os.path, "isjunction", raising=False)
+    assert collect._is_link(str(d)) is False
+    assert collect._is_link(str(tmp_path / "没有")) is False

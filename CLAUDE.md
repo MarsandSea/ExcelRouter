@@ -536,7 +536,10 @@ excel-router/
   汉字能渲染但字形是日式变体。函数名/零参签名/`str|None` 返回值是对外契约，下游 skill
   靠猴补丁替换它实现 `--font`，别改签名
 - `_font_usable(path)` —— 让 fpdf2 自己回答能不能加载，不靠扩展名猜。这是「优雅降级成 `???`」
-  和「分发跑到一半崩掉」的分界线，**别删**
+  和「分发跑到一半崩掉」的分界线，**别删**。先过 `font_file_ok`（文件头、大小；链接照收）再交给 fpdf2
+- `font_file_ok(path, root=None, allow_link=False, system_owned=False, max_mb=64)` —— 字体文件只读核对（普通文件、
+  文件头是 TrueType / OpenType / 集合、不超大；可选真实路径限定在 root 里、不收链接、属 root 不可被他人写）。
+  只用标准库，给只许用系统字体的嵌入场景用；`_FONT_CANDIDATES` / `_LINUX_FONT_CANDIDATES` 两份候选名单也给它们直接引用，**别改名**
 - `_make_watermark_pdf(text, w, h, ...)` —— fpdf2 内存生成平铺斜排水印页，按（尺寸+文字）缓存
 - `_stamp_and_encrypt(reader, out_path, wm_text, password, algorithm)` —— 盖水印+设密码写盘。
   **writer 每个网格必须重建**：pypdf 的 merge_page 就地改页对象，复用会导致水印跨网格叠加；
@@ -577,6 +580,10 @@ excel-router/
   名字像名单的表也照样合。汇总结果的 [SUMMARY] 带 `report_text`（`merge_text`），界面结果卡片直接显示
 - `merge_start` / `merge_step` —— 从内部 er_merge 移植的**可分段**合并（内部技能 70 秒一段续做），
   桌面版一次做完；`labels` 把「来源」写成交表人，`people` 写进「汇总说明」
+- **嵌入时的加固开关（桌面版都不开，产出不变）**：config 键 `require_roots`（True 时 `allowed_roots` 必须给、不能空）；
+  模块变量 `CHECK_XML`（True：`_load_checked` 打开 .xlsx 前先用 `xlio._xml_starts` 查 DTD / 实体）、
+  `_SUMMARY_SINK`（给了函数，汇总字典交给它、不写 [SUMMARY] 日志行，见 `_emit_summary`）。
+  `_is_link` 在 Python 3.12 以下也认目录联接（看重解析点属性）
 - `prepare_issue` / `fingerprint_file` / `lock_keys` —— 下发标记与指纹；一个分组只有一个文件时
   才记指纹（文件夹不合并时一组多个文件，不比对改动）
 - **问题编码（v3.0）**：`ISSUE_STATUS` / `ISSUE_TEXT` / `ISSUE_NAG` 三张表；`_judge` 只产出 `p["issues"]`，`_derive`
